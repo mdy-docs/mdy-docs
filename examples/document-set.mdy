@@ -1,0 +1,28 @@
+```data
+title: Team Roster
+```
+# {{= title }}
+
+{{ for (const m of $.documents.slice(2)) { }}
+{{= $.render(1, m.data) }}
+{{ } }}
+
+---
+### {{= name }}
+
+- Age: {{= age }}
+- Skills: {{= skills.join(', ') }}
+
+---
+```data
+name: Alice
+age: 30
+skills: [js, python]
+```
+
+---
+```data
+name: Bob
+age: 41
+skills: [go, rust]
+```

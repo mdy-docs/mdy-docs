@@ -1,0 +1,15 @@
+```data
+start: 1
+count: 5
+```
+
+# Fibonacci
+
+{{ let a = 0, b = start }}
+{{ const out = [] }}
+{{ for (let i = 0; i < count; i++) { out.push(b); [a, b] = [b, a + b] } }}
+
+The first {{= count }} numbers (starting at {{= start }}): **{{= out.join(', ') }}**.
+
+{{ let sum = out.reduce((s, n) => s + n, 0) }}
+Their sum is {{= sum }}.

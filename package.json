@@ -1,0 +1,27 @@
+{
+  "name": "mdy",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/belteshazzar/mdy#readme",
+  "bugs": {
+    "url": "https://github.com/belteshazzar/mdy/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/belteshazzar/mdy.git"
+  },
+  "license": "BSD-2-Clause",
+  "author": "",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "mdy": "bin/mdy.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "js-yaml": "^5.2.1",
+    "markdown-it": "^14.3.0"
+  }
+}

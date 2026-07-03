@@ -1,0 +1,29 @@
+# {{= report.title }}
+
+Generated for **{{= report.owner }}**.
+
+{{ const total = items.reduce((s, i) => s + i.qty * i.price, 0) }}
+| Item | Qty | Price | Line total |
+| --- | --: | --: | --: |
+{{ for (const i of items) { }}
+| {{= i.name }} | {{= i.qty }} | ${{= i.price.toFixed(2) }} | ${{= (i.qty * i.price).toFixed(2) }} |
+{{ } }}
+
+**Order total: ${{= total.toFixed(2) }}**
+
+<!--
+Data blocks may appear anywhere — even below the template that uses them —
+because all ```data fences are collected before the template runs.
+-->
+
+```data
+report:
+  title: "Invoice #42"
+  owner: Grace Hopper
+```
+
+```data
+items:
+  - { name: Widget, qty: 3, price: 9.99  }
+  - { name: Gadget, qty: 1, price: 24.50 }
+```
