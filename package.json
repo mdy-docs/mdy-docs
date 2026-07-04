@@ -1,6 +1,6 @@
 {
   "name": "mdy",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "",
   "homepage": "https://github.com/belteshazzar/mdy#readme",
   "bugs": {
@@ -17,6 +17,11 @@
   "bin": {
     "mdy": "bin/mdy.js"
   },
+  "files": [
+    "index.js",
+    "src/",
+    "bin/"
+  ],
   "scripts": {
     "test": "node --test"
   },
