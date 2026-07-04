@@ -1,14 +1,14 @@
 {
-  "name": "mdy",
+  "name": "mdy-docs",
   "version": "0.0.1",
   "description": "",
-  "homepage": "https://github.com/belteshazzar/mdy#readme",
+  "homepage": "https://github.com/belteshazzar/mdy-docs#readme",
   "bugs": {
-    "url": "https://github.com/belteshazzar/mdy/issues"
+    "url": "https://github.com/belteshazzar/mdy-docs/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/belteshazzar/mdy.git"
+    "url": "git+https://github.com/belteshazzar/mdy-docs.git"
   },
   "license": "BSD-2-Clause",
   "author": "",

@@ -1,4 +1,4 @@
-# mdy
+# mdy docs
 
 Markdown documents with embedded data (`data` fences) and a JavaScript template
 layer (`{{ … }}`). A document carries its own data and renders itself.
