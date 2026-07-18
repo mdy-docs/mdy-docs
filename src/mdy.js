@@ -132,7 +132,7 @@ const NO_BIND = new Set([
   'arguments', 'eval', 'NaN', 'Infinity',
   'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Math', 'Date',
   'RegExp', 'print',
-  '$', '__ctx', '__out', '__host', '__results', '__req', '__n', '__err', '__done',
+  '$', '__ctx', '__out', '__call', '__hostcall', '__err', '__done',
 ]);
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -187,8 +187,10 @@ const FRONT_MATTER_SEPARATOR = /^\+\+\+[ \t]*$/;
 // (the backslash blocks the match; markdown renders `\#` as a plain `#`).
 const HASHTAG = /(?<=^|\s)#([\p{L}][\p{L}\p{N}_-]*)/gmu;
 
-// Guard against a cycle of `$.render(i)` calls rendering each other forever.
-const MAX_RENDER_DEPTH = 50;
+// Guard against a cycle of `$.render` calls rendering each other forever.
+// Each nesting level holds a live VM instance while suspended (Asyncify is
+// not reentrant), so this is deliberately modest.
+const MAX_RENDER_DEPTH = 16;
 
 /**
  * Extract inline hashtags from a document body.
@@ -384,52 +386,33 @@ export function parseDocuments(source) {
   });
 }
 
-// A render aborts after this many host calls (each is one $.find / $.findOne
-// / $.render the template performed).
-const MAX_HOST_CALLS = 500;
-
 /**
- * Assemble one self-contained VM program for a render attempt.
+ * Assemble one self-contained VM program for a render.
  *
  * The program is an IIFE (nothing leaks into the engine's persistent scope)
  * that binds the context keys as identifiers, defines the `$` helper, runs
  * the compiled template statements, and returns a one-line JSON envelope as
- * its completion value:
+ * its completion value: { out: "…" } on success, { error: "…" } if the
+ * template threw.
  *
- *   { out: "…" }              the render completed; `out` is the markdown
- *   { req: {method, args} }   the template called a `$` method the host has
- *                             not answered yet — the FIRST unanswered call
- *   { error: "…" }            the template threw
- *
- * `$` methods that need the host (find / findOne / render) are host calls:
- * answered results are replayed from `__results` in call order; the first
- * unanswered one records `req` and returns a placeholder, the host performs
- * the real query against nisaba (or a nested render), appends the result,
- * and re-evaluates. Templates are pure functions of their data, so replays
- * are deterministic. `$.documents` / `$.count` / `$.data` are preloaded —
- * no host round-trip.
+ * `$` methods that need the host (find / findOne / render) call the engine's
+ * `__hostcall` native: the VM execution suspends while the host's async
+ * native runs (the nisaba query, or a nested render), then resumes with the
+ * result — a synchronous-looking call from the template's point of view.
+ * `$.documents` / `$.count` / `$.data` are preloaded — no host round-trip.
  */
-function buildProgram({ body, ctx, documents, results }) {
+function buildProgram({ body, ctx, documents }) {
   return `(() => {
 const __ctx = ${jsonForEval(ctx)};
-const __results = ${jsonForEval(results)};
-let __n = 0;
-let __req = null;
-const __host = (method, args) => {
-  const i = __n;
-  __n = __n + 1;
-  if (i < __results.length) { return __results[i]; }
-  if (__req === null) { __req = { method: method, args: args }; }
-  return method === "findOne" ? null : method === "render" ? "" : [];
-};
+const __call = (method, args) => JSON.parse(__hostcall(method, JSON.stringify(args)));
 const $ = {
   documents: ${jsonForEval(documents)},
   count: ${documents.length},
   data: (i) => { const m = $.documents.filter((d) => d.index === i)[0]; return m ? m.data : undefined; },
-  find: (q) => __host("find", [q === undefined ? {} : q]),
-  findOne: (q) => __host("findOne", [q === undefined ? {} : q]),
-  withTag: (t) => __host("find", [{ tags: String(t).toLowerCase() }]),
-  render: (target, data) => __host("render", [target, data === undefined ? {} : data]),
+  find: (q) => __call("find", [q === undefined ? {} : q]),
+  findOne: (q) => __call("findOne", [q === undefined ? {} : q]),
+  withTag: (t) => __call("find", [{ tags: String(t).toLowerCase() }]),
+  render: (target, data) => __call("render", [target, data === undefined ? {} : data]),
 };
 ${contextBindings(ctx)}
 let __done = null;
@@ -438,7 +421,7 @@ try {
 ${body}
 __done = __out;
 } catch (e) { __err = "" + e; }
-return JSON.stringify(__req !== null ? { req: __req } : __err !== null ? { error: __err } : { out: __done });
+return JSON.stringify(__err !== null ? { error: __err } : { out: __done });
 })()`;
 }
 
@@ -478,24 +461,6 @@ async function buildDocumentSet(source) {
       .map(({ d }) => d);
   };
 
-  const hostCall = async (method, args, depth) => {
-    if (method === 'find') return hostFind(args[0]);
-    if (method === 'findOne') return (await hostFind(args[0]))[0] ?? null;
-    if (method === 'render') {
-      const [target, data] = args;
-      let index = target;
-      if (typeof target !== 'number') {
-        const hit = (await hostFind(target))[0];
-        if (!hit) {
-          throw new Error(`mdy: $.render: no document matches ${JSON.stringify(target)}`);
-        }
-        index = idToIndex.get(String(hit._id));
-      }
-      return runDoc(index, data ?? {}, depth + 1);
-    }
-    throw new Error(`mdy: unknown host call "${method}"`);
-  };
-
   const runDoc = async (i, ctx, depth) => {
     if (depth > MAX_RENDER_DEPTH) {
       throw new Error('mdy: render depth exceeded (cyclic $.render?)');
@@ -504,25 +469,38 @@ async function buildDocumentSet(source) {
     if (!doc) throw new Error(`mdy: no document at index ${i}`);
     const fullCtx = { ...doc.data, ...ctx };
 
-    const results = [];
-    for (;;) {
-      if (results.length > MAX_HOST_CALLS) {
-        throw new Error('mdy: too many $ calls in one render');
-      }
-      const program = buildProgram({ body: doc.body, ctx: fullCtx, documents, results });
-      const reply = await runProgram(program);
-      let envelope;
-      try {
-        envelope = JSON.parse(reply);
-      } catch {
-        throw new Error(`mdy: unexpected engine reply: ${reply}`);
-      }
-      if (envelope.error !== undefined) {
-        throw new Error(`mdy: template error in document ${i}: ${envelope.error}`);
-      }
-      if (envelope.req === undefined) return envelope.out;
-      results.push(await hostCall(envelope.req.method, envelope.req.args, depth));
+    // The `$` host natives for this render. Each may be async — the VM
+    // suspends at the guest's __hostcall until it settles. A nested $.render
+    // recurses into runDoc, which runs on its OWN pooled VM instance (a
+    // suspended instance cannot be re-entered).
+    const natives = {
+      find: (query) => hostFind(query),
+      findOne: async (query) => (await hostFind(query))[0] ?? null,
+      render: async (target, data) => {
+        let index = target;
+        if (typeof target !== 'number') {
+          const hit = (await hostFind(target))[0];
+          if (!hit) {
+            throw new Error(`mdy: $.render: no document matches ${JSON.stringify(target)}`);
+          }
+          index = idToIndex.get(String(hit._id));
+        }
+        return runDoc(index, data ?? {}, depth + 1);
+      },
+    };
+
+    const program = buildProgram({ body: doc.body, ctx: fullCtx, documents });
+    const reply = await runProgram(program, natives);
+    let envelope;
+    try {
+      envelope = JSON.parse(reply);
+    } catch {
+      throw new Error(`mdy: unexpected engine reply: ${reply}`);
     }
+    if (envelope.error !== undefined) {
+      throw new Error(`mdy: template error in document ${i}: ${envelope.error}`);
+    }
+    return envelope.out;
   };
 
   return { docs: documents, runDoc };

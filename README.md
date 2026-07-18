@@ -337,8 +337,11 @@ mdy report.mdy --emit-js --doc 1   # just document 1
 real pipeline never uses it: `render`/`renderToMarkdown` assemble a
 self-contained program per render (context JSON + bindings + `$` helper +
 compiled statements) and evaluate it inside the lamassu VM. `$` calls that
-need the host (`find`/`findOne`/`render`) are answered by the host against
-nisaba and replayed — see `buildProgram` in [src/mdy.js](src/mdy.js).
+need the host (`find`/`findOne`/`render`) are **async host natives**
+(lamassu's `__hostcall`): the VM execution suspends while the host answers —
+a nisaba query, or a nested render on another pooled VM instance — and
+resumes with the result. See `buildProgram` in [src/mdy.js](src/mdy.js) and
+[src/vm.js](src/vm.js).
 
 ## Security
 
