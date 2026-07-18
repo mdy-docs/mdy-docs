@@ -93,6 +93,7 @@ mdy [input...] [options]
                         rendering (debug; combine with --doc for a single one)
   -d, --data <k=v>      add a context value (repeatable; JSON-parsed if possible)
       --data-file <f>   merge a YAML/JSON file into the context
+  -w, --watch           re-render whenever an input (or --data-file) changes
   -h, --help            show help
 ```
 
@@ -101,6 +102,7 @@ mdy report.mdy                        # → generated markdown on stdout
 mdy report.mdy --html -o report.html  # → HTML file
 mdy report.mdy -o report.md -d env=prod --data-file overrides.yaml
 mdy invoice.mdy invoice-data.mdy --each   # template × each data document
+mdy report.mdy -o report.md --watch   # live re-render on save
 cat report.mdy | mdy - --html         # stdin → HTML on stdout
 ```
 
@@ -108,6 +110,12 @@ cat report.mdy | mdy - --html         # stdin → HTML on stdout
 - A non-`.mdy` input is processed but **warns** on stderr.
 - Context from `--data` / `--data-file` overrides a document's own data
   (front matter and data fences).
+- `--watch` keeps running: every save of any input file (or the
+  `--data-file`) re-renders and rewrites the output, logging a timing line to
+  stderr. A failing render reports the error and keeps watching — the
+  previous output is left intact — so it pairs with an editor the way the
+  web playground's live preview does. (Watches the containing directories,
+  so atomic editor saves don't drop the watch; not available with stdin.)
 
 ## Front matter
 

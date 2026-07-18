@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, copyFileSync, readFileSync, existsSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, copyFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -14,6 +14,16 @@ const workdir = () => mkdtempSync(join(tmpdir(), 'mdy-'));
 // Run the CLI without throwing. Returns { status, stdout, stderr }.
 const run = (args, input) =>
   spawnSync('node', [bin, ...args], { input, encoding: 'utf8' });
+
+// Poll until `cond()` is true (up to `ms`), else throw.
+const waitFor = async (cond, ms = 15000) => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (cond()) return;
+    if (Date.now() > deadline) throw new Error('waitFor: condition not met in time');
+    await new Promise((r) => setTimeout(r, 100));
+  }
+};
 
 // --- stdin → stdout -------------------------------------------------------
 
@@ -226,4 +236,67 @@ test('stdin given more than once fails', () => {
   const { status, stderr } = run(['-', '-'], 'x');
   assert.equal(status, 1);
   assert.match(stderr, /stdin \("-"\) given more than once/);
+});
+
+// --- watch mode -----------------------------------------------------------
+
+test('--watch re-renders when an input file changes', async () => {
+  const dir = workdir();
+  const src = join(dir, 'doc.mdy');
+  const out = join(dir, 'out.md');
+  writeFileSync(src, 'hello {{ 1 + 1 }}\n');
+
+  const child = spawn('node', [bin, src, '-o', out, '--watch']);
+  try {
+    await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('hello 2'));
+    writeFileSync(src, 'changed {{ 2 + 2 }}\n');
+    await waitFor(() => readFileSync(out, 'utf8').includes('changed 4'));
+  } finally {
+    child.kill();
+  }
+});
+
+test('--watch survives a render error and recovers on the next save', async () => {
+  const dir = workdir();
+  const src = join(dir, 'doc.mdy');
+  const out = join(dir, 'out.md');
+  writeFileSync(src, 'ok {{ 1 + 1 }}\n');
+
+  const child = spawn('node', [bin, src, '-o', out, '--watch']);
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('ok 2'));
+    writeFileSync(src, 'broken {{ unclosed\n');
+    await waitFor(() => /unclosed/.test(stderr));
+    assert.equal(readFileSync(out, 'utf8').includes('ok 2'), true); // old output intact
+    writeFileSync(src, 'fixed {{ 3 + 3 }}\n');
+    await waitFor(() => readFileSync(out, 'utf8').includes('fixed 6'));
+  } finally {
+    child.kill();
+  }
+});
+
+test('--watch re-renders when the --data-file changes', async () => {
+  const dir = workdir();
+  const src = join(dir, 'doc.mdy');
+  const data = join(dir, 'ctx.yaml');
+  const out = join(dir, 'out.md');
+  writeFileSync(src, 'env is {{ env }}\n');
+  writeFileSync(data, 'env: dev\n');
+
+  const child = spawn('node', [bin, src, '--data-file', data, '-o', out, '--watch']);
+  try {
+    await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('env is dev'));
+    writeFileSync(data, 'env: prod\n');
+    await waitFor(() => readFileSync(out, 'utf8').includes('env is prod'));
+  } finally {
+    child.kill();
+  }
+});
+
+test('--watch rejects stdin input', () => {
+  const { status, stderr } = run(['-', '--watch'], 'x');
+  assert.equal(status, 1);
+  assert.match(stderr, /--watch cannot read from stdin/);
 });

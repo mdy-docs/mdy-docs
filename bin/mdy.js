@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { extname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, watch } from 'node:fs';
+import { basename, dirname, extname, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import { render, renderToMarkdown, renderEach, parseDocuments, compileTemplateSource, createProcessor } from '../index.js';
 
@@ -29,6 +29,9 @@ Options:
   -d, --data <k=v>      Add a context value (repeatable). Value is parsed as
                         JSON when possible, otherwise treated as a string.
       --data-file <f>   Merge a YAML/JSON file into the context.
+  -w, --watch           Keep running and re-render whenever an input file (or
+                        the --data-file) changes. A failing render reports to
+                        stderr and keeps watching. Not available with stdin.
   -h, --help            Show this help.
 
 Extra context (from --data / --data-file) overrides the document's front matter.
@@ -38,6 +41,7 @@ Examples:
   mdy report.mdy --html -o report.html
   mdy report.mdy -d env=prod -d 'build=42' --data-file overrides.yaml
   mdy invoice.mdy invoice-data.mdy --each   # template × each data document
+  mdy report.mdy -o report.md --watch       # live re-render on save
   cat report.mdy | mdy - --html`;
 
 function fail(msg) {
@@ -59,6 +63,7 @@ try {
       doc: { type: 'string' },
       data: { type: 'string', short: 'd', multiple: true, default: [] },
       'data-file': { type: 'string' },
+      watch: { type: 'boolean', short: 'w', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -82,42 +87,29 @@ if (values.doc !== undefined) {
   }
 }
 
-// Assemble extra context: --data-file first, then --data overrides.
-const context = {};
-
-if (values['data-file']) {
-  let fileText;
-  try {
-    fileText = readFileSync(values['data-file'], 'utf8');
-  } catch (err) {
-    fail(`cannot read --data-file: ${err.message}`);
-  }
-  const loaded = loadYaml(fileText);
-  if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
-    Object.assign(context, loaded);
-  } else {
-    fail('--data-file must contain a YAML/JSON mapping');
-  }
-}
-
+// Parse -d pairs once: they are static, so malformed ones fail immediately.
+const dataPairs = {};
 for (const pair of values.data) {
   const eq = pair.indexOf('=');
   if (eq === -1) fail(`--data expects key=value, got "${pair}"`);
   const key = pair.slice(0, eq);
   const raw = pair.slice(eq + 1);
-  let value;
   try {
-    value = JSON.parse(raw); // numbers, booleans, null, arrays, objects, "quoted"
+    dataPairs[key] = JSON.parse(raw); // numbers, booleans, null, arrays, objects, "quoted"
   } catch {
-    value = raw; // bare string
+    dataPairs[key] = raw; // bare string
   }
-  context[key] = value;
 }
 
-// Read inputs. Multiple files (or stdin via "-") form one document set.
+// Inputs. Multiple files (or stdin via "-") form one document set.
 const inputPaths = positionals.length > 0 ? positionals : ['-'];
 const filePaths = inputPaths.filter((p) => p !== '-');
 if (inputPaths.filter((p) => p === '-').length > 1) fail('stdin ("-") given more than once');
+if (values.watch && filePaths.length < inputPaths.length) fail('--watch cannot read from stdin');
+if (values['emit-js'] && values.html) fail('--emit-js cannot be combined with --html');
+if (values.out && filePaths.some((p) => resolve(values.out) === resolve(p))) {
+  fail('refusing to overwrite an input file');
+}
 
 for (const p of filePaths) {
   if (extname(p).toLowerCase() !== '.mdy') {
@@ -125,26 +117,49 @@ for (const p of filePaths) {
   }
 }
 
-let sources;
-try {
-  sources = inputPaths.map((p) =>
-    p === '-' ? readFileSync(0, 'utf8') : readFileSync(p, 'utf8') // fd 0 = stdin
-  );
-} catch (err) {
-  fail(`cannot read input: ${err.message}`);
+// --- one render pass (re-run per change in --watch mode; throws, never exits)
+
+/** Extra context: --data-file (re-read each pass) first, then -d overrides. */
+function loadContext() {
+  const context = {};
+  if (values['data-file']) {
+    let fileText;
+    try {
+      fileText = readFileSync(values['data-file'], 'utf8');
+    } catch (err) {
+      throw new Error(`cannot read --data-file: ${err.message}`);
+    }
+    const loaded = loadYaml(fileText);
+    if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
+      Object.assign(context, loaded);
+    } else {
+      throw new Error('--data-file must contain a YAML/JSON mapping');
+    }
+  }
+  return Object.assign(context, dataPairs);
 }
 
-// Process.
-let output;
-try {
+function readSources() {
+  try {
+    return inputPaths.map((p) =>
+      p === '-' ? readFileSync(0, 'utf8') : readFileSync(p, 'utf8') // fd 0 = stdin
+    );
+  } catch (err) {
+    throw new Error(`cannot read input: ${err.message}`);
+  }
+}
+
+async function generateOutput() {
+  const sources = readSources();
+  const context = loadContext();
+  let output;
   if (values['emit-js']) {
-    if (values.html) fail('--emit-js cannot be combined with --html');
     const docs = parseDocuments(sources);
     // All documents by default; just the selected one when --doc is given.
     const indices = values.doc !== undefined ? [entry] : docs.map((_, i) => i);
     output = indices
       .map((i) => {
-        if (!docs[i]) fail(`no document at index ${i}`);
+        if (!docs[i]) throw new Error(`no document at index ${i}`);
         return `// document ${i}\nfunction __doc${i}(__ctx) {\n${compileTemplateSource(docs[i].content)}\nreturn __out;\n}`;
       })
       .join('\n\n');
@@ -158,21 +173,81 @@ try {
       ? await render(sources, context, entry)
       : await renderToMarkdown(sources, context, entry);
   }
-} catch (err) {
-  fail(err.message);
+  return output.endsWith('\n') ? output : output + '\n';
 }
-if (!output.endsWith('\n')) output += '\n';
 
-// Write to --out when given, otherwise stdout.
-if (values.out) {
-  if (filePaths.some((p) => resolve(values.out) === resolve(p))) {
-    fail('refusing to overwrite an input file');
+function emitOutput(output) {
+  if (values.out) {
+    try {
+      writeFileSync(values.out, output);
+    } catch (err) {
+      throw new Error(`cannot write --out: ${err.message}`);
+    }
+  } else {
+    process.stdout.write(output);
   }
+}
+
+if (!values.watch) {
   try {
-    writeFileSync(values.out, output);
+    emitOutput(await generateOutput());
   } catch (err) {
-    fail(`cannot write --out: ${err.message}`);
+    fail(err.message);
   }
 } else {
-  process.stdout.write(output);
+  // --- watch mode: re-render on change, survive render errors.
+
+  // Editors save atomically (write temp + rename), which kills a watcher
+  // attached to the file itself — so watch each containing directory and
+  // filter events by filename.
+  const watched = [...filePaths, ...(values['data-file'] ? [values['data-file']] : [])];
+  const byDir = new Map();
+  for (const p of watched) {
+    const dir = resolve(dirname(p));
+    if (!byDir.has(dir)) byDir.set(dir, new Set());
+    byDir.get(dir).add(basename(p));
+  }
+
+  let timer = null;
+  let running = false;
+  let dirty = false;
+
+  const report = (msg) => {
+    process.stderr.write(`mdy: ${String(msg).replace(/^mdy:\s*/, '')}\n`);
+  };
+
+  const rerender = async () => {
+    if (running) {
+      dirty = true; // a change arrived mid-render; run again after
+      return;
+    }
+    running = true;
+    const started = Date.now();
+    try {
+      emitOutput(await generateOutput());
+      report(`rendered in ${Date.now() - started} ms (${new Date().toLocaleTimeString()})`);
+    } catch (err) {
+      report(err.message ?? err);
+    }
+    running = false;
+    if (dirty) {
+      dirty = false;
+      rerender();
+    }
+  };
+
+  // Editors fire several events per save; debounce them into one render.
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(rerender, 100);
+  };
+
+  for (const [dir, names] of byDir) {
+    watch(dir, (_event, filename) => {
+      if (!filename || names.has(filename)) schedule();
+    });
+  }
+
+  report(`watching ${watched.length} file(s) — Ctrl-C to stop`);
+  await rerender();
 }
