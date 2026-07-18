@@ -13,6 +13,7 @@ import {
   splitDocuments,
   parseDocuments,
   extractTags,
+  openDocumentSet,
   renderDocumentSet,
   renderEach,
   render,
@@ -522,4 +523,96 @@ test('invoice template applies to each invoice-data record', async () => {
   assert.match(out[0], /Order total: \$40\.25/); // 2*12.00 + 5*3.25
   assert.match(out[1], /Invoice #58/);
   assert.match(out[1], /Order total: \$20\.99/); // 10*1.10 + 9.99
+});
+
+// --- source meta (identity) -----------------------------------------------
+
+test('source meta merges into every document of that source', () => {
+  const docs = parseDocuments([
+    { text: 'a: 1\n+++\n---\na: 2\n+++\n', meta: { path: 'posts/x.mdy', section: 'posts' } },
+    { text: 'a: 3\n+++\n', meta: { path: 'about.mdy' } },
+    'a: 4\n+++\n',
+  ]);
+  assert.deepEqual(docs.map((d) => d.data), [
+    { a: 1, path: 'posts/x.mdy', section: 'posts' },
+    { a: 2, path: 'posts/x.mdy', section: 'posts' },
+    { a: 3, path: 'about.mdy' },
+    { a: 4 },
+  ]);
+});
+
+test('meta wins over front matter (identity is not overridable)', () => {
+  const docs = parseDocuments({ text: 'path: forged\n+++\n', meta: { path: 'real.mdy' } });
+  assert.equal(docs[0].data.path, 'real.mdy');
+});
+
+test('a bare { text } source parses like a plain string', () => {
+  assert.deepEqual(
+    parseDocuments({ text: 'a: 1\n+++\nbody' }),
+    parseDocuments('a: 1\n+++\nbody')
+  );
+});
+
+test('invalid sources throw', () => {
+  assert.throws(() => parseDocuments({ meta: { a: 1 } }), /source must be a string or \{ text, meta \}/);
+  assert.throws(() => parseDocuments({ text: 'x', meta: ['no'] }), /`meta` must be a mapping/);
+});
+
+test('meta fields are queryable and visible in templates', async () => {
+  const out = await renderDocumentSet([
+    { text: '{% for (const p of $.find({ section: "posts" })) { %}{{ p.title }}@{{ p.path }};{% } %}' },
+    { text: 'title: One\n+++\n---\ntitle: Two\n+++\n', meta: { section: 'posts', path: 'p.mdy' } },
+  ]);
+  assert.equal(out.trim(), 'One@p.mdy;Two@p.mdy;');
+});
+
+// --- openDocumentSet ------------------------------------------------------
+
+test('openDocumentSet: one set, many host-side queries and renders', async () => {
+  const set = await openDocumentSet([
+    { text: 'layout: post\n+++\n# {{ title }}', meta: { kind: 'layout' } },
+    { text: 'title: A\n+++\n---\ntitle: B\n+++\n', meta: { kind: 'page' } },
+  ]);
+
+  assert.equal(set.docs.length, 3);
+
+  const pages = await set.find({ kind: 'page' });
+  assert.deepEqual(pages.map((p) => p.title), ['A', 'B']);
+
+  const out = [];
+  for (const p of pages) {
+    out.push((await set.render({ layout: 'post' }, p)).trim());
+  }
+  assert.deepEqual(out, ['# A', '# B']);
+});
+
+test('openDocumentSet: find with no query returns all documents in order', async () => {
+  const set = await openDocumentSet('a: 1\n+++\n---\na: 2\n+++\n');
+  assert.deepEqual((await set.find()).map((d) => d.a), [1, 2]);
+});
+
+test('openDocumentSet: findOne returns first match or null', async () => {
+  const set = await openDocumentSet('x: 1\n+++\n---\nx: 2\n+++\n');
+  assert.equal((await set.findOne({ x: { $gt: 1 } })).x, 2);
+  assert.equal(await set.findOne({ x: 99 }), null);
+});
+
+test('openDocumentSet: render by index, ctx overrides document data', async () => {
+  const set = await openDocumentSet('name: default\n+++\nHi {{ name }}');
+  assert.equal((await set.render(0)).trim(), 'Hi default');
+  assert.equal((await set.render(0, { name: 'Ada' })).trim(), 'Hi Ada');
+});
+
+test('openDocumentSet: render on an unmatched query rejects', async () => {
+  const set = await openDocumentSet('just a doc');
+  await assert.rejects(set.render({ nope: 1 }), /no document matches/);
+});
+
+test('openDocumentSet: templates can still $.find and $.render inside the VM', async () => {
+  const set = await openDocumentSet([
+    '{% for (const d of $.find({ n: { $gte: 1 } })) { %}{{ $.render({ card: true }, d) }}{% } %}',
+    'card: true\n+++\n[{{ n }}]',
+    'n: 1\n+++\n---\nn: 2\n+++\n',
+  ]);
+  assert.equal((await set.render(0)).replace(/\s+/g, ''), '[1][2]');
 });

@@ -5,6 +5,7 @@ export {
   splitDocuments,
   parseDocuments,
   extractTags,
+  openDocumentSet,
   renderDocumentSet,
   renderEach,
   createProcessor,

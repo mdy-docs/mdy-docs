@@ -371,18 +371,36 @@ function parseDocument(chunk) {
  * file and separate data files can address each other through `$` exactly
  * as if they lived in a single file.
  *
- * @param {string | string[]} source
+ * A source may be a plain string or `{ text, meta }`. `meta` is a mapping
+ * merged into the data of every document the source contains, AFTER front
+ * matter and ```data fences — it is source-level identity (which file a
+ * document came from, fields computed from that file's path), so documents
+ * cannot override it from the inside.
+ *
+ * @param {string | { text: string, meta?: object } | (string | { text: string, meta?: object })[]} source
  * @returns {{ data: object, content: string }[]}
  */
 export function parseDocuments(source) {
   const sources = Array.isArray(source) ? source : [source];
-  return sources.flatMap(splitDocuments).map((chunk, index) => {
-    try {
-      return parseDocument(chunk);
-    } catch (err) {
-      const detail = String(err.message).replace(/^mdy:\s*/, '');
-      throw new Error(`mdy: document ${index}: ${detail}`);
+  let index = 0;
+  return sources.flatMap((s) => {
+    const { text, meta } = typeof s === 'string' ? { text: s } : s;
+    if (typeof text !== 'string') {
+      throw new Error('mdy: a source must be a string or { text, meta }');
     }
+    if (meta !== undefined && (typeof meta !== 'object' || meta === null || Array.isArray(meta))) {
+      throw new Error('mdy: source `meta` must be a mapping');
+    }
+    return splitDocuments(text).map((chunk) => {
+      const i = index++;
+      try {
+        const doc = parseDocument(chunk);
+        return meta ? { ...doc, data: { ...doc.data, ...meta } } : doc;
+      } catch (err) {
+        const detail = String(err.message).replace(/^mdy:\s*/, '');
+        throw new Error(`mdy: document ${i}: ${detail}`);
+      }
+    });
   });
 }
 
@@ -461,6 +479,17 @@ async function buildDocumentSet(source) {
       .map(({ d }) => d);
   };
 
+  // A render target is a document index, or a query whose first hit (in
+  // document order) is the target.
+  const resolveIndex = async (target) => {
+    if (typeof target === 'number') return target;
+    const hit = (await hostFind(target))[0];
+    if (!hit) {
+      throw new Error(`mdy: render: no document matches ${JSON.stringify(target)}`);
+    }
+    return idToIndex.get(String(hit._id));
+  };
+
   const runDoc = async (i, ctx, depth) => {
     if (depth > MAX_RENDER_DEPTH) {
       throw new Error('mdy: render depth exceeded (cyclic $.render?)');
@@ -476,17 +505,8 @@ async function buildDocumentSet(source) {
     const natives = {
       find: (query) => hostFind(query),
       findOne: async (query) => (await hostFind(query))[0] ?? null,
-      render: async (target, data) => {
-        let index = target;
-        if (typeof target !== 'number') {
-          const hit = (await hostFind(target))[0];
-          if (!hit) {
-            throw new Error(`mdy: $.render: no document matches ${JSON.stringify(target)}`);
-          }
-          index = idToIndex.get(String(hit._id));
-        }
-        return runDoc(index, data ?? {}, depth + 1);
-      },
+      render: async (target, data) =>
+        runDoc(await resolveIndex(target), data ?? {}, depth + 1),
     };
 
     const program = buildProgram({ body: doc.body, ctx: fullCtx, documents });
@@ -503,7 +523,47 @@ async function buildDocumentSet(source) {
     return envelope.out;
   };
 
-  return { docs: documents, runDoc };
+  return { docs: documents, runDoc, hostFind, resolveIndex };
+}
+
+/**
+ * Open a source (or array of sources) as a long-lived document-set handle:
+ * parse, compile, and insert into nisaba ONCE, then query and render against
+ * the set repeatedly. This is the embedder-facing form of the machinery
+ * behind renderDocumentSet — use it when many renders share one set (a
+ * static site build rendering every page, a notes app rendering on demand).
+ *
+ * The handle:
+ *
+ *   docs                 [{ index, data }, …] in document order
+ *   find(query)          matching documents' data, in document order —
+ *                        host-side, same semantics as the in-template $.find
+ *   findOne(query)       first match or null
+ *   render(target, ctx)  render the document at index `target`, or the first
+ *                        one matching query `target`, with `ctx` overriding
+ *                        its own data → generated markdown
+ *
+ * Sources may carry identity (`{ text, meta }`, see parseDocuments), so
+ * `find` can route on file-level fields and rendered documents know where
+ * they came from. Everything the handle holds is in memory; there is nothing
+ * to close — drop the handle when done.
+ *
+ * @param {string | { text: string, meta?: object } | (string | { text: string, meta?: object })[]} source
+ * @returns {Promise<{
+ *   docs: { index: number, data: object }[],
+ *   find: (query?: object) => Promise<object[]>,
+ *   findOne: (query?: object) => Promise<object | null>,
+ *   render: (target: number | object, ctx?: object) => Promise<string>,
+ * }>}
+ */
+export async function openDocumentSet(source) {
+  const { docs, runDoc, hostFind, resolveIndex } = await buildDocumentSet(source);
+  return {
+    docs,
+    find: (query) => hostFind(query),
+    findOne: async (query) => (await hostFind(query))[0] ?? null,
+    render: async (target, ctx = {}) => runDoc(await resolveIndex(target), ctx, 0),
+  };
 }
 
 /**
@@ -523,14 +583,17 @@ async function buildDocumentSet(source) {
  *   $.documents            [{ index, data }, …] (positional)
  *   $.count                number of documents
  *
+ * One-shot: the set is built, one document renders, the set is dropped. To
+ * render many pages from one set, use openDocumentSet.
+ *
  * @param {string | string[]} source
  * @param {object} [extraContext] extra context for the entry document
  * @param {number} [entry] index of the document to render (default 0)
  * @returns {Promise<string>} generated markdown
  */
 export async function renderDocumentSet(source, extraContext = {}, entry = 0) {
-  const set = await buildDocumentSet(source);
-  return set.runDoc(entry, extraContext, 0);
+  const set = await openDocumentSet(source);
+  return set.render(entry, extraContext);
 }
 
 /**
@@ -551,13 +614,13 @@ export async function renderDocumentSet(source, extraContext = {}, entry = 0) {
  * @returns {Promise<string[]>} generated markdown, one entry per data document
  */
 export async function renderEach(source, extraContext = {}, entry = 0) {
-  const { docs, runDoc } = await buildDocumentSet(source);
-  if (!docs[entry]) throw new Error(`mdy: no document at index ${entry}`);
-  const others = docs.filter((d) => d.index !== entry);
-  if (others.length === 0) return [await runDoc(entry, extraContext, 0)];
+  const set = await openDocumentSet(source);
+  if (!set.docs[entry]) throw new Error(`mdy: no document at index ${entry}`);
+  const others = set.docs.filter((d) => d.index !== entry);
+  if (others.length === 0) return [await set.render(entry, extraContext)];
   const out = [];
   for (const d of others) {
-    out.push(await runDoc(entry, { ...d.data, ...extraContext }, 0));
+    out.push(await set.render(entry, { ...d.data, ...extraContext }));
   }
   return out;
 }
