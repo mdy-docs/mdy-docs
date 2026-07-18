@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mdy playground</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <h1>mdy <span>playground</span></h1>
+    <p class="tagline">
+      markdown + YAML documents · templates run sandboxed in the
+      <a href="https://github.com/mdy-docs/lamassu-js">lamassu</a> VM ·
+      <code>$.find</code> queries a
+      <a href="https://github.com/mdy-docs/nisaba-db">nisaba</a> database —
+      all in WebAssembly, entirely in your browser
+    </p>
+    <div class="controls">
+      <label for="example">example</label>
+      <select id="example"></select>
+      <span id="status" class="status">booting engines…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="pane">
+      <div class="pane-title">source <span class="hint">(edits render live)</span></div>
+      <textarea id="source" spellcheck="false" autocomplete="off"></textarea>
+    </section>
+
+    <section class="pane">
+      <nav class="tabs">
+        <button data-tab="preview" class="active">preview</button>
+        <button data-tab="markdown">markdown</button>
+        <button data-tab="compiled">compiled js</button>
+      </nav>
+      <div id="error" class="error" hidden></div>
+      <div id="tab-preview" class="tab-body prose"></div>
+      <pre id="tab-markdown" class="tab-body" hidden></pre>
+      <pre id="tab-compiled" class="tab-body" hidden></pre>
+    </section>
+  </main>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

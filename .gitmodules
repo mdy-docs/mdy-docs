@@ -1,0 +1,6 @@
+[submodule "third_party/lamassu-js"]
+	path = third_party/lamassu-js
+	url = https://github.com/mdy-docs/lamassu-js.git
+[submodule "third_party/nisaba-db"]
+	path = third_party/nisaba-db
+	url = https://github.com/mdy-docs/nisaba-db.git

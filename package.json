@@ -23,10 +23,18 @@
     "bin/"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.js",
+    "web": "vite",
+    "web:build": "vite build",
+    "web:preview": "vite preview"
   },
   "dependencies": {
+    "@mdy-docs/lamassu-js": "file:third_party/lamassu-js/packages/lamassu-js",
+    "@mdy-docs/nisaba-db": "file:third_party/nisaba-db",
     "js-yaml": "^5.2.1",
     "markdown-it": "^14.3.0"
+  },
+  "devDependencies": {
+    "vite": "^7.3.6"
   }
 }

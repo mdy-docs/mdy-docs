@@ -3,32 +3,41 @@ import { parseArgs } from 'node:util';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
-import { render, renderToMarkdown } from '../index.js';
+import { render, renderToMarkdown, renderEach, parseDocuments, compileTemplateSource, createProcessor } from '../index.js';
 
 const USAGE = `mdy — generate a document from an mdy template.
 
 Usage:
-  mdy [input] [options]
+  mdy [input...] [options]
 
 Arguments:
-  input                 Path to an .mdy template. Reads stdin if omitted or "-".
+  input                 Paths to .mdy files. Reads stdin if omitted or "-".
+                        Multiple files form ONE document set, in order — e.g. a
+                        template file followed by data files; every document is
+                        addressable via $ and --doc as if in a single file.
 
 Options:
   -o, --out <file>      Write output to <file> (default: stdout).
       --html            Emit HTML instead of generated markdown.
-      --doc <index>     Render document <index> from a multi-document file
+      --each            Apply the entry document's template once per other
+                        document in the set, using that document's data
+                        (the entry's own front matter acts as defaults).
+      --emit-js         Emit the compiled JavaScript of each document instead
+                        of rendering (debug; combine with --doc for one).
+      --doc <index>     Render document <index> from the document set
                         (0-based; default 0, the entry document).
   -d, --data <k=v>      Add a context value (repeatable). Value is parsed as
                         JSON when possible, otherwise treated as a string.
       --data-file <f>   Merge a YAML/JSON file into the context.
   -h, --help            Show this help.
 
-Extra context (from --data / --data-file) overrides \`\`\`data fences in the doc.
+Extra context (from --data / --data-file) overrides the document's front matter.
 
 Examples:
   mdy report.mdy
   mdy report.mdy --html -o report.html
   mdy report.mdy -d env=prod -d 'build=42' --data-file overrides.yaml
+  mdy invoice.mdy invoice-data.mdy --each   # template × each data document
   cat report.mdy | mdy - --html`;
 
 function fail(msg) {
@@ -45,6 +54,8 @@ try {
     options: {
       out: { type: 'string', short: 'o' },
       html: { type: 'boolean', default: false },
+      each: { type: 'boolean', default: false },
+      'emit-js': { type: 'boolean', default: false },
       doc: { type: 'string' },
       data: { type: 'string', short: 'd', multiple: true, default: [] },
       'data-file': { type: 'string' },
@@ -62,9 +73,7 @@ if (values.help) {
   process.exit(0);
 }
 
-if (positionals.length > 1) fail('expected at most one input file');
-
-// Which document to render from a multi-document file.
+// Which document to render from the document set.
 let entry = 0;
 if (values.doc !== undefined) {
   entry = Number(values.doc);
@@ -105,19 +114,22 @@ for (const pair of values.data) {
   context[key] = value;
 }
 
-// Read input.
-const inputPath = positionals[0];
-const fromFile = inputPath && inputPath !== '-';
+// Read inputs. Multiple files (or stdin via "-") form one document set.
+const inputPaths = positionals.length > 0 ? positionals : ['-'];
+const filePaths = inputPaths.filter((p) => p !== '-');
+if (inputPaths.filter((p) => p === '-').length > 1) fail('stdin ("-") given more than once');
 
-if (fromFile && extname(inputPath).toLowerCase() !== '.mdy') {
-  process.stderr.write(`mdy: warning: input "${inputPath}" does not have a .mdy extension\n`);
+for (const p of filePaths) {
+  if (extname(p).toLowerCase() !== '.mdy') {
+    process.stderr.write(`mdy: warning: input "${p}" does not have a .mdy extension\n`);
+  }
 }
 
-let source;
+let sources;
 try {
-  source = fromFile
-    ? readFileSync(inputPath, 'utf8')
-    : readFileSync(0, 'utf8'); // fd 0 = stdin
+  sources = inputPaths.map((p) =>
+    p === '-' ? readFileSync(0, 'utf8') : readFileSync(p, 'utf8') // fd 0 = stdin
+  );
 } catch (err) {
   fail(`cannot read input: ${err.message}`);
 }
@@ -125,9 +137,27 @@ try {
 // Process.
 let output;
 try {
-  output = values.html
-    ? render(source, context, entry)
-    : renderToMarkdown(source, context, entry);
+  if (values['emit-js']) {
+    if (values.html) fail('--emit-js cannot be combined with --html');
+    const docs = parseDocuments(sources);
+    // All documents by default; just the selected one when --doc is given.
+    const indices = values.doc !== undefined ? [entry] : docs.map((_, i) => i);
+    output = indices
+      .map((i) => {
+        if (!docs[i]) fail(`no document at index ${i}`);
+        return `// document ${i}\nfunction __doc${i}(__ctx) {\n${compileTemplateSource(docs[i].content)}\nreturn __out;\n}`;
+      })
+      .join('\n\n');
+  } else if (values.each) {
+    // One render of the entry template per data document; the generated
+    // markdown is final, so --html goes straight through markdown-it.
+    const joined = (await renderEach(sources, context, entry)).join('\n\n');
+    output = values.html ? createProcessor().md.render(joined) : joined;
+  } else {
+    output = values.html
+      ? await render(sources, context, entry)
+      : await renderToMarkdown(sources, context, entry);
+  }
 } catch (err) {
   fail(err.message);
 }
@@ -135,8 +165,8 @@ if (!output.endsWith('\n')) output += '\n';
 
 // Write to --out when given, otherwise stdout.
 if (values.out) {
-  if (fromFile && resolve(values.out) === resolve(inputPath)) {
-    fail('refusing to overwrite the input file');
+  if (filePaths.some((p) => resolve(values.out) === resolve(p))) {
+    fail('refusing to overwrite an input file');
   }
   try {
     writeFileSync(values.out, output);

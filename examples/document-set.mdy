@@ -1,28 +1,26 @@
-```data
 title: Team Roster
-```
-# {{= title }}
++++
+# {{ title }}
 
-{{ for (const m of $.documents.slice(2)) { }}
-{{= $.render(1, m.data) }}
-{{ } }}
-
+{% for (const m of $.find({ role: 'member' })) { %}
+{{ $.render({ template: 'member-card' }, m) }}
+{% } %}
 ---
-### {{= name }}
+template: member-card
++++
+### {{ name }}
 
-- Age: {{= age }}
-- Skills: {{= skills.join(', ') }}
-
+- Age: {{ age }}
+- Skills: {{ skills.join(', ') }}
 ---
-```data
+role: member
 name: Alice
 age: 30
 skills: [js, python]
-```
-
++++
 ---
-```data
+role: member
 name: Bob
 age: 41
 skills: [go, rust]
-```
++++

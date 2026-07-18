@@ -1,3 +1,10 @@
+report:
+  title: "Invoice #42"
+  owner: Grace Hopper
+items:
+  - { name: Widget, qty: 3, price: 9.99  }
+  - { name: Gadget, qty: 1, price: 24.50 }
++++
 # {{ report.title }}
 
 Generated for **{{ report.owner }}**.
@@ -10,20 +17,3 @@ Generated for **{{ report.owner }}**.
 {% } %}
 
 **Order total: ${{ total.toFixed(2) }}**
-
-<!--
-Data fences may appear anywhere — even below the template that uses them —
-because every data fence is collected before the template runs.
--->
-
-```data
-report:
-  title: "Invoice #42"
-  owner: Grace Hopper
-```
-
-```data
-items:
-  - { name: Widget, qty: 3, price: 9.99  }
-  - { name: Gadget, qty: 1, price: 24.50 }
-```

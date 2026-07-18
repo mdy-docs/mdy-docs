@@ -1,0 +1,27 @@
+title: Notes about fred
++++
+# {{ title }}
+
+{% for (const d of $.withTag('fred')) { %}
+- **{{ d.title }}** — tags: {{ d.tags.join(', ') }}
+{% } %}
+---
+title: Kickoff
++++
+Met with the team about #Fred today. Also touched on #budget-2026.
+---
+title: Pairing notes
++++
+Notes on #wilma and #fred: they pair well.
+
+A `#comment` in inline code is not a tag, and neither is this:
+
+```sh
+# nor anything in a fence, like #barney
+```
+---
+title: Unrelated
+tags: [misc]
++++
+Musings that never mention that project. Issue #42 is not a tag,
+nor is the fragment in https://example.com/page#top.

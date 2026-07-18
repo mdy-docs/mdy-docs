@@ -1,0 +1,15 @@
+report:
+  title: "Invoice #57"
+  owner: Ada Lovelace
+items:
+  - { name: Sprocket, qty: 2, price: 12.00 }
+  - { name: Flange,   qty: 5, price: 3.25  }
++++
+---
+report:
+  title: "Invoice #58"
+  owner: Alan Turing
+items:
+  - { name: Cog,    qty: 10, price: 1.10 }
+  - { name: Widget, qty: 1,  price: 9.99 }
++++

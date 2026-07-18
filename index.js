@@ -1,8 +1,12 @@
 export {
   compileTemplate,
-  extractData,
+  compileTemplateSource,
+  contextBindings,
   splitDocuments,
+  parseDocuments,
+  extractTags,
   renderDocumentSet,
+  renderEach,
   createProcessor,
   render,
   renderToMarkdown,

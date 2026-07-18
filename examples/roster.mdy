@@ -1,19 +1,17 @@
-```data
 title: Team Roster
 users:
   - { name: Ada Lovelace,  age: 36, lead: true  }
   - { name: Alan Turing,   age: 41, lead: false }
   - { name: Grace Hopper,  age: 45, lead: true  }
-```
++++
+# {{ title }}
 
-# {{= title }}
+{% let leads = 0 %}
+{% for (const u of users) { if (u.lead) leads++ %}
+- **{{ u.name }}** ({{ u.age }}){{ u.lead ? ' — team lead' : '' }}
+{% } %}
 
-{{ let leads = 0 }}
-{{ for (const u of users) { if (u.lead) leads++ }}
-- **{{= u.name }}** ({{= u.age }}){{= u.lead ? ' — team lead' : '' }}
-{{ } }}
-
-_{{= leads }} of {{= users.length }} are team leads._
+_{{ leads }} of {{ users.length }} are team leads._
 
 The raw config, shown as a normal code block (not consumed):
 

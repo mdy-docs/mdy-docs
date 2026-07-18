@@ -18,23 +18,23 @@ const run = (args, input) =>
 // --- stdin → stdout -------------------------------------------------------
 
 test('reads stdin with "-" and writes stdout', () => {
-  const { status, stdout } = run(['-'], 'Hello {{= 1 + 1 }}');
+  const { status, stdout } = run(['-'], 'Hello {{ 1 + 1 }}');
   assert.equal(status, 0);
   assert.equal(stdout.trim(), 'Hello 2');
 });
 
 test('--html emits HTML on stdout from stdin', () => {
-  const { stdout } = run(['-', '--html'], '# Hi {{= 2 * 3 }}');
+  const { stdout } = run(['-', '--html'], '# Hi {{ 2 * 3 }}');
   assert.match(stdout, /<h1>Hi 6<\/h1>/);
 });
 
 test('-d supplies context; JSON values parse, bare stays a string', () => {
-  const { stdout } = run(['-', '-d', 'n=3', '-d', 'name=ada'], '{{= name }}×{{= n }}={{= name.repeat(n) }}');
+  const { stdout } = run(['-', '-d', 'n=3', '-d', 'name=ada'], '{{ name }}×{{ n }}={{ name.repeat(n) }}');
   assert.equal(stdout.trim(), 'ada×3=adaadaada');
 });
 
-test('-d overrides a ```data fence', () => {
-  const { stdout } = run(['-', '-d', 'who=world'], '```data\nwho: nobody\n```\nhi {{= who }}');
+test('-d overrides front matter data', () => {
+  const { stdout } = run(['-', '-d', 'who=world'], 'who: nobody\n+++\nhi {{ who }}');
   assert.equal(stdout.trim(), 'hi world');
 });
 
@@ -94,11 +94,23 @@ test('-o refuses to overwrite the input file', () => {
 
   const { status, stderr } = run([src, '-o', src]);
   assert.equal(status, 1);
-  assert.match(stderr, /refusing to overwrite the input/);
+  assert.match(stderr, /refusing to overwrite an input/);
+});
+
+test('-o refuses to overwrite any of several input files', () => {
+  const dir = workdir();
+  const tpl = join(dir, 'invoice.mdy');
+  const data = join(dir, 'invoice-data.mdy');
+  copyFileSync(example('invoice.mdy'), tpl);
+  copyFileSync(example('invoice-data.mdy'), data);
+
+  const { status, stderr } = run([tpl, data, '-o', data]);
+  assert.equal(status, 1);
+  assert.match(stderr, /refusing to overwrite an input/);
 });
 
 test('--doc selects a document from a multi-document file', () => {
-  const src = 'entry doc\n---\nsecond {{= 1 + 1 }}';
+  const src = 'entry doc\n---\nx: 1\n+++\nsecond {{ x + 1 }}';
   assert.equal(run(['-'], src).stdout.trim(), 'entry doc');
   assert.equal(run(['-', '--doc', '1'], src).stdout.trim(), 'second 2');
 });
@@ -116,6 +128,29 @@ test('--doc rejects a non-integer', () => {
   assert.match(stderr, /--doc expects a non-negative integer/);
 });
 
+test('--emit-js prints the compiled function of every document', () => {
+  const src = 'hi {{ x }}\n---\ny: 2\n+++\n{% let z = 1 %}z is {{ z }}';
+  const { status, stdout } = run(['-', '--emit-js'], src);
+  assert.equal(status, 0);
+  assert.match(stdout, /function __doc0\(__ctx\)/);
+  assert.match(stdout, /function __doc1\(__ctx\)/);
+  assert.match(stdout, /__out \+= \(x\)/);
+  assert.match(stdout, /let z = 1/);
+});
+
+test('--emit-js --doc selects a single document', () => {
+  const src = 'hi {{ x }}\n---\ny: 2\n+++\nsecond {{ y }}';
+  const { stdout } = run(['-', '--emit-js', '--doc', '1'], src);
+  assert.match(stdout, /function __doc1\(__ctx\)/);
+  assert.doesNotMatch(stdout, /function __doc0/);
+});
+
+test('--emit-js rejects --html', () => {
+  const { status, stderr } = run(['-', '--emit-js', '--html'], 'x');
+  assert.equal(status, 1);
+  assert.match(stderr, /--emit-js cannot be combined with --html/);
+});
+
 test('missing input file exits non-zero with a message', () => {
   const { status, stderr } = run(['does-not-exist.mdy']);
   assert.equal(status, 1);
@@ -124,5 +159,71 @@ test('missing input file exits non-zero with a message', () => {
 
 test('--help prints usage', () => {
   const { stdout } = run(['--help']);
-  assert.match(stdout, /Usage:\s+mdy \[input\]/);
+  assert.match(stdout, /Usage:\s+mdy \[input\.\.\.\]/);
+});
+
+// --- multiple inputs & --each ---------------------------------------------
+
+test('multiple input files form one document set', () => {
+  const dir = workdir();
+  const tpl = join(dir, 'tpl.mdy');
+  const data = join(dir, 'data.mdy');
+  copyFileSync(example('invoice.mdy'), tpl);
+  copyFileSync(example('invoice-data.mdy'), data);
+
+  // Document 1 of the combined set is the first record of the data file.
+  const { status, stdout } = run([tpl, data, '--doc', '1', '--emit-js']);
+  assert.equal(status, 0);
+  assert.match(stdout, /function __doc1\(__ctx\)/);
+});
+
+test('--each applies the template file to each data document', () => {
+  const dir = workdir();
+  const tpl = join(dir, 'invoice.mdy');
+  const data = join(dir, 'invoice-data.mdy');
+  copyFileSync(example('invoice.mdy'), tpl);
+  copyFileSync(example('invoice-data.mdy'), data);
+
+  const { status, stdout } = run([tpl, data, '--each']);
+  assert.equal(status, 0);
+  assert.match(stdout, /Invoice #57/);
+  assert.match(stdout, /Order total: \$40\.25/);
+  assert.match(stdout, /Invoice #58/);
+  assert.match(stdout, /Order total: \$20\.99/);
+  assert.doesNotMatch(stdout, /Invoice #42/); // the template's own sample data is not rendered
+});
+
+test('--each with -d overrides every record', () => {
+  const src = 'Hello {{ name }} ({{ env }})\n---\nname: Ada\n+++\n---\nname: Bob\n+++\n';
+  const { stdout } = run(['-', '--each', '-d', 'env=prod'], src);
+  assert.equal(stdout.trim(), 'Hello Ada (prod)\n\nHello Bob (prod)');
+});
+
+test('--each --html renders each record to HTML', () => {
+  const dir = workdir();
+  const tpl = join(dir, 'invoice.mdy');
+  const data = join(dir, 'invoice-data.mdy');
+  copyFileSync(example('invoice.mdy'), tpl);
+  copyFileSync(example('invoice-data.mdy'), data);
+
+  const { status, stdout } = run([tpl, data, '--each', '--html']);
+  assert.equal(status, 0);
+  assert.match(stdout, /<h1>Invoice #57<\/h1>/);
+  assert.match(stdout, /<h1>Invoice #58<\/h1>/);
+});
+
+test('stdin ("-") can be one of several inputs', () => {
+  const dir = workdir();
+  const data = join(dir, 'invoice-data.mdy');
+  copyFileSync(example('invoice-data.mdy'), data);
+
+  const { status, stdout } = run(['-', data, '--each'], 'Owner: {{ report.owner }}');
+  assert.equal(status, 0);
+  assert.equal(stdout.trim(), 'Owner: Ada Lovelace\n\nOwner: Alan Turing');
+});
+
+test('stdin given more than once fails', () => {
+  const { status, stderr } = run(['-', '-'], 'x');
+  assert.equal(status, 1);
+  assert.match(stderr, /stdin \("-"\) given more than once/);
 });
