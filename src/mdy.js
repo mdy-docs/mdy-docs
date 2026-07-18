@@ -454,10 +454,24 @@ return JSON.stringify(__err !== null ? { error: __err } : { out: __done });
  * both restores deterministic ordering and lets a query hit map back to its
  * compiled template for `$.render`).
  *
+ * `options.onQuery({ query, docIndex })`, if given, fires for every query
+ * this set ever runs — `$.find`/`$.findOne`/`$.withTag`/`$.render`-by-query
+ * from inside a template (`docIndex`: the index of the document currently
+ * rendering), and `find`/`findOne`/`render`-by-query called host-side on the
+ * returned handle (`docIndex: null` — a host call isn't attributed to any
+ * document's own render). This is the one chokepoint both paths share
+ * (`hostFind`), so one hook sees every query in the set regardless of who
+ * asked — an embedder building an incremental cache (which document's
+ * output actually depends on which query, to know what to re-render when
+ * content changes without a matching template edit) needs exactly this;
+ * mdy itself has no opinion on what to do with the record.
+ *
  * @param {string | string[]} source
+ * @param {{ onQuery?: (info: { query: object, docIndex: number | null }) => void }} [options]
  * @returns {Promise<{ docs: { index: number, data: object }[], runDoc: Function }>}
  */
-async function buildDocumentSet(source) {
+async function buildDocumentSet(source, options = {}) {
+  const { onQuery } = options;
   const docs = parseDocuments(source).map(({ data, content }, index) => {
     return { index, data, body: compileTemplateSource(content) };
   });
@@ -479,11 +493,19 @@ async function buildDocumentSet(source) {
       .map(({ d }) => d);
   };
 
+  // Every query this set ever runs passes through here, tagged with which
+  // document's render (if any) it belongs to — see buildDocumentSet's
+  // onQuery doc above.
+  const trackedFind = (query, docIndex) => {
+    onQuery?.({ query: query ?? {}, docIndex });
+    return hostFind(query);
+  };
+
   // A render target is a document index, or a query whose first hit (in
   // document order) is the target.
-  const resolveIndex = async (target) => {
+  const resolveIndex = async (target, docIndex) => {
     if (typeof target === 'number') return target;
-    const hit = (await hostFind(target))[0];
+    const hit = (await trackedFind(target, docIndex))[0];
     if (!hit) {
       throw new Error(`mdy: render: no document matches ${JSON.stringify(target)}`);
     }
@@ -503,10 +525,10 @@ async function buildDocumentSet(source) {
     // recurses into runDoc, which runs on its OWN pooled VM instance (a
     // suspended instance cannot be re-entered).
     const natives = {
-      find: (query) => hostFind(query),
-      findOne: async (query) => (await hostFind(query))[0] ?? null,
+      find: (query) => trackedFind(query, i),
+      findOne: async (query) => (await trackedFind(query, i))[0] ?? null,
       render: async (target, data) =>
-        runDoc(await resolveIndex(target), data ?? {}, depth + 1),
+        runDoc(await resolveIndex(target, i), data ?? {}, depth + 1),
     };
 
     const program = buildProgram({ body: doc.body, ctx: fullCtx, documents });
@@ -523,7 +545,7 @@ async function buildDocumentSet(source) {
     return envelope.out;
   };
 
-  return { docs: documents, runDoc, hostFind, resolveIndex };
+  return { docs: documents, runDoc, hostFind, resolveIndex, trackedFind };
 }
 
 /**
@@ -548,7 +570,12 @@ async function buildDocumentSet(source) {
  * they came from. Everything the handle holds is in memory; there is nothing
  * to close — drop the handle when done.
  *
+ * `options.onQuery` — see buildDocumentSet's doc comment; fires for every
+ * query anywhere in the set, template-level or host-level (this handle's
+ * own find/findOne/render-by-query calls, tagged `docIndex: null`).
+ *
  * @param {string | { text: string, meta?: object } | (string | { text: string, meta?: object })[]} source
+ * @param {{ onQuery?: (info: { query: object, docIndex: number | null }) => void }} [options]
  * @returns {Promise<{
  *   docs: { index: number, data: object }[],
  *   find: (query?: object) => Promise<object[]>,
@@ -556,13 +583,13 @@ async function buildDocumentSet(source) {
  *   render: (target: number | object, ctx?: object) => Promise<string>,
  * }>}
  */
-export async function openDocumentSet(source) {
-  const { docs, runDoc, hostFind, resolveIndex } = await buildDocumentSet(source);
+export async function openDocumentSet(source, options = {}) {
+  const { docs, runDoc, resolveIndex, trackedFind } = await buildDocumentSet(source, options);
   return {
     docs,
-    find: (query) => hostFind(query),
-    findOne: async (query) => (await hostFind(query))[0] ?? null,
-    render: async (target, ctx = {}) => runDoc(await resolveIndex(target), ctx, 0),
+    find: (query) => trackedFind(query, null),
+    findOne: async (query) => (await trackedFind(query, null))[0] ?? null,
+    render: async (target, ctx = {}) => runDoc(await resolveIndex(target, null), ctx, 0),
   };
 }
 

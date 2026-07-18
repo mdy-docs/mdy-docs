@@ -616,3 +616,82 @@ test('openDocumentSet: templates can still $.find and $.render inside the VM', a
   ]);
   assert.equal((await set.render(0)).replace(/\s+/g, ''), '[1][2]');
 });
+
+// --- openDocumentSet: onQuery -----------------------------------------------
+
+test('onQuery: fires for a template-level $.find, tagged with the rendering document\'s index', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    ['{% $.find({ n: { $gte: 1 } }) %}', 'n: 1\n+++\n'],
+    { onQuery: (info) => seen.push(info) }
+  );
+  await set.render(0);
+  assert.deepEqual(seen, [{ query: { n: { $gte: 1 } }, docIndex: 0 }]);
+});
+
+test('onQuery: fires for $.findOne and $.withTag too, same shape', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    ['{% $.findOne({ x: 1 }) %}{% $.withTag("go") %}', 'x: 1\n+++\n'],
+    { onQuery: (info) => seen.push(info) }
+  );
+  await set.render(0);
+  assert.deepEqual(seen, [
+    { query: { x: 1 }, docIndex: 0 },
+    { query: { tags: 'go' }, docIndex: 0 },
+  ]);
+});
+
+test('onQuery: a template-level $.render-by-query counts as a query too', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    ['{{ $.render({ role: "card" }, {}) }}', 'role: card\n+++\nhi'],
+    { onQuery: (info) => seen.push(info) }
+  );
+  await set.render(0);
+  assert.deepEqual(seen, [{ query: { role: 'card' }, docIndex: 0 }]);
+});
+
+test('onQuery: docIndex tracks whichever document is currently rendering, including nested $.render', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    [
+      '{{ $.render({ role: "inner" }, {}) }}', // doc 0
+      'role: inner\n+++\n{% $.find({ tag: "x" }) %}inner', // doc 1 — its own $.find runs while doc 1 is rendering
+    ],
+    { onQuery: (info) => seen.push(info) }
+  );
+  await set.render(0);
+  assert.deepEqual(seen, [
+    { query: { role: 'inner' }, docIndex: 0 }, // doc 0's own $.render call
+    { query: { tag: 'x' }, docIndex: 1 }, // doc 1's $.find, while doc 1 is the one rendering
+  ]);
+});
+
+test('onQuery: fires for host-side find/findOne/render too, tagged docIndex: null', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    ['title: A\n+++\nhi', 'role: card\n+++\ncard'],
+    { onQuery: (info) => seen.push(info) }
+  );
+  await set.find({ title: 'A' });
+  await set.findOne({ title: 'A' });
+  await set.render({ role: 'card' });
+  assert.deepEqual(seen, [
+    { query: { title: 'A' }, docIndex: null },
+    { query: { title: 'A' }, docIndex: null },
+    { query: { role: 'card' }, docIndex: null },
+  ]);
+});
+
+test('onQuery: render by plain index never counts as a query (nothing to track)', async () => {
+  const seen = [];
+  const set = await openDocumentSet('hi', { onQuery: (info) => seen.push(info) });
+  await set.render(0);
+  assert.deepEqual(seen, []);
+});
+
+test('onQuery: without the option, nothing breaks (default no-op)', async () => {
+  const set = await openDocumentSet('{% $.find({}) %}hi');
+  assert.equal((await set.render(0)).trim(), 'hi');
+});
