@@ -418,13 +418,19 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * its completion value: { out: "…" } on success, { error: "…" } if the
  * template threw.
  *
- * `$` methods that need the host (find / findOne / render, and any
+ * `$` methods that need the host (find / findOne / render / emit, and any
  * `extraNativeNames`) call the engine's `__hostcall` native: the VM
  * execution suspends while the host's async native runs (the nisaba query,
- * a nested render, or an embedder-supplied native — see buildDocumentSet's
- * `options.natives`), then resumes with the result — a synchronous-looking
- * call from the template's point of view. `$.documents` / `$.count` /
- * `$.data` are preloaded — no host round-trip.
+ * a nested render, an emitted output, or an embedder-supplied native — see
+ * buildDocumentSet's `options.natives`), then resumes with the result — a
+ * synchronous-looking call from the template's point of view.
+ * `$.documents` / `$.count` / `$.data` are preloaded — no host round-trip.
+ *
+ * `$.emit(path, content)` is the generic "produce a named output" native —
+ * see buildDocumentSet's `options.onEmit` doc comment for the whole
+ * rationale. It's fixed/always-present, the same tier as find/findOne/
+ * render, not part of `extraNativeNames` — every mdy-docs consumer gets it
+ * for free, not just ones that opt into embedder-specific natives.
  *
  * `extraNativeNames` gets a generic `(...args) => __call(name, args)`
  * passthrough per name — mdy itself has no opinion on what these do (that's
@@ -451,6 +457,7 @@ const $ = {
   findOne: (q) => __call("findOne", [q === undefined ? {} : q]),
   withTag: (t) => __call("find", [{ tags: String(t).toLowerCase() }]),
   render: (target, data) => __call("render", [target, data === undefined ? {} : data]),
+  emit: (path, content) => __call("emit", [path, content]),
 ${extraNativeLines}
 };
 ${contextBindings(ctx)}
@@ -496,15 +503,32 @@ return JSON.stringify(__err !== null ? { error: __err } : { out: __done });
  * onQuery. Args/return value cross the VM boundary JSON-serialized, same as
  * find/findOne/render.
  *
+ * `options.onEmit({ path, content, docIndex })` fires for every
+ * `$.emit(path, content)` a template calls — a FIXED native (unlike
+ * `options.natives`' embedder-defined ones), because "produce a named
+ * output as a side effect of rendering" is generic to any mdy-docs
+ * consumer, not specific to one (a static site generator emitting pages;
+ * a notes exporter emitting files; anything that renders one document but
+ * needs to produce several). mdy has no opinion on what "producing" an
+ * output means — collecting it in memory, writing it to disk, ignoring it
+ * — that's entirely `onEmit`'s business, same as onQuery/natives. `content`
+ * crosses the VM boundary JSON-serialized like any native's args, so it's
+ * naturally text/JSON-shaped, not binary — a consumer needing binary
+ * output (edubba's image resize) computes it entirely host-side instead,
+ * via `options.natives`, and never round-trips bytes through the VM at
+ * all. Without the option, `$.emit` is a harmless no-op — nothing breaks
+ * for a consumer that doesn't care about it.
+ *
  * @param {string | string[]} source
  * @param {{
  *   onQuery?: (info: { query: object, docIndex: number | null }) => void,
+ *   onEmit?: (info: { path: string, content: any, docIndex: number | null }) => void,
  *   natives?: Record<string, (...args: any[]) => any>,
  * }} [options]
  * @returns {Promise<{ docs: { index: number, data: object }[], runDoc: Function }>}
  */
 async function buildDocumentSet(source, options = {}) {
-  const { onQuery, natives: extraNatives = {} } = options;
+  const { onQuery, onEmit, natives: extraNatives = {} } = options;
   const extraNativeNames = Object.keys(extraNatives);
   const docs = parseDocuments(source).map(({ data, content }, index) => {
     return { index, data, body: compileTemplateSource(content) };
@@ -563,6 +587,10 @@ async function buildDocumentSet(source, options = {}) {
       findOne: async (query) => (await trackedFind(query, i))[0] ?? null,
       render: async (target, data) =>
         runDoc(await resolveIndex(target, i), data ?? {}, depth + 1),
+      emit: (path, content) => {
+        onEmit?.({ path, content, docIndex: i });
+        return null;
+      },
       ...extraNatives,
     };
 
@@ -612,9 +640,15 @@ async function buildDocumentSet(source, options = {}) {
  * `options.natives` — see buildDocumentSet's doc comment; extra functions
  * exposed to every template in the set as `$.<name>(...)`.
  *
+ * `options.onEmit` — see buildDocumentSet's doc comment; fires for every
+ * `$.emit(path, content)` a template calls — template-level only, there is
+ * no host-level equivalent (there's no "current render" to emit alongside
+ * when the host calls in from outside one).
+ *
  * @param {string | { text: string, meta?: object } | (string | { text: string, meta?: object })[]} source
  * @param {{
  *   onQuery?: (info: { query: object, docIndex: number | null }) => void,
+ *   onEmit?: (info: { path: string, content: any, docIndex: number | null }) => void,
  *   natives?: Record<string, (...args: any[]) => any>,
  * }} [options]
  * @returns {Promise<{

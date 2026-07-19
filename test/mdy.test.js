@@ -738,3 +738,68 @@ test('natives: without the option, nothing breaks (default: none extra)', async 
   const set = await openDocumentSet('{{ $.count }}');
   assert.equal((await set.render(0)).trim(), '1');
 });
+
+// --- openDocumentSet: options.onEmit -----------------------------------
+
+test('onEmit: fires with the path and content a template passed to $.emit', async () => {
+  const seen = [];
+  const set = await openDocumentSet('{% $.emit("out.html", "<p>hi</p>") %}rendered', {
+    onEmit: (info) => seen.push(info),
+  });
+  const out = await set.render(0);
+  assert.equal(out.trim(), 'rendered'); // emit is a side effect, not the render's own output
+  assert.deepEqual(seen, [{ path: 'out.html', content: '<p>hi</p>', docIndex: 0 }]);
+});
+
+test('onEmit: multiple emits from one document, in call order', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    '{% $.emit("a.html", "A") %}{% $.emit("b.html", "B") %}',
+    { onEmit: (info) => seen.push(info) }
+  );
+  await set.render(0);
+  assert.deepEqual(seen.map((e) => e.path), ['a.html', 'b.html']);
+});
+
+test('onEmit: docIndex tracks whichever document is currently rendering, including nested $.render', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    ['{% $.emit("outer.html", "outer") %}{{ $.render({ role: "inner" }, {}) }}', 'role: inner\n+++\n{% $.emit("inner.html", "inner") %}'],
+    { onEmit: (info) => seen.push(info) }
+  );
+  await set.render(0);
+  assert.deepEqual(seen, [
+    { path: 'outer.html', content: 'outer', docIndex: 0 },
+    { path: 'inner.html', content: 'inner', docIndex: 1 },
+  ]);
+});
+
+test('onEmit: content JSON-round-trips like any native call, not limited to strings', async () => {
+  const seen = [];
+  const set = await openDocumentSet('{% $.emit("data.json", { records: [1, 2, 3] }) %}', {
+    onEmit: (info) => seen.push(info),
+  });
+  await set.render(0);
+  assert.deepEqual(seen, [{ path: 'data.json', content: { records: [1, 2, 3] }, docIndex: 0 }]);
+});
+
+test('onEmit: coexists with onQuery and natives — no interference in any direction', async () => {
+  const queries = [];
+  const emits = [];
+  const set = await openDocumentSet(
+    ['{% $.find({}) %}{% $.emit($.shout("out"), "x") %}', 'y'],
+    {
+      onQuery: (info) => queries.push(info),
+      onEmit: (info) => emits.push(info),
+      natives: { shout: (s) => `${s}.html` },
+    }
+  );
+  await set.render(0);
+  assert.deepEqual(queries, [{ query: {}, docIndex: 0 }]);
+  assert.deepEqual(emits, [{ path: 'out.html', content: 'x', docIndex: 0 }]);
+});
+
+test('onEmit: without the option, $.emit is a harmless no-op', async () => {
+  const set = await openDocumentSet('{% $.emit("out.html", "x") %}ok');
+  assert.equal((await set.render(0)).trim(), 'ok');
+});
