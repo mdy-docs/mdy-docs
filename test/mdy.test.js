@@ -695,3 +695,46 @@ test('onQuery: without the option, nothing breaks (default no-op)', async () => 
   const set = await openDocumentSet('{% $.find({}) %}hi');
   assert.equal((await set.render(0)).trim(), 'hi');
 });
+
+// --- openDocumentSet: options.natives ---------------------------------------
+
+test('natives: an embedder-supplied function is callable from a template as $.<name>(...)', async () => {
+  const set = await openDocumentSet('{{ $.double(21) }}', {
+    natives: { double: (n) => n * 2 },
+  });
+  assert.equal((await set.render(0)).trim(), '42');
+});
+
+test('natives: async natives suspend the VM and resume with the resolved value', async () => {
+  const set = await openDocumentSet('{{ $.later() }}', {
+    natives: { later: async () => new Promise((r) => setTimeout(() => r('done'), 5)) },
+  });
+  assert.equal((await set.render(0)).trim(), 'done');
+});
+
+test('natives: multiple extra natives, and args/return cross the VM boundary JSON-round-tripped', async () => {
+  const set = await openDocumentSet('{{ JSON.stringify($.merge({ a: 1 }, { b: 2 })) }} {{ $.shout("hi") }}', {
+    natives: {
+      merge: (a, b) => ({ ...a, ...b }),
+      shout: (s) => s.toUpperCase(),
+    },
+  });
+  assert.equal((await set.render(0)).trim(), '{"a":1,"b":2} HI');
+});
+
+test('natives: coexist with find/findOne/render — no interference either direction', async () => {
+  const set = await openDocumentSet(['{{ $.tag($.findOne({ n: 1 }).n) }}', 'n: 1\n+++\n'], {
+    natives: { tag: (n) => `#${n}` },
+  });
+  assert.equal((await set.render(0)).trim(), '#1');
+});
+
+test('natives: an invalid native name rejects with a clear error rather than a broken program', async () => {
+  const set = await openDocumentSet('hi', { natives: { 'not valid': () => 1 } });
+  await assert.rejects(set.render(0), /invalid native name/);
+});
+
+test('natives: without the option, nothing breaks (default: none extra)', async () => {
+  const set = await openDocumentSet('{{ $.count }}');
+  assert.equal((await set.render(0)).trim(), '1');
+});

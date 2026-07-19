@@ -404,6 +404,11 @@ export function parseDocuments(source) {
   });
 }
 
+// A native name becomes a $.<name>(...) passthrough in the generated
+// program (see buildProgram) — it has to be a safe JS identifier, since
+// it's spliced directly into that program's source text.
+const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 /**
  * Assemble one self-contained VM program for a render.
  *
@@ -413,13 +418,28 @@ export function parseDocuments(source) {
  * its completion value: { out: "…" } on success, { error: "…" } if the
  * template threw.
  *
- * `$` methods that need the host (find / findOne / render) call the engine's
- * `__hostcall` native: the VM execution suspends while the host's async
- * native runs (the nisaba query, or a nested render), then resumes with the
- * result — a synchronous-looking call from the template's point of view.
- * `$.documents` / `$.count` / `$.data` are preloaded — no host round-trip.
+ * `$` methods that need the host (find / findOne / render, and any
+ * `extraNativeNames`) call the engine's `__hostcall` native: the VM
+ * execution suspends while the host's async native runs (the nisaba query,
+ * a nested render, or an embedder-supplied native — see buildDocumentSet's
+ * `options.natives`), then resumes with the result — a synchronous-looking
+ * call from the template's point of view. `$.documents` / `$.count` /
+ * `$.data` are preloaded — no host round-trip.
+ *
+ * `extraNativeNames` gets a generic `(...args) => __call(name, args)`
+ * passthrough per name — mdy itself has no opinion on what these do (that's
+ * entirely the embedder-supplied native function's business), it only
+ * wires the guest-side call shape.
  */
-function buildProgram({ body, ctx, documents }) {
+function buildProgram({ body, ctx, documents, extraNativeNames = [] }) {
+  for (const name of extraNativeNames) {
+    if (!VALID_NATIVE_NAME.test(name)) {
+      throw new Error(`mdy: invalid native name ${JSON.stringify(name)} (must be a valid identifier)`);
+    }
+  }
+  const extraNativeLines = extraNativeNames
+    .map((name) => `  ${name}: (...args) => __call(${JSON.stringify(name)}, args),`)
+    .join('\n');
   return `(() => {
 const __ctx = ${jsonForEval(ctx)};
 const __call = (method, args) => JSON.parse(__hostcall(method, JSON.stringify(args)));
@@ -431,6 +451,7 @@ const $ = {
   findOne: (q) => __call("findOne", [q === undefined ? {} : q]),
   withTag: (t) => __call("find", [{ tags: String(t).toLowerCase() }]),
   render: (target, data) => __call("render", [target, data === undefined ? {} : data]),
+${extraNativeLines}
 };
 ${contextBindings(ctx)}
 let __done = null;
@@ -466,12 +487,25 @@ return JSON.stringify(__err !== null ? { error: __err } : { out: __done });
  * content changes without a matching template edit) needs exactly this;
  * mdy itself has no opinion on what to do with the record.
  *
+ * `options.natives` — extra `{ name: (...args) => value | Promise<value> }`
+ * entries, merged alongside find/findOne/render into every render's host
+ * natives AND wired as `$.<name>(...)` in the generated program (see
+ * buildProgram). Lets an embedder extend what a template can call out to
+ * (edubba: an image-resize native) without mdy needing any opinion on what
+ * that native does — same "generic hook, no baked-in policy" shape as
+ * onQuery. Args/return value cross the VM boundary JSON-serialized, same as
+ * find/findOne/render.
+ *
  * @param {string | string[]} source
- * @param {{ onQuery?: (info: { query: object, docIndex: number | null }) => void }} [options]
+ * @param {{
+ *   onQuery?: (info: { query: object, docIndex: number | null }) => void,
+ *   natives?: Record<string, (...args: any[]) => any>,
+ * }} [options]
  * @returns {Promise<{ docs: { index: number, data: object }[], runDoc: Function }>}
  */
 async function buildDocumentSet(source, options = {}) {
-  const { onQuery } = options;
+  const { onQuery, natives: extraNatives = {} } = options;
+  const extraNativeNames = Object.keys(extraNatives);
   const docs = parseDocuments(source).map(({ data, content }, index) => {
     return { index, data, body: compileTemplateSource(content) };
   });
@@ -529,9 +563,10 @@ async function buildDocumentSet(source, options = {}) {
       findOne: async (query) => (await trackedFind(query, i))[0] ?? null,
       render: async (target, data) =>
         runDoc(await resolveIndex(target, i), data ?? {}, depth + 1),
+      ...extraNatives,
     };
 
-    const program = buildProgram({ body: doc.body, ctx: fullCtx, documents });
+    const program = buildProgram({ body: doc.body, ctx: fullCtx, documents, extraNativeNames });
     const reply = await runProgram(program, natives);
     let envelope;
     try {
@@ -574,8 +609,14 @@ async function buildDocumentSet(source, options = {}) {
  * query anywhere in the set, template-level or host-level (this handle's
  * own find/findOne/render-by-query calls, tagged `docIndex: null`).
  *
+ * `options.natives` — see buildDocumentSet's doc comment; extra functions
+ * exposed to every template in the set as `$.<name>(...)`.
+ *
  * @param {string | { text: string, meta?: object } | (string | { text: string, meta?: object })[]} source
- * @param {{ onQuery?: (info: { query: object, docIndex: number | null }) => void }} [options]
+ * @param {{
+ *   onQuery?: (info: { query: object, docIndex: number | null }) => void,
+ *   natives?: Record<string, (...args: any[]) => any>,
+ * }} [options]
  * @returns {Promise<{
  *   docs: { index: number, data: object }[],
  *   find: (query?: object) => Promise<object[]>,
