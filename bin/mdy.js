@@ -1,9 +1,26 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, watch } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
-import { render, renderToMarkdown, renderEach, parseDocuments, compileTemplateSource, createProcessor } from '../index.js';
+import {
+  render,
+  renderToMarkdown,
+  renderEach,
+  parseDocuments,
+  compileTemplateSource,
+  createProcessor,
+  nodeFsProvider,
+} from '../index.js';
+
+// Reading/watching input files goes through nodeFsProvider (this package's
+// own vault layer) rather than calling node:fs directly — this CLI is a
+// real consumer of the same primitive any embedder gets, not a second,
+// hand-rolled implementation of "read a file, watch a directory" living
+// next to it. (writeFileSync for --out, and readFileSync(0) for stdin,
+// stay direct: neither is "getting a file into the document set", which
+// is what the vault layer is for.)
+const fs = nodeFsProvider();
 
 const USAGE = `mdy — generate a document from an mdy template.
 
@@ -120,12 +137,12 @@ for (const p of filePaths) {
 // --- one render pass (re-run per change in --watch mode; throws, never exits)
 
 /** Extra context: --data-file (re-read each pass) first, then -d overrides. */
-function loadContext() {
+async function loadContext() {
   const context = {};
   if (values['data-file']) {
     let fileText;
     try {
-      fileText = readFileSync(values['data-file'], 'utf8');
+      fileText = await fs.read(dirname(values['data-file']), basename(values['data-file']));
     } catch (err) {
       throw new Error(`cannot read --data-file: ${err.message}`);
     }
@@ -139,10 +156,12 @@ function loadContext() {
   return Object.assign(context, dataPairs);
 }
 
-function readSources() {
+async function readSources() {
   try {
-    return inputPaths.map((p) =>
-      p === '-' ? readFileSync(0, 'utf8') : readFileSync(p, 'utf8') // fd 0 = stdin
+    return await Promise.all(
+      inputPaths.map((p) =>
+        p === '-' ? readFileSync(0, 'utf8') : fs.read(dirname(p), basename(p)) // fd 0 = stdin
+      )
     );
   } catch (err) {
     throw new Error(`cannot read input: ${err.message}`);
@@ -150,8 +169,8 @@ function readSources() {
 }
 
 async function generateOutput() {
-  const sources = readSources();
-  const context = loadContext();
+  const sources = await readSources();
+  const context = await loadContext();
   let output;
   if (values['emit-js']) {
     const docs = parseDocuments(sources);
@@ -198,8 +217,10 @@ if (!values.watch) {
   // --- watch mode: re-render on change, survive render errors.
 
   // Editors save atomically (write temp + rename), which kills a watcher
-  // attached to the file itself — so watch each containing directory and
-  // filter events by filename.
+  // attached to the file itself — so watch each containing directory
+  // (nodeFsProvider's watch(), recursive — subdirectory events just never
+  // match a tracked filename below, no different from before) and filter
+  // events by filename.
   const watched = [...filePaths, ...(values['data-file'] ? [values['data-file']] : [])];
   const byDir = new Map();
   for (const p of watched) {
@@ -243,8 +264,8 @@ if (!values.watch) {
   };
 
   for (const [dir, names] of byDir) {
-    watch(dir, (_event, filename) => {
-      if (!filename || names.has(filename)) schedule();
+    await fs.watch(dir, ({ path }) => {
+      if (names.has(path)) schedule();
     });
   }
 

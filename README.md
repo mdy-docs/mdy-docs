@@ -114,8 +114,46 @@ cat report.mdy | mdy - --html         # stdin → HTML on stdout
   `--data-file`) re-renders and rewrites the output, logging a timing line to
   stderr. A failing render reports the error and keeps watching — the
   previous output is left intact — so it pairs with an editor the way the
-  web playground's live preview does. (Watches the containing directories,
-  so atomic editor saves don't drop the watch; not available with stdin.)
+  web playground's live preview does. (Watches the containing directories via
+  the filesystem layer below, so atomic editor saves don't drop the watch;
+  not available with stdin.)
+
+## Filesystem
+
+Reading, writing, and watching files — for a CLI, a build tool, or a
+browser app with no disk at all — is exported alongside the template
+engine, not a separate concern: `mdy`'s own CLI is a real consumer of it,
+not a second, hand-rolled implementation living next to it.
+
+```js
+import { nodeFsProvider, memoryFsProvider, opfsFsProvider, walkVault, walkFiles } from 'mdy';
+
+const sources = await walkVault('/path/to/docs'); // → openDocumentSet-ready { text, meta } sources
+```
+
+Three providers, one interface (`list`/`read`/`readBinary`/`mtime`/`size`,
+plus `write`/`writeBinary`/`remove`/`watch` where it makes sense), so code
+written against one runs unchanged against any of them:
+
+- **`nodeFsProvider()`** — the real filesystem (the CLI's own default).
+  `watch(root, callback)` is one native, recursive `fs.watch` for a whole
+  tree — no separate polling or manual recursion needed.
+- **`memoryFsProvider(files)`** — a `Map<path, string | Uint8Array>` held
+  by reference, for a consumer with no disk (a browser app). No `watch()`:
+  nothing outside the same JS heap can change it.
+- **`opfsFsProvider()`** — the browser's real, persistent origin-private
+  filesystem. `watch()` uses the native
+  [`FileSystemObserver`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemObserver)
+  API where available, polling (`watchByPolling`, also exported standalone)
+  everywhere else.
+
+`walkVault(root, options)` turns a directory into `openDocumentSet`-ready
+sources — file identity only (`path`, `mtime`), no interpretation of what
+a path *means* (a blog wants a URL from it; a wiki wants a page title;
+that's the embedder's business). `walkFiles(root, options)` is the
+non-document counterpart: every file, any extension, identity only
+(`path`, `name`, `ext`, `size`, `mtime`) — content is never read, so it's
+safe over real binary files (images, anything).
 
 ## Front matter
 
@@ -225,6 +263,7 @@ attributes**, MongoDB-style:
 | `$.findOne(query)` | first match, or `null` |
 | `$.render(target, data)` | run the document matching `target` (a query — or an index) with `data` overriding its own; returns markdown |
 | `$.withTag(tag)` | shorthand for `$.find({ tags: tag })` (see Hashtags) |
+| `$.emit(path, content)` | produce a named output as a side effect of this render — see `openDocumentSet`'s `onEmit` below; a no-op if the embedder didn't ask for it |
 | `$.data(i)` | document `i`'s data (positional) |
 | `$.documents` | `[{ index, data }, …]` (positional) |
 | `$.count` | number of documents |
