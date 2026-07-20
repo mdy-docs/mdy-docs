@@ -1,0 +1,5 @@
+{% const base = String(site.baseURL == null ? "" : site.baseURL).replace(/\/+$/, "") %}
+User-agent: *
+Allow: /
+
+Sitemap: {{ base }}/sitemap.xml

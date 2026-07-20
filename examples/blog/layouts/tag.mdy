@@ -1,0 +1,7 @@
+# Tagged “{{ tag }}”
+
+{% for (const p of posts) { %}
+- [{{ p.title }}]({{ p.url }}) — {{ p.date }}
+{% } %}
+
+[All tags](/tags/)

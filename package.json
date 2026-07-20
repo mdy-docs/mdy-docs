@@ -1,7 +1,7 @@
 {
   "name": "mdy-docs",
   "version": "0.0.1",
-  "description": "",
+  "description": "Documents with data, sandboxed templates, a real query engine, and a static site generator built on all three",
   "homepage": "https://github.com/belteshazzar/mdy-docs#readme",
   "bugs": {
     "url": "https://github.com/belteshazzar/mdy-docs/issues"
@@ -29,8 +29,12 @@
     "web:preview": "vite preview"
   },
   "dependencies": {
+    "@jsquash/jpeg": "^1.6.0",
+    "@jsquash/png": "^3.1.1",
+    "@jsquash/resize": "^2.1.1",
     "@mdy-docs/lamassu-js": "file:third_party/lamassu-js/packages/lamassu-js",
     "@mdy-docs/nisaba-db": "file:third_party/nisaba-db",
+    "image-size": "^2.0.2",
     "js-yaml": "^5.2.1",
     "markdown-it": "^14.3.0"
   },

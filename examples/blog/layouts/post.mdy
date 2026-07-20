@@ -1,0 +1,12 @@
+# {{ title }}
+
+*{{ date }}*
+
+{{ content }}
+
+{%
+  const myRelated = typeof related !== "undefined" ? related : [];
+  if (myRelated.length > 0) {
+%}
+**More like this:** {% for (const p of myRelated) { %}[{{ p.title }}]({{ p.url }}) {% } %}
+{% } %}

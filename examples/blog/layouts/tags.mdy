@@ -1,0 +1,5 @@
+# Tags
+
+{% for (const t of tags) { %}
+- [{{ t.tag }}]({{ t.url }}) ({{ t.count }})
+{% } %}

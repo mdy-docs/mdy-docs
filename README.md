@@ -3,7 +3,12 @@
 Markdown documents with YAML front matter data and a JavaScript template layer
 (`{{ … }}` / `{% … %}`). A document carries its own data and renders itself.
 
-Files using these capabilities use the **`.mdy`** extension.
+Files using these capabilities use the **`.mdy`** extension. On top of the
+document engine, mdy-docs also ships a static site generator: every site is
+a **script-defined site** — one entry document decides everything itself
+(URLs, layouts, tags, feeds, a search index) via `$.find`/`$.render`/
+`$.emit`, no host-side content/layouts/site.yaml convention — built
+entirely on the primitives below; see [Static sites](#static-sites).
 
 ## Structure
 
@@ -79,35 +84,62 @@ const { render: r } = createProcessor({
 ## CLI
 
 ```
-mdy [input...] [options]
+mdy [path] [options]
 
-  input                 .mdy files; reads stdin if omitted or "-". Multiple
-                        files form ONE document set, in order (template file
-                        first, then data files)
-  -o, --out <file>      write output to <file> (default: stdout)
+  path                   A .mdy file, a directory, or "-"/omitted for stdin.
+                        A FILE renders just that file — its own `---`-split
+                        documents, the first is the entry — with no access
+                        to any other file.
+                        A DIRECTORY is scanned in full: every file under it
+                        is inserted as a raw document (path/name/ext/size/
+                        mtime, plus front matter for .mdy files), so the
+                        entry document's $/$.find/$.render reach any of them
+                        — it alone decides what any file/path means (which
+                        are "posts", what URL/layout each gets, …), entirely
+                        in template code (see Static sites). The entry
+                        defaults to index.mdy; --entry picks another file.
+  -o, --out <file>      write output to <file> (default: stdout); if <file>
+                        is an existing directory, $.emit output is written
+                        under it instead (see Static sites)
       --html            emit HTML instead of generated markdown
-      --each            render the entry template once per other document,
-                        using that document's data
-      --doc <index>     render document <index> of the document set (default 0)
-      --emit-js         emit the compiled JavaScript of each document instead of
-                        rendering (debug; combine with --doc for a single one)
+      --entry <path>    directory input only: the entry document's path,
+                        relative to the directory (default: index.mdy)
+      --emit-js         emit the compiled JavaScript instead of rendering
+                        (debug): every document for a file input, just the
+                        entry document for a directory input
   -d, --data <k=v>      add a context value (repeatable; JSON-parsed if possible)
       --data-file <f>   merge a YAML/JSON file into the context
-  -w, --watch           re-render whenever an input (or --data-file) changes
+  -w, --watch           re-render on any relevant change (the file, or for a
+                        directory input any file under it, plus --data-file)
   -h, --help            show help
+
+mdy build [site-dir] [--out <dir>] [--drafts] [--future] [--entry <path>]
+      render a whole site (see Static sites, below)
+mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
+      dev server for a site: watch, rebuild, live reload
 ```
 
 ```sh
 mdy report.mdy                        # → generated markdown on stdout
 mdy report.mdy --html -o report.html  # → HTML file
 mdy report.mdy -o report.md -d env=prod --data-file overrides.yaml
-mdy invoice.mdy invoice-data.mdy --each   # template × each data document
 mdy report.mdy -o report.md --watch   # live re-render on save
 cat report.mdy | mdy - --html         # stdin → HTML on stdout
+mdy ./my-site                         # scan the dir, render index.mdy
+mdy ./my-site --entry other.mdy -o dist   # write $.emit output
+
+mdy build ./my-blog --out ./dist      # build a site
+mdy serve ./my-blog                   # dev server at http://localhost:4321
 ```
 
-- Output goes to **stdout**; pass `-o` to write a file (it won't overwrite an input).
-- A non-`.mdy` input is processed but **warns** on stderr.
+- Output goes to **stdout**; pass `-o` to write a file (it won't overwrite the input).
+- A non-`.mdy` file input is processed but **warns** on stderr.
+- A directory input is walked with `walkRawSources` (raw identity only, see
+  Filesystem/Static sites below) and its entry (`index.mdy`, or `--entry`)
+  is the one document that decides what any other file/path means. A
+  document with no `$.emit` calls just renders to stdout/`-o` as always;
+  `$.emit` output is written under `-o` only when it's an existing
+  directory, otherwise it's just listed on stderr.
 - Context from `--data` / `--data-file` overrides a document's own data
   (front matter and data fences).
 - `--watch` keeps running: every save of any input file (or the
@@ -126,7 +158,7 @@ engine, not a separate concern: `mdy`'s own CLI is a real consumer of it,
 not a second, hand-rolled implementation living next to it.
 
 ```js
-import { nodeFsProvider, memoryFsProvider, opfsFsProvider, walkVault, walkFiles } from 'mdy';
+import { nodeFsProvider, memoryFsProvider, opfsFsProvider, walkVault, walkFiles, walkRawSources } from 'mdy';
 
 const sources = await walkVault('/path/to/docs'); // → openDocumentSet-ready { text, meta } sources
 ```
@@ -153,7 +185,18 @@ a path *means* (a blog wants a URL from it; a wiki wants a page title;
 that's the embedder's business). `walkFiles(root, options)` is the
 non-document counterpart: every file, any extension, identity only
 (`path`, `name`, `ext`, `size`, `mtime`) — content is never read, so it's
-safe over real binary files (images, anything).
+safe over real binary files (images, anything). `walkRawSources(root,
+options)` combines the two for "a whole directory IS the document set":
+every file gets `walkFiles`' identity, but `.mdy` files also carry their
+real text (so mdy's own parser extracts front matter and a live template
+body) — nothing else is ever read as text. This is what a directory `path`
+argument to the CLI uses (see CLI, above): one entry document, `$.find`ing
+and `$.render`ing its way through every other file, with no host-side
+interpretation of what any path means layered on first.
+
+The static site generator (below) is the first real consumer of this
+layer's path-*interpretation* — URLs, sections, dates, drafts — layered on
+top in `src/site/vault.js`, not baked into the generic walk itself.
 
 ## Front matter
 
@@ -268,11 +311,13 @@ attributes**, MongoDB-style:
 | `$.documents` | `[{ index, data }, …]` (positional) |
 | `$.count` | number of documents |
 
-Document 0 (the entry) is rendered by default; it composes the rest via `$`. Pass
-`--doc <index>` (or the `entry` argument to `render`/`renderToMarkdown`) to render
-a different one. Give documents identifying attributes and both the data
-selection and the template selection become queries — no document needs to
-know another's position — see
+Document 0 (the entry) is rendered by default; it composes the rest via `$`.
+From the library, the `entry` argument to `render`/`renderToMarkdown` (or
+`openDocumentSet(...).render(target, data)`) renders a different one — the
+CLI always renders document 0 (a file's first document, or a directory
+input's `index.mdy`/`--entry`). Give documents identifying attributes and
+both the data selection and the template selection become queries — no
+document needs to know another's position — see
 [`examples/document-set.mdy`](examples/document-set.mdy):
 
 ```
@@ -310,19 +355,23 @@ Two structural lines to watch for inside a body:
 
 ## One template, many data documents
 
-A document set doesn't have to live in one file. Passing **multiple sources**
-(CLI: several input files; library: an array of strings) concatenates their
-documents into one set, so a display template can stay in its own file and be
-applied to data kept elsewhere:
+A document set doesn't have to live in one file. From the library, passing
+**multiple sources** (an array of strings) concatenates their documents into
+one set, so a display template can stay in its own file and be applied to
+data kept elsewhere — the CLI itself takes a single input (see CLI, above),
+so this is a library-level feature; a directory input's entry can reach the
+same result by placing the data alongside it and `$.find`ing it directly.
 
-```sh
-mdy invoice.mdy invoice-data.mdy --each
+```js
+import { renderEach, renderDocumentSet } from 'mdy';
+
+const pages = renderEach([templateSource, dataSource]); // → string[], one per data document
 ```
 
-`--each` renders the entry document (the template) once **per other document**
-in the set, with that document's front matter as its data. The template's own
-front matter acts as defaults — each record overrides it, and `--data` /
-`--data-file` override both — so the template still renders standalone with
+`renderEach` renders the entry document (the template) once **per other
+document** in the set, with that document's front matter as its data. The
+template's own front matter acts as defaults — each record overrides it, and
+`extraContext` overrides both — so the template still renders standalone with
 its sample data. A data file is just `---`-separated documents, each ending in
 a trailing `+++` so it is data-only with an empty body:
 
@@ -338,20 +387,13 @@ items:
 +++
 ```
 
-From the library, `renderEach` returns one markdown string per record:
-
-```js
-import { renderEach, renderDocumentSet } from 'mdy';
-
-const pages = renderEach([templateSource, dataSource]); // → string[]
-```
-
-Without `--each`, the combined set behaves exactly like a single file: the
-entry document renders and can address every document — including those from
-other files — through `$` (`$.documents`, `$.data(i)`, `$.render(i, data)`),
-and `--doc` / the `entry` argument index into the combined set. See
-[`examples/invoice.mdy`](examples/invoice.mdy) and
-[`examples/invoice-data.mdy`](examples/invoice-data.mdy).
+`renderDocumentSet`/`render`/`renderToMarkdown` behave exactly like a single
+file: the entry document renders and can address every document — including
+those from other sources — through `$` (`$.documents`, `$.data(i)`,
+`$.render(i, data)`), and the `entry` argument indexes into the combined set.
+See [`examples/invoice.mdy`](examples/invoice.mdy) and
+[`examples/invoice-data.mdy`](examples/invoice-data.mdy) (run together via
+`renderEach([...])` from a script, or each individually via the CLI).
 
 See [`examples/`](examples/) for runnable documents and
 [`test/mdy.test.js`](test/mdy.test.js) for behavior.
@@ -375,8 +417,8 @@ const gen = compileTemplate(body);       // gen.source === src
 ```
 
 ```sh
-mdy report.mdy --emit-js           # compiled JS of every document
-mdy report.mdy --emit-js --doc 1   # just document 1
+mdy report.mdy --emit-js             # compiled JS of every document in the file
+mdy mysite --emit-js                 # compiled JS of just the entry document (index.mdy/--entry)
 ```
 
 `compileTemplate` runs the statements in the **host** runtime via
@@ -401,6 +443,80 @@ document data, and the `$` document-set API.
 
 The exception is `compileTemplate()`, which executes in the host via
 `new Function` for debugging — never feed it untrusted documents.
+
+## Static sites
+
+A static site generator — in the family of Hugo / Jekyll / Eleventy — built
+entirely on the primitives above, with one governing idea: every site is a
+**script-defined site**. There's no host-side content/layouts/site.yaml
+convention deciding what a path means — one entry document (`index.mdy` by
+default) does ALL of that itself, in template code, via `$.find`/`$.render`/
+`$.emit`. `mdy build`/`mdy serve` (see CLI, above) and the whole
+implementation live in [`src/site/`](src/site/); the design brief and
+phased history — including how this replaced an earlier conventional
+content/layouts/site.yaml pipeline — are in
+[docs/site-plan.md](docs/site-plan.md).
+
+A site directory is just `walkRawSources(root)` (`src/vault.js`) fed into
+`openDocumentSet`: every file gets its raw identity (`path`/`name`/`ext`/
+`size`/`mtime`) plus whatever its own file FORMAT means — the same "the
+format's job, not a convention" reasoning as `.mdy`'s own front matter:
+
+- **`.mdy`** — real text, front matter + a live template body, exactly like
+  any other document.
+- **`.md`** — real text lands in `meta.body` (never compiled as a template
+  — a bare `---`/`{{ }}` in real prose must not be reinterpreted), plus
+  inline `#hashtag`s extracted into `meta.tags`.
+- **`.yaml`/`.yml`** — parsed as a YAML mapping, its own fields merged
+  directly into `meta` (pure data, no body) — only `path` is reserved;
+  `name`/`ext`/`size`/`mtime` are fallback defaults, not a mask, so a
+  record's own `name`/`size` field isn't shadowed by the file's. A
+  non-mapping or unparseable file just degrades to an identity-only record
+  (a warning, not a failure).
+- **anything else** — raw identity only; a recognized image extension also
+  gets `width`/`height` (header-only, via `image-size`), so `$.resize`
+  (below) has what it needs with no `kind: 'file'` convention layered on.
+
+One entry document (`index.mdy`, or `--entry`/`options.entry`) then renders,
+via `$.find`/`$.render`/`$.emit` — which files are "posts", what URL/layout
+each gets, tag grouping, pagination, drafts/future filtering — plus four
+small, genuinely host-dependent natives no amount of template JS could
+replace: `$.resize` (image codecs, `src/site/images.js`), `$.tokenize` (the
+search widget's word-list algorithm, `src/site/search.js`), `$.rfc822` (RSS
+pubDate — the lamassu VM forbids `new Date()`), and `$.markdown` (CommonMark
+→ HTML, since a script assembling markdown from `$.render` calls has no
+other way to turn the result into HTML before an HTML-emitting layout).
+None of these four carry any policy of their own — the script decides
+everything, these just do the host-only work underneath. `$.emit`'s
+outputs are written under `-o` (CLI) or to `dist/`/served in memory (`mdy
+build`/`serve`); the entry's own return value is the same generated
+markdown any `$.render` produces, though a whole-site build discards it
+(nothing writes it anywhere) since every real output comes from `$.emit`.
+One trade-off: no incremental-rebuild reuse — every build/rebuild walks the
+whole directory and reruns the entry from scratch (see
+[`src/site/script-site.js`](src/site/script-site.js)).
+
+**[examples/blog](examples/blog)** is a full instance of this — posts
+(`.mdy` *and* `.md`), tags, an RSS feed, sitemap, robots.txt, a search
+index, and an `about` page with a resized image and a `.yaml` data record
+queried directly — entirely defined by
+[examples/blog/index.mdy](examples/blog/index.mdy) plus its `layouts/*.mdy`
+shells. Run it identically three ways:
+
+```sh
+mdy build examples/blog --out dist   # → dist/
+mdy serve examples/blog              # dev server, watch, live reload
+mdy examples/blog                    # plain CLI: same walk, same entry
+```
+
+`renderSite`/`buildSite`/`serveSite` all resolve `root`'s entry document the
+same way `mdy <directory>` does (see CLI, above) — one primitive, one
+implementation, whichever way you call it.
+
+**In-browser editor** ([`web/`](web/)): the whole pipeline — `renderSite()`,
+both wasm engines, a real in-memory vault — running client-side, edits and
+preview with no server. See [Playground](#playground), below, for how to
+run it.
 
 ## Development
 
@@ -433,17 +549,25 @@ until they are switched back to published versions.)
 
 ### Playground
 
-A browser playground ([`web/`](web/)) runs the full pipeline client-side —
-both engines are WebAssembly, so documents parse, store, query, and render
-entirely in the browser:
+A browser site editor ([`web/`](web/)) runs the full static-site pipeline
+client-side — both engines are WebAssembly, so a site is parsed, queried,
+and built entirely in the browser, with no server:
 
 ```sh
 npm run web            # dev server → http://localhost:8090
 npm run web:build      # production bundle → dist-web/
+npm run web:preview    # serve that bundle locally
 ```
 
-Left pane: editable source (pick an example, edits render live). Right pane:
-rendered preview, generated markdown, and the compiled JS of each document.
+Seeded from [examples/blog](examples/blog) — `index.mdy` + `layouts/*.mdy`
++ `posts/*` + `static/`: a file-list pane to add/edit/delete any of it; a
+live preview pane (page selector, drafts/future toggles reaching the entry
+script as plain context booleans). No "edit this page" shortcut — a
+script-defined site's entry decides output paths itself via `$.emit`, with
+no host-computed "this URL's single source file" mapping to point a button
+at; the file list is the only way in. Edits persist across reloads and sync
+live across tabs on browsers with OPFS (`opfsFsProvider`) — everything else
+is the real `renderSite()`, not a simplified stand-in.
 
 ## Test
 

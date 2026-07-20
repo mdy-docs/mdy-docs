@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, copyFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, cpSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -9,11 +9,22 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, '..', 'bin', 'mdy.js');
 const example = (name) => join(here, '..', 'examples', name);
+const exampleBlog = join(here, '..', 'examples', 'blog');
 const workdir = () => mkdtempSync(join(tmpdir(), 'mdy-'));
+const site = () => {
+  const dir = workdir();
+  cpSync(exampleBlog, dir, { recursive: true });
+  return dir;
+};
 
 // Run the CLI without throwing. Returns { status, stdout, stderr }.
 const run = (args, input) =>
   spawnSync('node', [bin, ...args], { input, encoding: 'utf8' });
+
+// Same, but in a given working directory instead of feeding stdin — for
+// the build/serve/new subcommands, which operate on a site directory
+// rather than stdin/positional file input.
+const runIn = (args, cwd) => spawnSync('node', [bin, ...args], { cwd, encoding: 'utf8' });
 
 // Poll until `cond()` is true (up to `ms`), else throw.
 const waitFor = async (cond, ms = 15000) => {
@@ -104,41 +115,20 @@ test('-o refuses to overwrite the input file', () => {
 
   const { status, stderr } = run([src, '-o', src]);
   assert.equal(status, 1);
-  assert.match(stderr, /refusing to overwrite an input/);
+  assert.match(stderr, /refusing to overwrite the input/);
 });
 
-test('-o refuses to overwrite any of several input files', () => {
+test('a file input has no access to sibling files (unlike a directory input)', () => {
   const dir = workdir();
-  const tpl = join(dir, 'invoice.mdy');
-  const data = join(dir, 'invoice-data.mdy');
-  copyFileSync(example('invoice.mdy'), tpl);
-  copyFileSync(example('invoice-data.mdy'), data);
+  writeFileSync(join(dir, 'index.mdy'), '+++\n{{ $.find({}).length }}');
+  writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nirrelevant body');
 
-  const { status, stderr } = run([tpl, data, '-o', data]);
-  assert.equal(status, 1);
-  assert.match(stderr, /refusing to overwrite an input/);
+  const { status, stdout } = run([join(dir, 'index.mdy')]);
+  assert.equal(status, 0);
+  assert.equal(stdout.trim(), '1'); // just index.mdy's own (single) document
 });
 
-test('--doc selects a document from a multi-document file', () => {
-  const src = 'entry doc\n---\nx: 1\n+++\nsecond {{ x + 1 }}';
-  assert.equal(run(['-'], src).stdout.trim(), 'entry doc');
-  assert.equal(run(['-', '--doc', '1'], src).stdout.trim(), 'second 2');
-});
-
-test('--doc out of range fails with a single mdy: prefix', () => {
-  const { status, stderr } = run(['-', '--doc', '5'], 'only one');
-  assert.equal(status, 1);
-  assert.match(stderr, /no document at index 5/);
-  assert.doesNotMatch(stderr, /mdy: mdy:/);
-});
-
-test('--doc rejects a non-integer', () => {
-  const { status, stderr } = run(['-', '--doc', 'abc'], 'x');
-  assert.equal(status, 1);
-  assert.match(stderr, /--doc expects a non-negative integer/);
-});
-
-test('--emit-js prints the compiled function of every document', () => {
+test('--emit-js prints the compiled function of every document in a file', () => {
   const src = 'hi {{ x }}\n---\ny: 2\n+++\n{% let z = 1 %}z is {{ z }}';
   const { status, stdout } = run(['-', '--emit-js'], src);
   assert.equal(status, 0);
@@ -148,20 +138,37 @@ test('--emit-js prints the compiled function of every document', () => {
   assert.match(stdout, /let z = 1/);
 });
 
-test('--emit-js --doc selects a single document', () => {
-  const src = 'hi {{ x }}\n---\ny: 2\n+++\nsecond {{ y }}';
-  const { stdout } = run(['-', '--emit-js', '--doc', '1'], src);
-  assert.match(stdout, /function __doc1\(__ctx\)/);
-  assert.doesNotMatch(stdout, /function __doc0/);
-});
-
 test('--emit-js rejects --html', () => {
   const { status, stderr } = run(['-', '--emit-js', '--html'], 'x');
   assert.equal(status, 1);
   assert.match(stderr, /--emit-js cannot be combined with --html/);
 });
 
-test('missing input file exits non-zero with a message', () => {
+test('$.emit output is reported but not written without --out', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'entry.mdy'), '+++\n{% $.emit("a.html", "hi") %}\nentry text');
+
+  const { status, stdout, stderr } = run([join(dir, 'entry.mdy')]);
+  assert.equal(status, 0);
+  assert.match(stdout, /entry text/);
+  assert.match(stderr, /1 file\(s\) emitted via \$\.emit not written/);
+  assert.match(stderr, /a\.html/);
+});
+
+test('$.emit output is written under -o when it is an existing directory', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'entry.mdy'), '+++\n{% $.emit("nested/a.html", "hi from a") %}\nentry text');
+  const out = join(dir, 'out');
+  mkdirSync(out);
+
+  const { status, stdout, stderr } = run([join(dir, 'entry.mdy'), '-o', out]);
+  assert.equal(status, 0);
+  assert.match(stdout, /entry text/); // no filename to write the primary output to, so it still goes to stdout
+  assert.match(stderr, /wrote 1 emitted file\(s\)/);
+  assert.equal(readFileSync(join(out, 'nested', 'a.html'), 'utf8'), 'hi from a');
+});
+
+test('missing input exits non-zero with a message', () => {
   const { status, stderr } = run(['does-not-exist.mdy']);
   assert.equal(status, 1);
   assert.match(stderr, /cannot read input/);
@@ -169,73 +176,89 @@ test('missing input file exits non-zero with a message', () => {
 
 test('--help prints usage', () => {
   const { stdout } = run(['--help']);
-  assert.match(stdout, /Usage:\s+mdy \[input\.\.\.\]/);
+  assert.match(stdout, /Usage:\s+mdy \[path\]/);
 });
 
-// --- multiple inputs & --each ---------------------------------------------
-
-test('multiple input files form one document set', () => {
-  const dir = workdir();
-  const tpl = join(dir, 'tpl.mdy');
-  const data = join(dir, 'data.mdy');
-  copyFileSync(example('invoice.mdy'), tpl);
-  copyFileSync(example('invoice-data.mdy'), data);
-
-  // Document 1 of the combined set is the first record of the data file.
-  const { status, stdout } = run([tpl, data, '--doc', '1', '--emit-js']);
-  assert.equal(status, 0);
-  assert.match(stdout, /function __doc1\(__ctx\)/);
+test('more than one positional is rejected', () => {
+  const { status, stderr } = run(['a.mdy', 'b.mdy']);
+  assert.equal(status, 1);
+  assert.match(stderr, /single input/);
 });
 
-test('--each applies the template file to each data document', () => {
-  const dir = workdir();
-  const tpl = join(dir, 'invoice.mdy');
-  const data = join(dir, 'invoice-data.mdy');
-  copyFileSync(example('invoice.mdy'), tpl);
-  copyFileSync(example('invoice-data.mdy'), data);
-
-  const { status, stdout } = run([tpl, data, '--each']);
-  assert.equal(status, 0);
-  assert.match(stdout, /Invoice #57/);
-  assert.match(stdout, /Order total: \$40\.25/);
-  assert.match(stdout, /Invoice #58/);
-  assert.match(stdout, /Order total: \$20\.99/);
-  assert.doesNotMatch(stdout, /Invoice #42/); // the template's own sample data is not rendered
-});
-
-test('--each with -d overrides every record', () => {
-  const src = 'Hello {{ name }} ({{ env }})\n---\nname: Ada\n+++\n---\nname: Bob\n+++\n';
-  const { stdout } = run(['-', '--each', '-d', 'env=prod'], src);
-  assert.equal(stdout.trim(), 'Hello Ada (prod)\n\nHello Bob (prod)');
-});
-
-test('--each --html renders each record to HTML', () => {
-  const dir = workdir();
-  const tpl = join(dir, 'invoice.mdy');
-  const data = join(dir, 'invoice-data.mdy');
-  copyFileSync(example('invoice.mdy'), tpl);
-  copyFileSync(example('invoice-data.mdy'), data);
-
-  const { status, stdout } = run([tpl, data, '--each', '--html']);
-  assert.equal(status, 0);
-  assert.match(stdout, /<h1>Invoice #57<\/h1>/);
-  assert.match(stdout, /<h1>Invoice #58<\/h1>/);
-});
-
-test('stdin ("-") can be one of several inputs', () => {
-  const dir = workdir();
-  const data = join(dir, 'invoice-data.mdy');
-  copyFileSync(example('invoice-data.mdy'), data);
-
-  const { status, stdout } = run(['-', data, '--each'], 'Owner: {{ report.owner }}');
-  assert.equal(status, 0);
-  assert.equal(stdout.trim(), 'Owner: Ada Lovelace\n\nOwner: Alan Turing');
-});
-
-test('stdin given more than once fails', () => {
+test('stdin given more than once fails (a second positional)', () => {
   const { status, stderr } = run(['-', '-'], 'x');
   assert.equal(status, 1);
-  assert.match(stderr, /stdin \("-"\) given more than once/);
+  assert.match(stderr, /single input/);
+});
+
+// --- directory input: full scan, index.mdy (or --entry) as the entry -----
+
+test('a directory input is scanned in full; the entry\'s $.find reaches every file', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'index.mdy'), '+++\n# Siblings\n{% for (const d of $.find({})) { %}\n- {{ d.path }}\n{% } %}');
+  writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nirrelevant body');
+
+  const { status, stdout } = run([dir]);
+  assert.equal(status, 0);
+  assert.match(stdout, /- index\.mdy/);
+  assert.match(stdout, /- other\.mdy/);
+});
+
+test('a directory sibling that is not the entry is inserted with raw identity only', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'index.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}{{ o.name }}/{{ o.ext }}/{{ typeof o.title }}');
+  writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nbody');
+
+  const { stdout } = run([dir]);
+  assert.equal(stdout.trim(), 'other.mdy/.mdy/string'); // front matter still extracted for a sibling .mdy
+});
+
+test('--entry picks a different entry document', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'index.mdy'), '+++\ndefault entry');
+  writeFileSync(join(dir, 'other.mdy'), '+++\nother entry');
+
+  const { status, stdout } = run([dir, '--entry', 'other.mdy']);
+  assert.equal(status, 0);
+  assert.equal(stdout.trim(), 'other entry');
+});
+
+test('--entry with a missing file fails clearly', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'index.mdy'), '+++\nhi');
+
+  const { status, stderr } = run([dir, '--entry', 'nope.mdy']);
+  assert.equal(status, 1);
+  assert.match(stderr, /entry script not found/);
+});
+
+test('--entry is rejected for a file or stdin input', () => {
+  const dir = workdir();
+  const src = join(dir, 'doc.mdy');
+  writeFileSync(src, '+++\nhi');
+
+  assert.match(run([src, '--entry', 'x.mdy']).stderr, /--entry is only valid with a directory input/);
+  assert.match(run(['-', '--entry', 'x.mdy'], 'hi').stderr, /--entry is only valid with a directory input/);
+});
+
+test('--emit-js on a directory input compiles just the entry document', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'index.mdy'), '+++\nhi {{ x }}');
+  writeFileSync(join(dir, 'other.mdy'), '+++\nother {{ y }}');
+
+  const { status, stdout } = run([dir, '--emit-js']);
+  assert.equal(status, 0);
+  assert.match(stdout, /__out \+= \(x\)/);
+  assert.doesNotMatch(stdout, /__out \+= \(y\)/);
+});
+
+test('-o refuses to overwrite a directory input', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'index.mdy'), '+++\nhi');
+
+  const { status, stderr } = run([dir, '-o', dir]);
+  assert.equal(status, 1);
+  assert.match(stderr, /refusing to overwrite the input/);
 });
 
 // --- watch mode -----------------------------------------------------------
@@ -299,4 +322,56 @@ test('--watch rejects stdin input', () => {
   const { status, stderr } = run(['-', '--watch'], 'x');
   assert.equal(status, 1);
   assert.match(stderr, /--watch cannot read from stdin/);
+});
+
+test('--watch on a directory re-renders when ANY file under it changes', async () => {
+  const dir = workdir();
+  const out = join(dir, 'out.md');
+  writeFileSync(join(dir, 'index.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}other says {{ o.text }}');
+  writeFileSync(join(dir, 'other.mdy'), 'text: hi\n+++\n');
+
+  const child = spawn('node', [bin, dir, '-o', out, '--watch']);
+  try {
+    await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('other says hi'));
+    writeFileSync(join(dir, 'other.mdy'), 'text: bye\n+++\n');
+    await waitFor(() => readFileSync(out, 'utf8').includes('other says bye'));
+  } finally {
+    child.kill();
+  }
+});
+
+// --- build (whole-site) -----------------------------------------------
+
+test('mdy build renders a site to <dir>/dist by default', () => {
+  const dir = site();
+  const { status, stdout } = runIn(['build'], dir);
+  assert.equal(status, 0);
+  assert.match(stdout, /built \d+ page\(s\)/);
+  assert.ok(existsSync(join(dir, 'dist', 'index.html')));
+  assert.ok(existsSync(join(dir, 'dist', 'posts', 'hello', 'index.html')));
+});
+
+test('mdy build --out writes to a custom directory', () => {
+  const dir = site();
+  const out = join(dir, 'public');
+  const { status } = runIn(['build', '.', '--out', out], dir);
+  assert.equal(status, 0);
+  assert.ok(existsSync(join(out, 'index.html')));
+});
+
+test('mdy build excludes drafts unless --drafts is given', () => {
+  const dir = site();
+  runIn(['build'], dir);
+  assert.ok(!existsSync(join(dir, 'dist', 'posts', 'clay-tablets')));
+  runIn(['build', '--drafts'], dir);
+  assert.ok(existsSync(join(dir, 'dist', 'posts', 'clay-tablets', 'index.html')));
+});
+
+test('mdy build --entry picks a different entry document', () => {
+  const dir = workdir();
+  writeFileSync(join(dir, 'index.mdy'), '+++\n{% $.emit("index.html", "default entry") %}');
+  writeFileSync(join(dir, 'other.mdy'), '+++\n{% $.emit("index.html", "other entry") %}');
+  const { status } = runIn(['build', '.', '--entry', 'other.mdy'], dir);
+  assert.equal(status, 0);
+  assert.equal(readFileSync(join(dir, 'dist', 'index.html'), 'utf8'), 'other entry');
 });

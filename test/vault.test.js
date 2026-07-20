@@ -4,8 +4,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { walkVault, walkFiles } from '../src/vault.js';
+import { walkVault, walkFiles, walkRawSources } from '../src/vault.js';
 import { memoryFsProvider, nodeFsProvider } from '../src/fs-provider.js';
+import { openDocumentSet } from '../src/mdy.js';
+import { makePng } from './png-fixture.js';
 
 test('walkVault: raw sources, no interpretation beyond path + mtime identity', async () => {
   const files = new Map([
@@ -129,6 +131,127 @@ test('walkFiles: defaults to the real filesystem and reports real sizes', async 
   assert.equal(entries.length, 1);
   assert.equal(entries[0].path, 'static/logo.png');
   assert.equal(entries[0].size, 5);
+});
+
+// --- walkRawSources ------------------------------------------------------
+// The "a whole directory IS the document set" primitive: every file gets
+// raw identity (path/name/ext/size/mtime); only .mdy files carry real text,
+// so mdy's own parser can extract front matter and a live template body.
+
+test('walkRawSources: a .mdy file gets its real text, front matter extractable via openDocumentSet', async () => {
+  const files = new Map([
+    ['index.mdy', 'title: Hello\n+++\nbody'],
+    ['other.mdy', 'title: Other\n+++\nirrelevant'],
+  ]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+
+  assert.equal(sources.length, 2);
+  const set = await openDocumentSet(sources);
+  const index = set.docs.find((d) => d.data.path === 'index.mdy');
+  assert.equal(index.data.title, 'Hello'); // front matter, merged in by mdy's own parser
+  assert.equal(index.data.name, 'index.mdy');
+  assert.equal(index.data.ext, '.mdy');
+  assert.equal(typeof index.data.size, 'number');
+  assert.ok(index.data.mtime instanceof Date);
+  assert.equal('section' in index.data, false); // no interpretation beyond raw identity
+});
+
+test('walkRawSources: a non-.mdy file gets a placeholder body, never its real content', async () => {
+  const files = new Map([['static/logo.png', 'not-really-png-bytes']]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+
+  assert.equal(sources.length, 1);
+  assert.notEqual(sources[0].text, 'not-really-png-bytes');
+  assert.equal(sources[0].meta.path, 'static/logo.png');
+  assert.equal(sources[0].meta.name, 'logo.png');
+  assert.equal(sources[0].meta.ext, '.png');
+});
+
+test('walkRawSources: a real image gets width/height (header-only, via image-size) — real identity, not interpretation', async () => {
+  const files = new Map([['static/logo.png', makePng(40, 20)]]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].meta.width, 40);
+  assert.equal(sources[0].meta.height, 20);
+});
+
+test('walkRawSources: a corrupt/unsupported "image" still gets its raw record, just no width/height', async () => {
+  const files = new Map([['static/logo.png', 'not-really-png-bytes']]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+
+  assert.equal(sources.length, 1);
+  assert.equal('width' in sources[0].meta, false);
+  assert.equal('height' in sources[0].meta, false);
+});
+
+test('walkRawSources: a .md file gets its real text in meta.body, never compiled as a template, plus inline #hashtags', async () => {
+  const files = new Map([
+    ['posts/note.md', 'A note about #history.\n\nThis --- is not a separator, {{ this }} is not a tag.'],
+  ]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+
+  assert.equal(sources.length, 1);
+  const { text, meta } = sources[0];
+  assert.notEqual(text, meta.body); // text is the placeholder — never handed to mdy's parser/compiler
+  assert.equal(meta.body, 'A note about #history.\n\nThis --- is not a separator, {{ this }} is not a tag.');
+  assert.deepEqual(meta.tags, ['history']);
+  assert.equal(meta.path, 'posts/note.md');
+});
+
+test('walkRawSources: a .md file with no hashtags gets no tags field at all', async () => {
+  const files = new Map([['posts/note.md', 'Just plain prose.']]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+  assert.equal('tags' in sources[0].meta, false);
+});
+
+test('walkRawSources: a .yaml file is parsed as data — its own fields merged in, only `path` reserved', async () => {
+  const files = new Map([['author.yaml', 'name: Ada Lovelace\nrole: mathematician\n']]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+
+  assert.equal(sources.length, 1);
+  const { text, meta } = sources[0];
+  assert.notEqual(text, sources[0].meta.name); // placeholder body — data lives in meta, not text
+  // The record's own `name` wins over the file's basename identity — only
+  // `path` is structurally reserved (other raw-mode code resolves
+  // documents by it); name/ext/size/mtime are defaults, not a mask.
+  assert.equal(meta.name, 'Ada Lovelace');
+  assert.equal(meta.role, 'mathematician');
+  assert.equal(meta.path, 'author.yaml');
+});
+
+test('walkRawSources: a .yaml file that declares no `name` still falls back to the file\'s own identity', async () => {
+  const files = new Map([['config.yaml', 'setting: on\n']]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+  assert.equal(sources[0].meta.name, 'config.yaml');
+  assert.equal(sources[0].meta.setting, 'on');
+});
+
+test('walkRawSources: a non-mapping .yaml (a list) degrades to raw identity, not a thrown error', async () => {
+  const files = new Map([['list.yaml', '- one\n- two\n']]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].meta.path, 'list.yaml');
+  assert.equal(sources[0].meta.name, 'list.yaml');
+});
+
+test('walkRawSources: an empty .yaml file is just an identity record, no parsed fields', async () => {
+  const files = new Map([['empty.yaml', '']]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].meta.path, 'empty.yaml');
+});
+
+test('walkRawSources: dist/, node_modules/, and dotfiles/dot-directories are excluded', async () => {
+  const files = new Map([
+    ['index.mdy', '+++\nhi'],
+    ['dist/index.html', 'built'],
+    ['node_modules/x/index.js', 'dep'],
+    ['.git/HEAD', 'ref'],
+    ['.env', 'secret'],
+  ]);
+  const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
+  assert.deepEqual(sources.map((s) => s.meta.path), ['index.mdy']);
 });
 
 test('walkVault: defaults to the real filesystem and works against a real directory', async () => {

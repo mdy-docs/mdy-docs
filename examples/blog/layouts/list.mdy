@@ -1,0 +1,13 @@
+# {{ site.title }}
+
+{{ site.description }}
+
+{% for (const p of posts) { %}
+- [{{ p.title }}]({{ p.url }}) — {{ p.date }}
+{%
+  }
+  if (pagination.totalPages > 1) {
+%}
+
+{% if (pagination.prevUrl) { %}[← newer]({{ pagination.prevUrl }}) · {% } %}page {{ pagination.page }} of {{ pagination.totalPages }}{% if (pagination.nextUrl) { %} · [older →]({{ pagination.nextUrl }}){% } %}
+{% } %}

@@ -27,4 +27,15 @@ export {
   opfsFsProvider,
   watchByPolling,
 } from './src/fs-provider.js';
-export { walkVault, walkFiles } from './src/vault.js';
+export { walkVault, walkFiles, walkRawSources } from './src/vault.js';
+
+// The static-site layer, built entirely on the primitives above: every
+// site is a script-defined site (one entry document deciding everything
+// itself via $.find/$.render/$.emit — see script-site.js and
+// docs/site-plan.md's "Toward a script-defined site" for the full design).
+export { renderSite, buildSite, urlToOutFile } from './src/site/build.js';
+export { serveSite } from './src/site/serve.js';
+export { slugify, normalizeDate, rfc822 } from './src/site/vault.js';
+export { tokenize } from './src/site/search.js';
+export { createResizeNative } from './src/site/images.js';
+export { renderScriptSite } from './src/site/script-site.js';

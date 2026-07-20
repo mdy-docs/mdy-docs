@@ -3,42 +3,53 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>mdy playground</title>
+  <title>mdy — site editor</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <header>
-    <h1>mdy <span>playground</span></h1>
+    <h1>mdy <span>site editor</span></h1>
     <p class="tagline">
-      markdown + YAML documents · templates run sandboxed in the
-      <a href="https://github.com/mdy-docs/lamassu-js">lamassu</a> VM ·
-      <code>$.find</code> queries a
-      <a href="https://github.com/mdy-docs/nisaba-db">nisaba</a> database —
-      all in WebAssembly, entirely in your browser
+      a whole site — one <code>index.mdy</code> script, deciding everything
+      itself via <code>$.find</code>/<code>$.render</code>/<code>$.emit</code>
+      — edited and built entirely client-side: the same
+      <code>renderSite()</code> the CLI uses, running against an in-memory
+      vault instead of disk, with the
+      <a href="https://github.com/mdy-docs/lamassu-js">lamassu</a> VM and
+      <a href="https://github.com/mdy-docs/nisaba-db">nisaba</a> both
+      WebAssembly, sandboxed, in your browser
     </p>
     <div class="controls">
-      <label for="example">example</label>
-      <select id="example"></select>
-      <span id="status" class="status">booting engines…</span>
+      <label><input type="checkbox" id="opt-drafts" /> drafts</label>
+      <label><input type="checkbox" id="opt-future" /> future posts</label>
+      <span id="status" class="status">booting…</span>
     </div>
   </header>
 
   <main>
-    <section class="pane">
-      <div class="pane-title">source <span class="hint">(edits render live)</span></div>
-      <textarea id="source" spellcheck="false" autocomplete="off"></textarea>
+    <section class="pane files">
+      <div class="pane-title">files <span id="storage-status" class="storage-status"></span></div>
+      <ul id="file-list"></ul>
+      <form id="new-file-form">
+        <input id="new-file-path" placeholder="posts/new-post.mdy" autocomplete="off" />
+        <button type="submit">+ add</button>
+      </form>
     </section>
 
-    <section class="pane">
-      <nav class="tabs">
-        <button data-tab="preview" class="active">preview</button>
-        <button data-tab="markdown">markdown</button>
-        <button data-tab="compiled">compiled js</button>
-      </nav>
+    <section class="pane editor">
+      <div class="pane-title" id="editor-title">source</div>
+      <textarea id="editor" spellcheck="false" autocomplete="off"></textarea>
+    </section>
+
+    <section class="pane preview">
+      <div class="pane-title">
+        preview
+        <div class="preview-controls">
+          <select id="preview-page"></select>
+        </div>
+      </div>
       <div id="error" class="error" hidden></div>
-      <div id="tab-preview" class="tab-body prose"></div>
-      <pre id="tab-markdown" class="tab-body" hidden></pre>
-      <pre id="tab-compiled" class="tab-body" hidden></pre>
+      <iframe id="preview-frame" title="site preview" sandbox="allow-scripts"></iframe>
     </section>
   </main>
 

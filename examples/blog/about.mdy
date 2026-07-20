@@ -1,0 +1,17 @@
+title: About
++++
+This site is built with **mdy-docs**, on documents about #writing and #tools.
+
+{%
+  const logo = $.findOne({ path: "static/logo.png" });
+  const thumb = $.resize(logo, { width: 120 });
+%}
+![A stylized clay tablet]({{ thumb.url }})
+
+{% const sidecar = $.findOne({ path: "static/logo.png.mdy" }) %}
+{{ $.render({ path: "static/logo.png.mdy" }, {}) }}
+
+*{{ sidecar.license }} — {{ sidecar.source }}*
+
+{% const guest = $.findOne({ path: "author.yaml" }) %}
+This week's {{ guest.role }} is **{{ guest.name }}**.

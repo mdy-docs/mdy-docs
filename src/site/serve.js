@@ -1,0 +1,270 @@
+import { nodeFsProvider } from '../fs-provider.js';
+import { renderSite } from './build.js';
+
+/*
+ * mdy serve — the dev loop.
+ *
+ * Pages are rendered in memory (renderSite) and served straight from the
+ * Map; a $.resize result (images.js) is served the same way, from
+ * renderSite's binaryOutputs Map; static/ is served from disk. Nothing
+ * touches dist/. One recursive watcher on the site root (nodeFsProvider's
+ * watch(), mdy-docs' own fs-provider.js — the same recursive fs.watch this
+ * file used to call directly) triggers a debounced full rebuild — a
+ * script-defined site has no incremental cache (see script-site.js), so
+ * every save re-walks the whole directory and reruns the entry from
+ * scratch. Browsers hold an SSE connection (/__mdy__/events) and reload
+ * when a rebuild lands; a failed rebuild logs the error and keeps serving
+ * the last good build.
+ *
+ * node:http/node:fs/node:path are imported LAZILY (dynamic import, inside
+ * serveSite) rather than at module scope — index.js re-exports serveSite
+ * alongside everything else, so web/'s Vite bundle reaches this file
+ * transitively even though it never calls serveSite (an HTTP dev server
+ * makes no sense in a browser); Rollup statically rejects a *static* named
+ * import of a browser-externalized Node builtin even when nothing would
+ * call it at runtime. See build.js/fs-provider.js for the same pattern
+ * with the same reasoning.
+ */
+
+const RELOAD_PATH = '/__mdy__/events';
+
+const RELOAD_SNIPPET = `<script>
+new EventSource(${JSON.stringify(RELOAD_PATH)}).onmessage = () => location.reload();
+</script>`;
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+// Changes that must not retrigger a rebuild: build output, VCS/editor
+// droppings, dependencies.
+const IGNORE = /(^|\/)(dist|node_modules|\.[^/]+)(\/|$)/;
+
+const escapeHtml = (s) =>
+  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** Inject the live-reload client into an HTML document (serve-time only —
+ * built output stays clean). */
+function withReload(html) {
+  return html.includes('</body>')
+    ? html.replace('</body>', `${RELOAD_SNIPPET}\n</body>`)
+    : html + RELOAD_SNIPPET;
+}
+
+/** Default `options.onRebuild` — plain, uncolored text; callers wanting
+ * their own presentation (the CLI's colored dev-server banner, say) pass
+ * their own and this is never called. */
+const defaultOnRebuild = (info) => {
+  if (info.changed?.length > 0) console.log(`mdy: changed: ${info.changed.join(', ')}`);
+  if (info.ok) {
+    const detail = info.reused > 0 ? ` (${info.reused} reused, ${info.rebuilt} rebuilt)` : '';
+    console.log(`mdy: rendered ${info.pages} page(s) in ${info.ms}ms${detail}`);
+  } else {
+    console.error(`mdy: build failed — still serving the last good build\n  ${info.error}`);
+  }
+};
+
+/**
+ * Serve a site with watch + rebuild + live reload. Returns
+ * { server, port, url, stats, close } — close() stops the watcher, drops
+ * SSE clients, and shuts the server down. `stats` is a live getter for the
+ * most recent build's `{ reused, rebuilt }` output-file lists (see
+ * build.js's renderSite — `reused` is always empty; no incremental cache).
+ *
+ * `options.onRebuild(info)` — fires after every rebuild attempt, including
+ * the first (`info.first`): `{ ok: true, first, changed, pages, ms, reused,
+ * rebuilt }` on success, `{ ok: false, first, changed, error }` on failure
+ * (the last good build keeps serving). `changed` is the list of watched
+ * paths that triggered this rebuild — empty for the first (nothing changed
+ * yet, it just ran). Defaults to plain `console.log`/`console.error` text
+ * (defaultOnRebuild, above) — a hook, not policy, same shape as
+ * onQuery/onEmit elsewhere. `options.onSource` — see renderSite/
+ * renderScriptSite; passed straight through, so it fires on every rebuild,
+ * not just the first (a script-defined site has no incremental cache —
+ * see script-site.js — so every rebuild re-walks and re-ingests the whole
+ * directory).
+ */
+export async function serveSite(root, options = {}) {
+  const { createServer } = await import('node:http');
+  const { readFile } = await import('node:fs/promises');
+  const { extname, join, resolve, sep } = await import('node:path');
+
+  /** Read `p` (URL-decoded, no leading slash) from `dir`, pinned inside it
+   * against traversal. null if `dir` is unset, the path escapes it, the
+   * file doesn't exist, or it's a metadata sidecar (a .mdy — queryable via
+   * $.find, not something to serve raw, matching buildSite's own exclusion
+   * of these from static/'s copy to dist/). */
+  async function readStatic(dir, p) {
+    if (!dir || p.endsWith('.mdy')) return null;
+    const file = resolve(dir, ...p.split('/'));
+    if (!file.startsWith(dir + sep)) return null;
+    try {
+      return await readFile(file);
+    } catch {
+      return null;
+    }
+  }
+
+  const onRebuild = options.onRebuild ?? defaultOnRebuild;
+
+  root = resolve(root);
+  const staticDir = join(root, 'static');
+  const clients = new Set();
+  let outputs = new Map();
+  let binaryOutputs = new Map(); // images.js's $.resize results — served like outputs, never written to disk here
+  let stats = { reused: [], rebuilt: [] }; // last successful build's report (reused is always empty — no cache)
+  let firstRun = true;
+  let pendingChanges = new Set(); // watched paths changed since the last rebuild attempt
+
+  const rebuild = async () => {
+    const first = firstRun;
+    firstRun = false;
+    const changed = [...pendingChanges];
+    pendingChanges = new Set();
+    const started = Date.now();
+    try {
+      const rendered = await renderSite(root, options);
+      outputs = rendered.outputs;
+      binaryOutputs = rendered.binaryOutputs;
+      stats = rendered.stats;
+      onRebuild({
+        ok: true,
+        first,
+        changed,
+        pages: outputs.size,
+        ms: Date.now() - started,
+        reused: stats.reused.length,
+        rebuilt: stats.rebuilt.length,
+      });
+      return true;
+    } catch (err) {
+      onRebuild({ ok: false, first, changed, error: err.message ?? String(err) });
+      return false;
+    }
+  };
+
+  // Debounced rebuild-on-change; changes arriving mid-rebuild queue one more.
+  let timer = null;
+  let building = false;
+  let dirty = false;
+  const run = async () => {
+    if (building) {
+      dirty = true;
+      return;
+    }
+    building = true;
+    const ok = await rebuild();
+    building = false;
+    if (dirty) {
+      dirty = false;
+      return run();
+    }
+    if (ok) for (const res of clients) res.write('data: reload\n\n');
+  };
+  const onChange = ({ path }) => {
+    if (IGNORE.test(path)) return;
+    pendingChanges.add(path);
+    clearTimeout(timer);
+    timer = setTimeout(run, 80);
+  };
+
+  await rebuild(); // a broken first build still serves — fix and save
+  const watcher = await nodeFsProvider().watch(root, onChange);
+
+  const server = createServer(async (req, res) => {
+    const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+
+    if (pathname === RELOAD_PATH) {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      res.write('retry: 300\n\n');
+      clients.add(res);
+      req.on('close', () => clients.delete(res));
+      return;
+    }
+
+    // Rendered pages first: /, /posts/hello/, and the slashless /posts/hello.
+    const p = pathname.replace(/^\/+/, '');
+    const candidates = p === '' ? ['index.html'] : p.endsWith('/') ? [`${p}index.html`] : [p, `${p}/index.html`];
+    for (const key of candidates) {
+      if (!outputs.has(key)) continue;
+      const type = MIME[extname(key)] ?? 'application/octet-stream';
+      const body = type.startsWith('text/html') ? withReload(outputs.get(key)) : outputs.get(key);
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
+      res.end(body);
+      return;
+    }
+
+    // Then a binary build output (an images.js $.resize result) — exact
+    // path, no pretty-URL candidates (these are literal file paths, not
+    // pages).
+    if (binaryOutputs.has(p)) {
+      const type = MIME[extname(p)] ?? 'application/octet-stream';
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
+      res.end(Buffer.from(binaryOutputs.get(p)));
+      return;
+    }
+
+    // Then static/ from disk — pinned inside the directory against traversal.
+    if (p !== '') {
+      const body = await readStatic(staticDir, p);
+      if (body) {
+        res.writeHead(200, {
+          'content-type': MIME[extname(p)] ?? 'application/octet-stream',
+          'cache-control': 'no-store',
+        });
+        res.end(body);
+        return;
+      }
+    }
+
+    res.writeHead(404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    const notFound = outputs.get('404.html') ?? `<h1>404</h1>\n<p><code>${escapeHtml(pathname)}</code> not found.</p>`;
+    res.end(withReload(notFound));
+  });
+
+  await new Promise((ready, fail) => {
+    server.once('error', fail);
+    server.listen(options.port ?? 4321, ready);
+  });
+  const { port } = server.address();
+
+  return {
+    server,
+    port,
+    url: `http://localhost:${port}/`,
+    // A live getter, not a snapshot — reflects the most recent build's
+    // { reused, rebuilt } output-file lists (both empty before the first
+    // build completes; `rebuild` reassigns `stats`, this always reads it).
+    get stats() {
+      return stats;
+    },
+    close: () =>
+      new Promise((done) => {
+        watcher.close();
+        clearTimeout(timer);
+        for (const res of clients) res.end();
+        clients.clear();
+        server.close(() => done());
+        server.closeAllConnections();
+      }),
+  };
+}
