@@ -147,3 +147,6 @@ vite.config.ts.timestamp-*
 
 # mdy playground build output
 dist-web/
+
+# packaged VSCode extension (editors/vscode-mdy)
+*.vsix
