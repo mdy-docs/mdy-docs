@@ -104,30 +104,37 @@ export async function serveSite(root, options = {}) {
   const { readFile } = await import('node:fs/promises');
   const { extname, join, resolve, sep } = await import('node:path');
 
-  /** Read `p` (URL-decoded, no leading slash) from `dir`, pinned inside it
-   * against traversal. null if `dir` is unset, the path escapes it, the
-   * file doesn't exist, or it's a metadata sidecar (a .mdy — queryable via
+  /** Read `p` (URL-decoded, no leading slash) from the first of `dirs` that
+   * has it, pinned inside each against traversal — root's own static/
+   * first, then each import's, matching build.js's "site overrides theme"
+   * precedence. null if `p` is a metadata sidecar (a .mdy — queryable via
    * $.find, not something to serve raw, matching buildSite's own exclusion
-   * of these from static/'s copy to dist/). */
-  async function readStatic(dir, p) {
-    if (!dir || p.endsWith('.mdy')) return null;
-    const file = resolve(dir, ...p.split('/'));
-    if (!file.startsWith(dir + sep)) return null;
-    try {
-      return await readFile(file);
-    } catch {
-      return null;
+   * of these from static/'s copy to dist/) or found in none of them. */
+  async function readStatic(dirs, p) {
+    if (p.endsWith('.mdy')) return null;
+    for (const dir of dirs) {
+      const file = resolve(dir, ...p.split('/'));
+      if (!file.startsWith(dir + sep)) continue;
+      try {
+        return await readFile(file);
+      } catch {
+        // not in this root — try the next
+      }
     }
+    return null;
   }
 
   const onRebuild = options.onRebuild ?? defaultOnRebuild;
 
   root = resolve(root);
-  const staticDir = join(root, 'static');
   const clients = new Set();
   let outputs = new Map();
   let binaryOutputs = new Map(); // images.js's $.resize results — served like outputs, never written to disk here
   let stats = { reused: [], rebuilt: [] }; // last successful build's report (reused is always empty — no cache)
+  // static/ dirs to serve from, root's own first — populated from the first
+  // successful build's import graph (see the `roots` comment below).
+  let staticDirs = [join(root, 'static')];
+  let allRoots = [root]; // root + every resolved import, for the watcher set below
   let firstRun = true;
   let pendingChanges = new Set(); // watched paths changed since the last rebuild attempt
 
@@ -142,6 +149,12 @@ export async function serveSite(root, options = {}) {
       outputs = rendered.outputs;
       binaryOutputs = rendered.binaryOutputs;
       stats = rendered.stats;
+      // rendered.roots is every import-graph directory, root itself last;
+      // root's own static/ first here instead, so a lookup below tries it
+      // before any import's (first match wins — the same "site overrides
+      // theme" precedence build.js's copy order gives via last-write-wins).
+      staticDirs = [root, ...rendered.roots.filter((r) => r !== root)].map((r) => join(r, 'static'));
+      allRoots = [root, ...rendered.roots.filter((r) => r !== root)];
       onRebuild({
         ok: true,
         first,
@@ -184,7 +197,14 @@ export async function serveSite(root, options = {}) {
   };
 
   await rebuild(); // a broken first build still serves — fix and save
-  const watcher = await nodeFsProvider().watch(root, onChange);
+  // One watcher per resolved root (root + every import) — so editing an
+  // imported style package while `mdy serve` is running triggers a rebuild
+  // too, not just editing the site itself. Fixed at startup from the first
+  // build's import graph: a later edit that changes WHICH packages are
+  // imported won't pick up a new watcher until `mdy serve` is restarted —
+  // an accepted limitation, same spirit as any dev server needing a
+  // restart after a fundamental config change.
+  const watchers = await Promise.all(allRoots.map((dir) => nodeFsProvider().watch(dir, onChange)));
 
   const server = createServer(async (req, res) => {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
@@ -225,7 +245,7 @@ export async function serveSite(root, options = {}) {
 
     // Then static/ from disk — pinned inside the directory against traversal.
     if (p !== '') {
-      const body = await readStatic(staticDir, p);
+      const body = await readStatic(staticDirs, p);
       if (body) {
         res.writeHead(200, {
           'content-type': MIME[extname(p)] ?? 'application/octet-stream',
@@ -259,7 +279,7 @@ export async function serveSite(root, options = {}) {
     },
     close: () =>
       new Promise((done) => {
-        watcher.close();
+        for (const watcher of watchers) watcher.close();
         clearTimeout(timer);
         for (const res of clients) res.end();
         clients.clear();

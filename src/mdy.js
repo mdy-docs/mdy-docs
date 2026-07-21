@@ -418,6 +418,15 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * its completion value: { out: "…" } on success, { error: "…" } if the
  * template threw.
  *
+ * The IIFE is `async` and awaited at the program's top level (the engine
+ * resolves top-level await into the completion value) — so `await` is legal
+ * anywhere in template code. The one thing that genuinely needs it is
+ * dynamic `import()` of a JS module (see buildDocumentSet's
+ * `options.loadModule`): a real ES `import` statement stays impossible here
+ * (function body, not module top level — see docs/site-plan.md), but the
+ * expression form works anywhere, and the module registry it populates
+ * lives host-side of the template's own scope.
+ *
  * `$` methods that need the host (find / findOne / render / emit, and any
  * `extraNativeNames`) call the engine's `__hostcall` native: the VM
  * execution suspends while the host's async native runs (the nisaba query,
@@ -446,7 +455,7 @@ function buildProgram({ body, ctx, documents, extraNativeNames = [] }) {
   const extraNativeLines = extraNativeNames
     .map((name) => `  ${name}: (...args) => __call(${JSON.stringify(name)}, args),`)
     .join('\n');
-  return `(() => {
+  return `await (async () => {
 const __ctx = ${jsonForEval(ctx)};
 const __call = (method, args) => JSON.parse(__hostcall(method, JSON.stringify(args)));
 const $ = {
@@ -501,7 +510,12 @@ return JSON.stringify(__err !== null ? { error: __err } : { out: __done });
  * (edubba: an image-resize native) without mdy needing any opinion on what
  * that native does — same "generic hook, no baked-in policy" shape as
  * onQuery. Args/return value cross the VM boundary JSON-serialized, same as
- * find/findOne/render.
+ * find/findOne/render. Each extra native is called with `(docIndex,
+ * docData)` appended after the template's own args — which document is
+ * currently rendering, and its data (including `path`, for a native whose
+ * behavior depends on which file is calling, e.g. resolving an import
+ * relative to the declaring file) — ignorable by any native that doesn't
+ * need it.
  *
  * `options.onEmit({ path, content, docIndex })` fires for every
  * `$.emit(path, content)` a template calls — a FIXED native (unlike
@@ -519,16 +533,32 @@ return JSON.stringify(__err !== null ? { error: __err } : { out: __done });
  * all. Without the option, `$.emit` is a harmless no-op — nothing breaks
  * for a consumer that doesn't care about it.
  *
+ * `options.loadModule(specifier, referrer, docIndex, docData)` enables
+ * guest-side dynamic `import()`: template code may `await import("…")` a
+ * real ES module, and every module in the resulting graph — the imported
+ * one and anything it imports in turn — is fetched through this function
+ * (return the module's source text; may be async). `referrer` is the
+ * importing module's canonical specifier, or "" when the import came from
+ * template code itself; `(docIndex, docData)` are appended the same way
+ * they are for `options.natives`, since resolving a template's own import
+ * usually depends on which file is asking (see src/site/imports.js for the
+ * vault-backed implementation). `options.canonicalizeModule` (same
+ * signature, synchronous) maps a raw specifier to the module's registry
+ * identity first — the loader receives canonical specifiers only. Without
+ * `loadModule`, a guest `import()` rejects: no loader, no filesystem reach.
+ *
  * @param {string | string[]} source
  * @param {{
  *   onQuery?: (info: { query: object, docIndex: number | null }) => void,
  *   onEmit?: (info: { path: string, content: any, docIndex: number | null }) => void,
  *   natives?: Record<string, (...args: any[]) => any>,
+ *   loadModule?: (specifier: string, referrer: string, docIndex: number, docData: object) => string | Promise<string>,
+ *   canonicalizeModule?: (specifier: string, referrer: string, docIndex: number, docData: object) => string,
  * }} [options]
  * @returns {Promise<{ docs: { index: number, data: object }[], runDoc: Function }>}
  */
 async function buildDocumentSet(source, options = {}) {
-  const { onQuery, onEmit, natives: extraNatives = {} } = options;
+  const { onQuery, onEmit, natives: extraNatives = {}, loadModule, canonicalizeModule } = options;
   const extraNativeNames = Object.keys(extraNatives);
   const docs = parseDocuments(source).map(({ data, content }, index) => {
     return { index, data, body: compileTemplateSource(content) };
@@ -591,11 +621,32 @@ async function buildDocumentSet(source, options = {}) {
         onEmit?.({ path, content, docIndex: i });
         return null;
       },
-      ...extraNatives,
+      // Every extra native gets (docIndex, docData) appended after whatever
+      // args the template itself passed — a generic "which document is
+      // calling" hook, not specific to any one native. edubba's import
+      // mechanism (src/site/imports.js) is the reason this exists: an
+      // imported package is resolved relative to the FILE that declared the
+      // import, so its native needs to know which document's data.path that
+      // was; a plain object native (resize, tokenize, …) just ignores the
+      // extra args, same as any JS function ignoring trailing arguments.
+      ...Object.fromEntries(
+        Object.entries(extraNatives).map(([name, fn]) => [name, (...args) => fn(...args, i, doc.data)])
+      ),
     };
 
     const program = buildProgram({ body: doc.body, ctx: fullCtx, documents, extraNativeNames });
-    const reply = await runProgram(program, natives);
+    // Same "(docIndex, docData) appended" contract as the extra natives: a
+    // loader resolving a template's own import needs to know which file is
+    // asking; module-to-module imports carry that in `referrer` instead.
+    const moduleOptions = loadModule
+      ? {
+          loadModule: (specifier, referrer) => loadModule(specifier, referrer, i, doc.data),
+          canonicalizeModule: canonicalizeModule
+            ? (specifier, referrer) => canonicalizeModule(specifier, referrer, i, doc.data)
+            : undefined,
+        }
+      : undefined;
+    const reply = await runProgram(program, natives, moduleOptions);
     let envelope;
     try {
       envelope = JSON.parse(reply);
@@ -644,6 +695,10 @@ async function buildDocumentSet(source, options = {}) {
  * `$.emit(path, content)` a template calls — template-level only, there is
  * no host-level equivalent (there's no "current render" to emit alongside
  * when the host calls in from outside one).
+ *
+ * `options.loadModule` / `options.canonicalizeModule` — see
+ * buildDocumentSet's doc comment; enable guest-side `await import("…")` of
+ * real ES modules, sourced entirely through the embedder's loader.
  *
  * @param {string | { text: string, meta?: object } | (string | { text: string, meta?: object })[]} source
  * @param {{

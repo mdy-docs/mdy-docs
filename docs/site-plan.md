@@ -1028,3 +1028,161 @@ theme: `test/site-memory-build.test.js` wasn't found by reasoning about
 what depends on what — it was found by actually running the full suite
 after the "done" pieces looked done, the same lesson as `post.mdy`'s "More
 like this" and the `.md` tags bug much earlier in this project.
+
+### Importing another mdy project — `{% import %}` ✅
+
+Hugo/Jekyll-style themes let a site pull in someone else's `layouts/` +
+`static/` — removed outright along with the rest of the conventional
+pipeline (above), on the reasoning that themes-as-a-concept needed host
+convention to exist. Asked directly whether importing should come back, the
+answer was narrower and better: not themes specifically, and not a host
+convention — a script importing another mdy project, the same way JS code
+imports a package, entirely from `index.mdy` itself:
+
+```
+{% import style from "../blog-style-x" %}
+{% const page = style.render({ path: "layouts/base.mdy" }, { content: html }) %}
+```
+
+`style` is a plain object — `{ render, find, findOne, resize }`, the exact
+shape `openDocumentSet` itself returns (plus `resize`, images.js's one
+native whose behavior depends on which directory its source file lives in)
+— NOT a merged pool of every file from every package. `"../blog-style-x"`
+is walked and compiled into its OWN document set, so its own internal
+`$.find`/`$.render` calls keep working exactly as if it were rendered
+standalone (its `"layouts/base.mdy"` doesn't collide with the importer's
+own file of the same name, and neither package has to know ahead of time
+that it's importable). The importer reaches in explicitly, through
+`style`'s own methods.
+
+**Why `import` can't be real JS.** Every `{% %}` block is spliced directly
+into a compiled function body (`compileTemplateSource`/`buildProgram`) —
+and a real ES `import` statement is only legal at a module's top level, not
+inside a function. So `{% import name from "spec" %}` is parsed by mdy's
+own compiler, the same way `extractDataBlocks` already pulls ```data```
+fences out before the rest of the template compiles — `src/site/
+imports.js`'s `extractImports` scans for the shape (nothing else in the
+same tag — mixing an import with other code isn't recognized, and
+`import`/`from` would surface as a JS syntax error if it reached the VM),
+and rewrites it to a plain object literal the VM can actually run:
+`$.__importRender`/`__importFind`/`__importFindOne`/`__importResize`, four
+generic natives (not import-specific — any native gets `(docIndex,
+docData)` appended after the template's own args now, a small mdy.js change
+useful beyond imports too) that dispatch by the literal spec string plus
+which document is calling, resolved against a table `buildImportGraph`
+builds upfront.
+
+**Resolving the graph.** `buildImportGraph(absDir, ctx)` walks `absDir`,
+extracts every file's imports, resolves each spec relative to the
+DECLARING file's own directory (`ancestors`/`ctx.cache`, not the whole
+site's root), and recurses — transitively, so an imported package can
+import its own dependencies too. Two real bugs surfaced building this,
+both instructive:
+
+- **False-positive cycle detection.** The first version tracked "currently
+  resolving" as one flat `Set<absDir>` shared across the whole graph. Two
+  *different* files in the *same* package importing the *same* third
+  package (a normal "diamond", not a cycle) both start resolving it before
+  either finishes — the second call saw the first's still-in-progress
+  entry and threw "cycle detected". Fixed by threading an explicit
+  ANCESTOR CHAIN as a recursion parameter (the path from the root down to
+  whoever is calling) instead of a flat "anyone, anywhere" set — a real
+  cycle (A → B → A) has `absDir` reappear in ITS OWN chain; a diamond does
+  not, and dedupes via `ctx.cache` instead, which is a separate concern
+  from cycle detection and has to be checked separately from it.
+- **`node:path` doesn't exist in the browser.** Resolving a spec needs
+  dirname/join/resolve — reached for real `node:path`, which works
+  everywhere renderScriptSite runs from disk, but web/'s in-browser
+  playground bundles through Vite, which externalizes `node:path` to a
+  non-functional stub (nothing calls it there normally — nodeFsProvider
+  only imports it lazily, inside methods the browser path never calls).
+  Surfaced as "join is not a function" in the actual bundle, past the point
+  unit tests alone would catch it (mdy.js/vault.js's own tests all run
+  under Node). Fixed with three small hand-rolled POSIX-only path
+  functions in imports.js instead of importing the real module — this
+  project has no Windows-path handling anywhere else either, so plain
+  string math is both correct and portable here in a way the real module
+  isn't.
+
+**Making the browser playground work at all.** memoryFsProvider was
+"there is only ever one vault" by design — every method took a `root` and
+ignored it. Imports need more than one root even in memory (the seed
+*and* whatever it imports), so `root` now means something: `/` (or `.`/``)
+still means "the whole flat map, no prefix" (every existing caller keeps
+working unchanged), and any OTHER root is a namespace prefix into the same
+Map. web/main.js seeds `examples/blog-style-x` under a `"blog-style-x/"`
+prefix accordingly. This also uncovered that `preparePreviewHtml`/
+`resolveImageBytes` (the srcdoc-iframe-has-no-real-origin workarounds —
+inlining `static/style.css`, `static/search.js`, and image bytes) hardcoded
+the `static/` lookup to the site's own root — fixed by having `doRender`
+capture `renderSite`'s new `roots` return value (every resolved import,
+root's own last) and searching all of them, root's own first, same
+precedence buildSite's static/ copy order and serve.js's readStatic give a
+real disk build.
+
+**The demo.** `examples/blog-style-x` is `layouts/base.mdy` (the outer HTML
+shell — head/nav/search-widget/footer) plus `static/` (style.css,
+search.js, logo.png + its sidecar) — the "skin" — extracted out of
+`examples/blog`, which now imports it. Swapping styles is swapping which
+directory `index.mdy`'s one `import` line points at; nothing else in the
+site's own content/URL/tag logic changes. `about.mdy` needed its own
+`{% import %}` too (imports aren't inherited — each document that wants
+one declares it) to reach `style.resize`/`style.findOne`/`style.render`
+for its logo thumbnail and metadata sidecar, previously plain
+`$.resize`/`$.findOne`/`$.render` against files that lived in the same
+root. build.js's static/ passthrough and serve.js's static lookup both
+walk every root in the import graph now, not just the site's own, with the
+site's own winning any filename collision (Hugo/Jekyll's "site overrides
+theme", same precedence, no host convention needed to get it).
+
+### JS modules in templates — `await import("./lib.js")` ✅
+
+`{% import %}` (above) imports another mdy *package*. The other obvious
+import — a plain JS module, for shared template logic that isn't a
+document — became possible when lamassu-js exposed the engine's host
+module loader (`js_set_module_loader`/`js_eval_module`, already in the C
+API as "phase 7", now bridged through wasm_api.c to the npm wrapper as
+`createLamassu({ loadModule, canonicalizeModule })` + `evalModule` +
+guest-side dynamic `import()`).
+
+```
+{% const util = await import("./lib/util.js") %}
+{{ util.slugify(title) }}
+```
+
+How the pieces line up, host-side to guest-side:
+
+- **wasm_api.c / index.js (lamassu-js).** The loader rides the same
+  Asyncify suspension as `__hostcall`: a guest `import` suspends the whole
+  wasm execution while the embedder's async `lamassuLoadModule(specifier,
+  referrer)` fetches source; a synchronous `lamassuCanonicalizeModule`
+  maps raw specifier → registry identity first. Same non-reentrancy
+  caution as natives.
+- **mdy.js.** `buildProgram`'s IIFE became `await (async () => { … })()`
+  — the engine resolves top-level await into the completion value
+  (verified before committing to the shape), so `await` is now legal
+  anywhere in template code. It had to: `import()` is an expression but
+  its result is a promise, and a real `import` statement remains
+  impossible (function body, not module top level — same reasoning as
+  `{% import %}`'s tag rewrite). `openDocumentSet` grew
+  `options.loadModule`/`options.canonicalizeModule`, called with
+  `(docIndex, docData)` appended — the same contract `options.natives`
+  already uses, and for the same reason: a template's own import (referrer
+  `""`) resolves relative to the FILE that wrote it.
+- **imports.js.** `buildImportGraph` wires the vault-backed loader per
+  document set: the canonicalizer makes every specifier an absolute vault
+  path (so `./util.js` from two directories is two modules, one file
+  reached two ways is one), and the loader reads through the set's own
+  `fs` — `.js`/`.mjs` only, and only INSIDE the package's own directory,
+  mirroring the package-import design (an imported package's templates
+  load their own modules through their own set's loader; nothing reaches
+  across roots).
+- **vm.js.** The subtle one: the engine's module registry caches evaluated
+  modules per canonical specifier for the VM instance's lifetime, and
+  runProgram's instances are POOLED — without care, a watch-mode rebuild
+  after editing a `.js` module would be served the stale cached copy by
+  whichever pooled instance loaded it first. `runProgram` tracks whether
+  the eval's loader ever fired and resets the instance before returning it
+  to the pool. The common no-modules render keeps its warm instance;
+  correctness costs only the renders that actually imported something.
+  `test/imports.test.js` pins this with an edit-between-renders test.

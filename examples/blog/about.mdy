@@ -1,15 +1,16 @@
 title: About
 +++
+{% import style from "../blog-style-x" %}
 This site is built with **mdy-docs**, on documents about #writing and #tools.
 
 {%
-  const logo = $.findOne({ path: "static/logo.png" });
-  const thumb = $.resize(logo, { width: 120 });
+  const logo = style.findOne({ path: "static/logo.png" });
+  const thumb = style.resize(logo, { width: 120 });
 %}
 ![A stylized clay tablet]({{ thumb.url }})
 
-{% const sidecar = $.findOne({ path: "static/logo.png.mdy" }) %}
-{{ $.render({ path: "static/logo.png.mdy" }, {}) }}
+{% const sidecar = style.findOne({ path: "static/logo.png.mdy" }) %}
+{{ style.render({ path: "static/logo.png.mdy" }, {}) }}
 
 *{{ sidecar.license }} — {{ sidecar.source }}*
 

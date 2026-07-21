@@ -145,60 +145,76 @@ export function nodeFsProvider() {
 
 /**
  * An in-memory provider over a flat `Map<path, string | Uint8Array>`. Keys
- * are '/'-separated paths relative to the (virtual, single) vault root,
- * e.g. "notes/today.mdy". `root` is accepted for interface parity but
- * ignored — there is only ever one vault. `files` is held BY REFERENCE:
- * mutate it (an editor typing into a textarea, write()/writeBinary()) and
- * the next call sees the change — no rebuild-the-provider step needed.
- * A value may be either a plain string (the common case — text documents)
- * or a Uint8Array (real binary content, e.g. an image written via
- * writeBinary); read()/readBinary() convert either way as needed, so a
- * caller never has to know which one a given entry actually holds. There
- * are no real mtimes in memory; callers that need a fallback date get "now".
+ * are '/'-separated paths relative to the vault root, e.g. "notes/today.mdy".
+ * `root` of `/`, `.`, or `''` means "the whole map, no prefix" (the original,
+ * single-vault behavior — every existing caller uses one of these and sees
+ * no change); any OTHER root is treated as a NAMESPACE PREFIX into the same
+ * flat map (`root: "blog-style-x"` reads/writes keys under
+ * `"blog-style-x/…"`) — this is what lets ONE memoryFsProvider instance back
+ * more than one root, which importing another mdy project (src/site/
+ * imports.js) needs: the importED package's files just live in the same Map
+ * under their own prefix, and `walkRawSources(resolvedChildDir, {fs})`
+ * resolving to a non-'/' root naturally finds only its own slice. `files` is
+ * held BY REFERENCE: mutate it (an editor typing into a textarea,
+ * write()/writeBinary()) and the next call sees the change — no
+ * rebuild-the-provider step needed. A value may be either a plain string
+ * (the common case — text documents) or a Uint8Array (real binary content,
+ * e.g. an image written via writeBinary); read()/readBinary() convert
+ * either way as needed, so a caller never has to know which one a given
+ * entry actually holds. There are no real mtimes in memory; callers that
+ * need a fallback date get "now".
  */
 export function memoryFsProvider(files) {
   const matches = (p, extensions) => !extensions || extensions.some((ext) => p.endsWith(ext));
+  const rootPrefix = (root) => {
+    const trimmed = String(root ?? '').replace(/^\/+|\/+$/g, '');
+    return trimmed === '' || trimmed === '.' ? '' : `${trimmed}/`;
+  };
 
   return {
-    async list(_root, subdir, options = {}) {
+    async list(root, subdir, options = {}) {
       const extensions = 'extensions' in options ? options.extensions : ['.mdy'];
+      const rp = rootPrefix(root);
+      const keys = [...files.keys()].filter((p) => p.startsWith(rp)).map((p) => p.slice(rp.length));
       if (subdir === '.' || subdir === '') {
-        return [...files.keys()].filter((p) => matches(p, extensions)).sort();
+        return keys.filter((p) => matches(p, extensions)).sort();
       }
       const prefix = subdir.endsWith('/') ? subdir : `${subdir}/`;
-      return [...files.keys()]
+      return keys
         .filter((p) => p.startsWith(prefix) && matches(p, extensions))
         .map((p) => p.slice(prefix.length))
         .sort();
     },
-    async read(_root, relPath) {
-      if (!files.has(relPath)) {
-        throw Object.assign(new Error(`ENOENT: ${relPath}`), { code: 'ENOENT' });
+    async read(root, relPath) {
+      const key = rootPrefix(root) + relPath;
+      if (!files.has(key)) {
+        throw Object.assign(new Error(`ENOENT: ${key}`), { code: 'ENOENT' });
       }
-      const value = files.get(relPath);
+      const value = files.get(key);
       return value instanceof Uint8Array ? new TextDecoder().decode(value) : value;
     },
-    async readBinary(_root, relPath) {
-      if (!files.has(relPath)) {
-        throw Object.assign(new Error(`ENOENT: ${relPath}`), { code: 'ENOENT' });
+    async readBinary(root, relPath) {
+      const key = rootPrefix(root) + relPath;
+      if (!files.has(key)) {
+        throw Object.assign(new Error(`ENOENT: ${key}`), { code: 'ENOENT' });
       }
-      const value = files.get(relPath);
+      const value = files.get(key);
       return value instanceof Uint8Array ? value : new TextEncoder().encode(value);
     },
     async mtime() {
       return new Date();
     },
-    async size(_root, relPath) {
-      return files.get(relPath)?.length ?? 0; // text length (or a Uint8Array's real length) stands in — see interface doc
+    async size(root, relPath) {
+      return files.get(rootPrefix(root) + relPath)?.length ?? 0; // text length (or a Uint8Array's real length) stands in — see interface doc
     },
-    async write(_root, relPath, text) {
-      files.set(relPath, text);
+    async write(root, relPath, text) {
+      files.set(rootPrefix(root) + relPath, text);
     },
-    async writeBinary(_root, relPath, bytes) {
-      files.set(relPath, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+    async writeBinary(root, relPath, bytes) {
+      files.set(rootPrefix(root) + relPath, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
     },
-    async remove(_root, relPath) {
-      files.delete(relPath);
+    async remove(root, relPath) {
+      files.delete(rootPrefix(root) + relPath);
     },
     // No watch(): nothing outside this JS heap can mutate `files`, so
     // there is no change for a watcher to ever observe.

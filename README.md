@@ -496,12 +496,51 @@ One trade-off: no incremental-rebuild reuse — every build/rebuild walks the
 whole directory and reruns the entry from scratch (see
 [`src/site/script-site.js`](src/site/script-site.js)).
 
+A script can also **import another mdy project** — a style/theme package,
+or anything else — the same way JS code imports a package, entirely from
+its own code, no host convention involved:
+
+```
+{% import style from "../blog-style-x" %}
+{% const page = style.render({ path: "layouts/base.mdy" }, { content: html }) %}
+```
+
+`style` is `{ render, find, findOne, resize }` — the exact shape
+`openDocumentSet` itself returns — bound to `"../blog-style-x"`'s OWN
+document set, walked and compiled independently so its internal
+`$.find`/`$.render` calls work exactly as if it were rendered standalone.
+There's no merged pool of every file from every package; the importer
+reaches in explicitly through `style`'s own methods. See
+[`src/site/imports.js`](src/site/imports.js) and
+[docs/site-plan.md](docs/site-plan.md)'s "Importing another mdy project"
+section for the full design (including why `import` is parsed by mdy's own
+compiler rather than being real JS, and how imports resolve transitively).
+
+A script can also import a **real ES module** — a plain `.js` file living
+in the same package — with the standard dynamic-import expression:
+
+```
+{% const util = await import("./lib/util.js") %}
+{{ util.slugify(title) }}
+```
+
+The module runs inside the same sandboxed VM (it's instantiated by the
+engine's own module system — lamassu-js's host module loader — not the
+host runtime), may use static `import` internally for its own
+dependencies, and resolves relative to the file that wrote the import.
+Modules can't reach outside their package's directory. Templates may use
+`await` anywhere, not just here — every compiled template runs in an
+async context.
+
 **[examples/blog](examples/blog)** is a full instance of this — posts
 (`.mdy` *and* `.md`), tags, an RSS feed, sitemap, robots.txt, a search
 index, and an `about` page with a resized image and a `.yaml` data record
 queried directly — entirely defined by
 [examples/blog/index.mdy](examples/blog/index.mdy) plus its `layouts/*.mdy`
-shells. Run it identically three ways:
+shells, importing its look (the base HTML shell, CSS, search widget,
+`logo.png`) from **[examples/blog-style-x](examples/blog-style-x)** — swap
+that one `import` line for a different package and only the look changes.
+Run it identically three ways:
 
 ```sh
 mdy build examples/blog --out dist   # → dist/

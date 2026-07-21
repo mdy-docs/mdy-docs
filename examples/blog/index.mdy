@@ -3,7 +3,12 @@ baseURL: https://example.com
 author: Daniel Walton
 description: Notes from the scribal school.
 +++
+{% import style from "../blog-style-x" %}
 {%
+  // "an easy way to change styles": swap the path above (or the whole
+  // blog-style-x directory) for a different look — nothing else in this
+  // file's own content/URL/layout logic below depends on where base.mdy
+  // (or static/style.css, search.js, logo.png) actually live.
   const site = { title: title, baseURL: baseURL, author: author, description: description };
   const draftsOn = typeof drafts !== "undefined" ? drafts : false;
   const futureOn = typeof future !== "undefined" ? future : false;
@@ -42,7 +47,7 @@ description: Notes from the scribal school.
     const related = posts.filter((o) => o.slug !== p.slug && o.tags.some((t) => p.tags.indexOf(t) !== -1)).map((o) => ({ title: o.title, url: o.url }));
     const postMd = $.render({ path: "layouts/post.mdy" }, { title: p.title, date: p.date, content: p.body, related: related });
     const postHtml = $.markdown(postMd);
-    const postPage = $.render({ path: "layouts/base.mdy" }, { content: postHtml, page: { title: p.title, url: p.url }, site: site });
+    const postPage = style.render({ path: "layouts/base.mdy" }, { content: postHtml, page: { title: p.title, url: p.url }, site: site });
     $.emit("posts/" + p.slug + "/index.html", postPage);
     sitemapUrls.push(p.url);
   }
@@ -51,7 +56,7 @@ description: Notes from the scribal school.
   const pagination = { page: 1, totalPages: 1, prevUrl: null, nextUrl: null };
   const listMd = $.render({ path: "layouts/list.mdy" }, { posts: posts, pagination: pagination, site: site });
   const listHtml = $.markdown(listMd);
-  const homePage = $.render({ path: "layouts/base.mdy" }, { content: listHtml, page: { title: site.title, url: "/" }, site: site });
+  const homePage = style.render({ path: "layouts/base.mdy" }, { content: listHtml, page: { title: site.title, url: "/" }, site: site });
   $.emit("index.html", homePage);
   sitemapUrls.push("/");
 
@@ -61,7 +66,7 @@ description: Notes from the scribal school.
   const aboutTitle = aboutRaw.title || "About";
   const aboutMd = $.render({ path: "layouts/page.mdy" }, { title: aboutTitle, content: aboutBody });
   const aboutHtml = $.markdown(aboutMd);
-  const aboutPage = $.render({ path: "layouts/base.mdy" }, { content: aboutHtml, page: { title: aboutTitle, url: "/about/" }, site: site });
+  const aboutPage = style.render({ path: "layouts/base.mdy" }, { content: aboutHtml, page: { title: aboutTitle, url: "/about/" }, site: site });
   $.emit("about/index.html", aboutPage);
   sitemapUrls.push("/about/");
 
@@ -80,21 +85,21 @@ description: Notes from the scribal school.
     list.sort((a, b) => (a.date < b.date ? 1 : -1));
     const tagMd = $.render({ path: "layouts/tag.mdy" }, { tag: t, posts: list, url: "/tags/" + t + "/" });
     const tagHtml = $.markdown(tagMd);
-    const tagPage = $.render({ path: "layouts/base.mdy" }, { content: tagHtml, page: { title: "#" + t, url: "/tags/" + t + "/" }, site: site });
+    const tagPage = style.render({ path: "layouts/base.mdy" }, { content: tagHtml, page: { title: "#" + t, url: "/tags/" + t + "/" }, site: site });
     $.emit("tags/" + t + "/index.html", tagPage);
     sitemapUrls.push("/tags/" + t + "/");
   }
   const tagsList = tagNames.map((t) => ({ tag: t, url: "/tags/" + t + "/", count: tagged[t].length }));
   const tagsMd = $.render({ path: "layouts/tags.mdy" }, { tags: tagsList });
   const tagsHtml = $.markdown(tagsMd);
-  const tagsPage = $.render({ path: "layouts/base.mdy" }, { content: tagsHtml, page: { title: "Tags", url: "/tags/" }, site: site });
+  const tagsPage = style.render({ path: "layouts/base.mdy" }, { content: tagsHtml, page: { title: "Tags", url: "/tags/" }, site: site });
   $.emit("tags/index.html", tagsPage);
   sitemapUrls.push("/tags/");
 
   // 404, RSS, sitemap, robots: no markdown pass for the latter three, raw text
   const nfMd = $.render({ path: "layouts/404.mdy" }, {});
   const nfHtml = $.markdown(nfMd);
-  const nfPage = $.render({ path: "layouts/base.mdy" }, { content: nfHtml, page: { title: "Not found", url: "/404.html" }, site: site });
+  const nfPage = style.render({ path: "layouts/base.mdy" }, { content: nfHtml, page: { title: "Not found", url: "/404.html" }, site: site });
   $.emit("404.html", nfPage);
 
   const feedXml = $.render({ path: "layouts/rss.mdy" }, { posts: posts, site: site });

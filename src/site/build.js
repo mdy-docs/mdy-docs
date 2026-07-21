@@ -49,13 +49,18 @@ export function urlToOutFile(url) {
  * resolve()d against the real filesystem's cwd when no custom provider is
  * given — a browser root is just a virtual string, not an OS path.
  * `onSource` — see renderScriptSite; passed straight through.
+ *
+ * Also returns `roots`: every directory in `root`'s import graph (see
+ * script-site.js/imports.js), `root` itself last — buildSite/serveSite use
+ * this to also serve/copy each imported package's own static/, not just
+ * root's.
  */
 export async function renderSite(root, options = {}) {
   if (!options.fs) root = (await import('node:path')).resolve(root);
   const fs = options.fs ?? nodeFsProvider();
   const entry = options.entry ?? 'index.mdy';
 
-  const { outputs, binaryOutputs } = await renderScriptSite(root, {
+  const { outputs, binaryOutputs, roots } = await renderScriptSite(root, {
     fs,
     entry,
     now: options.now,
@@ -66,6 +71,7 @@ export async function renderSite(root, options = {}) {
   return {
     outputs,
     binaryOutputs,
+    roots,
     stats: { reused: [], rebuilt: [...outputs.keys(), ...binaryOutputs.keys()] },
   };
 }
@@ -87,7 +93,7 @@ export async function buildSite(root, options = {}) {
 
   root = resolve(root);
   const outDir = resolve(options.outDir ?? join(root, 'dist'));
-  const { outputs, binaryOutputs } = await renderSite(root, options);
+  const { outputs, binaryOutputs, roots } = await renderSite(root, options);
   const onWrite = options.onWrite;
 
   for (const [file, html] of outputs) {
@@ -112,9 +118,15 @@ export async function buildSite(root, options = {}) {
   // sidecar (static/logo.png.mdy) belongs in the document set, queryable
   // via $.find, not published as a raw text file a visitor could stumble
   // onto.
+  //
+  // Every root in the import graph gets its own static/ copied the same
+  // way, root itself LAST (roots' own order — see script-site.js) — so
+  // root's own static/ overwrites (cp's default) any same-named file an
+  // import provides, matching Hugo/Jekyll's "site overrides theme".
   const notSidecar = (src) => !src.endsWith('.mdy');
-  const staticDir = join(root, 'static');
-  if (existsSync(staticDir)) {
+  for (const dir of roots) {
+    const staticDir = join(dir, 'static');
+    if (!existsSync(staticDir)) continue;
     if (onWrite) {
       // A plain inventory pass, purely for reporting — cp() below does the
       // actual copy; this never reads file content (walkFiles), so it's

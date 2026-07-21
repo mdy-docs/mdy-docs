@@ -9,18 +9,24 @@ import { serveSite } from '../src/site/serve.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const exampleBlog = join(here, '..', 'examples', 'blog');
+const exampleBlogStyleX = join(here, '..', 'examples', 'blog-style-x');
 
-// The watch test edits content, so serve a throwaway copy of the example.
+// The watch test edits content, so serve a throwaway copy of the example —
+// blog-style-x copied alongside it as a real sibling (blog/index.mdy
+// imports it as "../blog-style-x"), not just blog itself.
+let tmpRoot;
 let siteDir;
 let site;
 before(async () => {
-  siteDir = await mkdtemp(join(tmpdir(), 'edubba-serve-'));
+  tmpRoot = await mkdtemp(join(tmpdir(), 'edubba-serve-'));
+  siteDir = join(tmpRoot, 'blog');
   await cp(exampleBlog, siteDir, { recursive: true });
+  await cp(exampleBlogStyleX, join(tmpRoot, 'blog-style-x'), { recursive: true });
   site = await serveSite(siteDir, { port: 0 });
 });
 after(async () => {
   await site.close();
-  await rm(siteDir, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true });
 });
 
 const get = (path) => fetch(new URL(path, site.url));

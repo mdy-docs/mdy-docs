@@ -1,9 +1,9 @@
-import { openDocumentSet, MarkdownIt } from '../mdy.js';
+import { MarkdownIt } from '../mdy.js';
 import { nodeFsProvider } from '../fs-provider.js';
-import { walkRawSources } from '../vault.js';
 import { normalizeDate, rfc822 } from './vault.js';
 import { createResizeNative } from './images.js';
 import { tokenize } from './search.js';
+import { buildImportGraph } from './imports.js';
 
 /*
  * renderScriptSite — proving docs/plan.md's "Toward a script-defined
@@ -31,6 +31,13 @@ import { tokenize } from './search.js';
  * Deliberately NOT wired into renderSite's incremental cache — a script's
  * output is only ever fully rebuilt, never reused verbatim (see build.js's
  * dispatch). See examples/blog for a real site defined this way.
+ *
+ * A script can also `{% import name from "spec" %}` another mdy project —
+ * a style/theme package, or anything else — entirely from its own code, no
+ * host convention involved (see ./imports.js). buildImportGraph handles
+ * walking/compiling the whole import graph; this file's job is just
+ * building the natives every level needs (resize/tokenize/rfc822/markdown)
+ * and resolving the top-level entry once the graph is built.
  */
 
 /**
@@ -54,49 +61,58 @@ import { tokenize } from './search.js';
  *   options.fs      a fs-provider.js provider (default: the real
  *                   filesystem) — memoryFsProvider works identically,
  *                   same as renderSite
- *   options.onSource(meta)  fires once per raw document, right after the
- *                   walk and before anything is rendered — every file
- *                   under `root` that got ingested into the document set,
- *                   in walk order (a hook, not policy — e.g. the CLI's own
- *                   "[read] <path>" logging; see bin/mdy.js)
+ *   options.onSource(meta)  fires once per raw document, right after each
+ *                   directory's walk and before anything is rendered —
+ *                   every file under `root`, and under anything it (or
+ *                   anything it imports) resolves an import to, that got
+ *                   ingested into a document set (a hook, not policy —
+ *                   e.g. the CLI's own "[read] <path>" logging; see
+ *                   bin/mdy.js)
  *
- * Returns `{ output, outputs, binaryOutputs }` — `output` is the entry
- * script's own rendered markdown (its template's normal return value, same
- * as any `$.render`); `outputs` is a `Map<path, content>` of everything it
- * (or anything it `$.render`s along the way) produced via `$.emit`;
- * `binaryOutputs` is a `Map<path, Uint8Array>` of everything it produced
- * via `$.resize`. Nothing is written to disk here — that's the caller's
- * job, mirroring renderSite/buildSite's own split.
+ * Returns `{ output, outputs, binaryOutputs, roots }` — `output` is the
+ * entry script's own rendered markdown (its template's normal return
+ * value, same as any `$.render`); `outputs` is a `Map<path, content>` of
+ * everything it (or anything it `$.render`s or imports along the way)
+ * produced via `$.emit`; `binaryOutputs` is a `Map<path, Uint8Array>` of
+ * everything it produced via `$.resize`; `roots` is every resolved
+ * directory in the import graph, `root` itself last (build.js/serve.js's
+ * static/ passthrough copies in this order, so `root`'s own static/ wins
+ * any filename collision against something it imports). Nothing is
+ * written to disk here — that's the caller's job, mirroring
+ * renderSite/buildSite's own split.
  */
 export async function renderScriptSite(root, options = {}) {
   const fs = options.fs ?? nodeFsProvider();
   if (!options.fs) root = (await import('node:path')).resolve(root);
 
-  const sources = await walkRawSources(root, { fs });
-  if (options.onSource) for (const { meta } of sources) options.onSource(meta);
-
   const binaryOutputs = new Map();
-  const resize = createResizeNative({ fs, root, registerBinaryOutput: (path, bytes) => binaryOutputs.set(path, bytes) });
   const md = new MarkdownIt({ html: true, linkify: true });
-
-  const entryPath = options.entry ?? 'index.mdy';
-  const outputs = new Map();
-  const set = await openDocumentSet(sources, {
-    onEmit: ({ path, content }) => outputs.set(path, typeof content === 'string' ? content : JSON.stringify(content)),
-    natives: { resize, tokenize, rfc822, markdown: (text) => md.render(String(text ?? '')) },
+  const buildNatives = (absDir) => ({
+    resize: createResizeNative({ fs, root: absDir, registerBinaryOutput: (path, bytes) => binaryOutputs.set(path, bytes) }),
+    tokenize,
+    rfc822,
+    markdown: (text) => md.render(String(text ?? '')),
   });
 
-  // Resolved AFTER the set is built (not against the pre-split `sources`
-  // array): a sibling file with its own internal `---` splits contributes
-  // more than one document, which would otherwise shift every later file's
-  // position and misalign a plain positional lookup.
+  const outputs = new Map();
+  const roots = [];
+  const set = await buildImportGraph(root, {
+    fs,
+    buildNatives,
+    onEmit: ({ path, content }) => outputs.set(path, typeof content === 'string' ? content : JSON.stringify(content)),
+    onSource: options.onSource,
+    cache: new Map(),
+    roots,
+  });
+
+  const entryPath = options.entry ?? 'index.mdy';
   const entryIndex = set.docs.find((d) => d.data.path === entryPath)?.index;
   if (entryIndex === undefined) {
-    throw new Error(`renderScriptSite: entry script not found at ${JSON.stringify(entryPath)} (looked among ${sources.length} file(s) under ${root})`);
+    throw new Error(`renderScriptSite: entry script not found at ${JSON.stringify(entryPath)} (looked among ${set.docs.length} document(s) under ${root})`);
   }
 
   const today = normalizeDate(options.now ?? new Date());
   const output = await set.render(entryIndex, { today, ...options.context });
 
-  return { output, outputs, binaryOutputs };
+  return { output, outputs, binaryOutputs, roots };
 }

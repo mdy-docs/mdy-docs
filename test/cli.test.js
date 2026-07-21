@@ -10,10 +10,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, '..', 'bin', 'mdy.js');
 const example = (name) => join(here, '..', 'examples', name);
 const exampleBlog = join(here, '..', 'examples', 'blog');
+const exampleBlogStyleX = join(here, '..', 'examples', 'blog-style-x');
 const workdir = () => mkdtempSync(join(tmpdir(), 'mdy-'));
+// blog/index.mdy imports "../blog-style-x" — copy it as a real sibling,
+// not just blog itself, so a copied fixture resolves the same way the real
+// examples/ directory does.
 const site = () => {
-  const dir = workdir();
+  const parent = workdir();
+  const dir = join(parent, 'blog');
   cpSync(exampleBlog, dir, { recursive: true });
+  cpSync(exampleBlogStyleX, join(parent, 'blog-style-x'), { recursive: true });
   return dir;
 };
 

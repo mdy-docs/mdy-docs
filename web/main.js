@@ -58,24 +58,47 @@ const binarySeedUrls = import.meta.glob('../examples/blog/**/*.{png,jpg,jpeg,gif
   query: '?url',
   import: 'default',
 });
+
+// examples/blog/index.mdy imports "../blog-style-x" (src/site/imports.js) —
+// seeded into this SAME in-memory vault, under a "blog-style-x/" prefix:
+// memoryFsProvider treats any non-'/' root as a namespace prefix into its
+// one flat Map (see fs-provider.js), so resolving that relative import
+// (root becomes '/blog-style-x') finds exactly this slice, the same way it
+// finds a real sibling directory on disk.
+const styleSeed = import.meta.glob(
+  ['../examples/blog-style-x/**/*', '!../examples/blog-style-x/**/*.{png,jpg,jpeg,gif,webp,bmp,avif,ico,tiff,tif}'],
+  { eager: true, query: '?raw', import: 'default' }
+);
+const styleBinarySeedUrls = import.meta.glob(
+  '../examples/blog-style-x/**/*.{png,jpg,jpeg,gif,webp,bmp,avif,ico,tiff,tif}',
+  { eager: true, query: '?url', import: 'default' }
+);
+
 const BINARY_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif', '.ico', '.tiff', '.tif'];
 const SEED_PREFIX = '../examples/blog/';
-const files = new Map(
-  Object.entries(seed).map(([key, text]) => [key.slice(SEED_PREFIX.length), text])
-);
+const STYLE_SEED_PREFIX = '../examples/blog-style-x/';
+const files = new Map([
+  ...Object.entries(seed).map(([key, text]) => [key.slice(SEED_PREFIX.length), text]),
+  ...Object.entries(styleSeed).map(([key, text]) => [`blog-style-x/${key.slice(STYLE_SEED_PREFIX.length)}`, text]),
+]);
 const fs = memoryFsProvider(files);
 
 /** Fetch every binary seed file's real bytes (see the comment above) and
  * add them to `files` — must finish before the first render, so images.js's
  * image-size/$.resize see real bytes, not `?raw`-mangled text. */
 async function seedBinaryFiles() {
-  await Promise.all(
-    Object.entries(binarySeedUrls).map(async ([key, url]) => {
+  await Promise.all([
+    ...Object.entries(binarySeedUrls).map(async ([key, url]) => {
       const relPath = key.slice(SEED_PREFIX.length);
       const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
       files.set(relPath, bytes);
-    })
-  );
+    }),
+    ...Object.entries(styleBinarySeedUrls).map(async ([key, url]) => {
+      const relPath = `blog-style-x/${key.slice(STYLE_SEED_PREFIX.length)}`;
+      const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      files.set(relPath, bytes);
+    }),
+  ]);
 }
 
 // --- OPFS persistence (best-effort; the in-memory `files` Map above is
@@ -198,6 +221,7 @@ function pickInitialFile() {
 let currentFile = null; // set in boot(), after hydrateFromOpfs() settles what `files` actually contains
 let latestOutputs = new Map();
 let latestBinaryOutputs = new Map(); // path -> Uint8Array, this build's $.resize results (images.js)
+let latestRoots = ['/']; // '/' plus every resolved import (renderSite's `roots`, see script-site.js) — findStatic() below searches these in order, root's own first, same precedence build.js/serve.js give a real disk build
 let urlToFile = new Map();
 let currentPreviewUrl = '/';
 
@@ -289,7 +313,7 @@ async function doRender() {
   status.textContent = 'building…';
   const started = performance.now();
   try {
-    const { outputs, binaryOutputs } = await renderSite('/', {
+    const { outputs, binaryOutputs, roots } = await renderSite('/', {
       fs,
       drafts: optDrafts.checked,
       future: optFuture.checked,
@@ -297,6 +321,7 @@ async function doRender() {
     if (mySeq !== seq) return; // superseded by a newer edit
     latestOutputs = outputs;
     latestBinaryOutputs = binaryOutputs;
+    latestRoots = roots; // '/' plus every resolved import — see findStatic() below
     errorBox.hidden = true;
     status.textContent = `built ${outputs.size} page(s) in ${(performance.now() - started).toFixed(0)}ms`;
     updatePreviewPageList();
@@ -371,15 +396,36 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// memoryFsProvider's root-prefix convention (fs-provider.js): '/' (or '.'/'')
+// means no prefix, anything else is a "<root>/" namespace into the one flat
+// `files` Map — mirrored here so the preview can find a static/ asset that
+// actually lives under an imported package's own root, not just this site's.
+function rootPrefix(root) {
+  const trimmed = String(root ?? '').replace(/^\/+|\/+$/g, '');
+  return trimmed === '' || trimmed === '.' ? '' : `${trimmed}/`;
+}
+
+/** static/<relPath> from the first of latestRoots that has it — root's own
+ * first, then each import's, same precedence buildSite's copy order and
+ * serve.js's readStatic give a real disk build (see build.js/serve.js). */
+function findStatic(relPath) {
+  for (const root of latestRoots) {
+    const value = files.get(`${rootPrefix(root)}static/${relPath}`);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
 /** A root-relative image URL (as it'd be requested from a real server) ->
  * its real bytes, or null. Mirrors the two places an image can actually
  * come from at build time: an images.js $.resize result (latestBinaryOutputs,
  * already dist-relative/flattened — see images.js), or a plain static/
- * file, flattened the same way buildSite/serve.js flatten it. */
+ * file (root's own or an import's), flattened the same way
+ * buildSite/serve.js flatten it. */
 function resolveImageBytes(url) {
   const p = url.replace(/^\/+/, '');
   if (latestBinaryOutputs.has(p)) return latestBinaryOutputs.get(p);
-  const staticValue = files.get(`static/${p}`);
+  const staticValue = findStatic(p);
   return staticValue instanceof Uint8Array ? staticValue : null;
 }
 
@@ -391,7 +437,7 @@ function resolveImageBytes(url) {
 function preparePreviewHtml(html) {
   let out = html;
 
-  const css = files.get('static/style.css');
+  const css = findStatic('style.css');
   if (css) out = out.replace('<link rel="stylesheet" href="/style.css">', `<style>${css}</style>`);
 
   out = out.replace(/(<img\b[^>]*\ssrc=")([^"]+)(")/g, (match, pre, src, post) => {
@@ -401,7 +447,7 @@ function preparePreviewHtml(html) {
     return bytes ? `${pre}data:${mime};base64,${bytesToBase64(bytes)}${post}` : match;
   });
 
-  const widgetSrc = files.get('static/search.js');
+  const widgetSrc = findStatic('search.js');
   const indexJson = latestOutputs.get('search-index.json');
   if (widgetSrc && indexJson) {
     const shim = `<script>
