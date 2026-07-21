@@ -2,7 +2,7 @@
   "name": "vscode-mdy",
   "displayName": "mdy",
   "description": "Syntax highlighting for .mdy documents: markdown with YAML front matter and embedded {{ }} / {% %} JavaScript template tags.",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "private": true,
   "type": "module",
   "publisher": "mdy-docs",
@@ -45,7 +45,7 @@
         "scopeName": "text.html.markdown.mdy",
         "path": "./syntaxes/mdy.tmLanguage.json",
         "embeddedLanguages": {
-          "source.js": "javascript",
+          "meta.embedded.line.mdy": "javascript",
           "source.yaml": "yaml",
           "text.html.markdown": "markdown"
         }

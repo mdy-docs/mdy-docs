@@ -1,6 +1,6 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,25 +18,29 @@ import tm from 'vscode-textmate';
  * vscode-textmate's synthetic per-line trailing newline), the {{ }} / {% %}
  * tag boundaries, and \{{ / \{% escapes.
  *
- * source.js / source.yaml / text.html.markdown (VSCode's own bundled
- * grammars, which our real tag/front-matter/body patterns embed) aren't
- * available outside a real VSCode install, so they're stubbed with empty
- * `patterns` below — enough for `include` to resolve (an unresolved scope
- * poisons the ENTIRE containing rule, not just that one include) without
- * needing to reproduce VSCode's own grammars. What they'd highlight inside
- * those regions isn't this test's concern; where those regions start and
- * end is.
+ * text.html.markdown is VSCode's REAL bundled markdown grammar, vendored
+ * into fixtures/ — this is what makes these tests honest. The markdown
+ * grammar claims headings, list items, emphasis, tables, quotes… as its
+ * own begin/end contexts, and inside those contexts the mdy grammar's
+ * top-level tag patterns are never consulted — only the `injections`
+ * entry reaches in there. Against an empty markdown stub every tag
+ * highlights trivially and none of that is exercised (the shipped 0.0.1
+ * passed its tests while dropping `# {{ title }}`'s delimiters in real
+ * VSCode — exactly this gap).
+ *
+ * source.js / source.yaml (and everything ELSE the markdown grammar
+ * embeds — text.html.derivative, per-language fence scopes, …) stay
+ * stubbed with empty `patterns`: enough for `include` to resolve (an
+ * unresolved scope poisons the ENTIRE containing rule, not just that one
+ * include). What those grammars would highlight inside their regions
+ * isn't this test's concern; where regions start and end is.
  */
 
 const { Registry, INITIAL, parseRawGrammar } = tm;
 const here = dirname(fileURLToPath(import.meta.url));
 const grammarPath = join(here, '..', 'syntaxes', 'mdy.tmLanguage.json');
 
-const STUBS = {
-  'source.yaml': { scopeName: 'source.yaml', patterns: [] },
-  'source.js': { scopeName: 'source.js', patterns: [] },
-  'text.html.markdown': { scopeName: 'text.html.markdown', patterns: [] },
-};
+const markdownGrammarPath = join(here, 'fixtures', 'markdown.tmLanguage.json');
 
 let grammar;
 before(async () => {
@@ -56,7 +60,14 @@ before(async () => {
         const content = readFileSync(grammarPath, 'utf8');
         return parseRawGrammar(content, grammarPath);
       }
-      return STUBS[scopeName] ?? null;
+      if (scopeName === 'text.html.markdown') {
+        const content = readFileSync(markdownGrammarPath, 'utf8');
+        return parseRawGrammar(content, markdownGrammarPath);
+      }
+      // Everything else (source.js, source.yaml, text.html.derivative, the
+      // markdown grammar's dozens of per-language fence scopes, …): an
+      // empty stub, so every `include` resolves — see the header comment.
+      return { scopeName, patterns: [] };
     },
   });
   grammar = await registry.loadGrammar('text.html.markdown.mdy');
@@ -132,4 +143,151 @@ test('\\{{ and \\{% are escapes, not tag delimiters', () => {
   const escapes = line.filter((t) => t.scope === 'constant.character.escape.mdy').map((t) => t.text);
   assert.deepEqual(escapes, ['\\{{', '\\{%']);
   assert.ok(!line.some((t) => t.scope.includes('embedded')));
+});
+
+// --- markdown-context injection: tags inside constructs markdown claims -----
+// These fail without the grammar's `injections` entry: the real markdown
+// grammar opens its own contexts for headings/lists/emphasis, and the
+// top-level tag patterns are never consulted inside them.
+
+/** All (line, col, kind) delimiter positions actually tokenized, where kind
+ * is e.g. "begin.expression" — from the punctuation scope suffix. */
+function delimiterTokens(text) {
+  let state = INITIAL;
+  const found = [];
+  text.split('\n').forEach((line, ln) => {
+    const r = grammar.tokenizeLine(line, state);
+    state = r.ruleStack;
+    for (const t of r.tokens) {
+      const scope = t.scopes.find((s) => s.startsWith('punctuation.section.embedded.'));
+      if (scope) {
+        found.push({ line: ln, col: t.startIndex, kind: scope.replace('punctuation.section.embedded.', '').replace(/\.mdy$/, '') });
+      }
+    }
+  });
+  return found;
+}
+
+test('a tag inside a markdown heading keeps its delimiters (injection, not top-level patterns)', () => {
+  const found = delimiterTokens('# {{ title }}');
+  assert.deepEqual(found, [
+    { line: 0, col: 2, kind: 'begin.expression' },
+    { line: 0, col: 11, kind: 'end.expression' },
+  ]);
+});
+
+test('tags inside list items and emphasis keep their delimiters', () => {
+  const found = delimiterTokens('- **{{ d.title }}** — tags: {{ d.tags.join(", ") }}');
+  assert.equal(found.filter((f) => f.kind === 'begin.expression').length, 2);
+  assert.equal(found.filter((f) => f.kind === 'end.expression').length, 2);
+});
+
+test('a code tag opening an unbalanced { still finds its %} — no JS brace region may swallow the closer', () => {
+  const found = delimiterTokens('{% for (const m of $.find({})) { %}\n- {{ m.name }}\n{% } %}');
+  assert.deepEqual(found, [
+    { line: 0, col: 0, kind: 'begin.statement' },
+    { line: 0, col: 33, kind: 'end.statement' },
+    { line: 1, col: 2, kind: 'begin.expression' },
+    { line: 1, col: 12, kind: 'end.expression' },
+    { line: 2, col: 0, kind: 'begin.statement' },
+    { line: 2, col: 5, kind: 'end.statement' },
+  ]);
+});
+
+test('strings and comments inside a tag stop at the closer, exactly like the engine indexOf does', () => {
+  // The engine closes {% %} at the FIRST %}, even mid-string/mid-comment —
+  // the grammar must not let a string/comment construct span past it.
+  for (const text of ['{% const s = "a %} b" %}', '{% // trailing %} comment', '{% /* open %} */']) {
+    const found = delimiterTokens(text);
+    assert.equal(found[1]?.kind, 'end.statement', `no end delimiter in ${JSON.stringify(text)}`);
+    assert.equal(found[1].col, text.indexOf('%}'), `end not at first %} in ${JSON.stringify(text)}`);
+  }
+});
+
+// --- sweep: every example file in the repo, against the engine's own scan ---
+// The oracle mirrors src/mdy.js exactly: splitDocuments' bare --- rule,
+// parseDocument's first-bare-+++ front matter rule, and
+// compileTemplateSource's nextOpen/indexOf tag scan (first unescaped {{ or
+// {%, closed at the FIRST }} / %}, wherever it is). Every delimiter the
+// ENGINE would honor must carry a tag punctuation scope — and nothing else
+// may. Real example files, the real markdown grammar: this is the net that
+// catches whatever construct the next example invents.
+
+function expectedTagSpans(text) {
+  const spans = [];
+  const lines = text.split('\n');
+  const docRanges = [];
+  let docStart = 0;
+  lines.forEach((line, ln) => {
+    if (/^---[ \t]*$/.test(line)) { docRanges.push([docStart, ln]); docStart = ln + 1; }
+  });
+  docRanges.push([docStart, lines.length]);
+
+  for (const [s, e] of docRanges) {
+    const docLines = lines.slice(s, e);
+    const sep = docLines.findIndex((l) => /^\+\+\+[ \t]*$/.test(l));
+    const bodyStartLine = s + (sep === -1 ? 0 : sep + 1);
+    const body = lines.slice(bodyStartLine, e).join('\n');
+    const toPos = (offset, kind) => {
+      const before = body.slice(0, offset);
+      const ln = (before.match(/\n/g) ?? []).length;
+      const col = offset - (before.lastIndexOf('\n') + 1);
+      spans.push({ line: bodyStartLine + ln, col, kind });
+    };
+
+    let pos = 0;
+    for (;;) {
+      let open = null;
+      for (let i = pos; ; ) {
+        const out = body.indexOf('{{', i);
+        const stmt = body.indexOf('{%', i);
+        const idx = out === -1 ? stmt : stmt === -1 ? out : Math.min(out, stmt);
+        if (idx === -1) break;
+        if (idx > 0 && body[idx - 1] === '\\') { i = idx + 2; continue; }
+        open = { idx, isOutput: idx === out };
+        break;
+      }
+      if (!open) break;
+      const close = body.indexOf(open.isOutput ? '}}' : '%}', open.idx + 2);
+      if (close === -1) break; // the engine throws "unclosed" here; no example does this
+      toPos(open.idx, open.isOutput ? 'begin.expression' : 'begin.statement');
+      toPos(close, open.isOutput ? 'end.expression' : 'end.statement');
+      pos = close + 2;
+    }
+  }
+  return spans;
+}
+
+const examplesDir = join(here, '..', '..', '..', 'examples');
+const exampleFiles = readdirSync(examplesDir, { recursive: true })
+  .filter((p) => p.endsWith('.mdy'))
+  .sort();
+
+test('sweep: examples exist to sweep', () => {
+  assert.ok(exampleFiles.length >= 5, `only found ${exampleFiles.length} example .mdy files`);
+});
+
+for (const rel of exampleFiles) {
+  test(`sweep: every engine-honored tag delimiter in examples/${rel} is highlighted, and no others`, () => {
+    const text = readFileSync(join(examplesDir, rel), 'utf8');
+    assert.deepEqual(delimiterTokens(text), expectedTagSpans(text));
+  });
+}
+
+test('tag delimiters are NOT inside the JavaScript-mapped scope — only tag content is (bracket colorization)', () => {
+  // meta.embedded.line.mdy maps to javascript in package.json's
+  // embeddedLanguages. If a delimiter token carried it, VSCode would treat
+  // {{ }} / {% %} as JS-language braces and bracket-pair-colorize them as
+  // nested code pairs — template punctuation, rainbow-painted. contentName
+  // (not name) on the tag regions keeps the delimiters mdy-language, where
+  // language-configuration.json's "colorizedBracketPairs": [] applies.
+  let state = INITIAL;
+  const r = grammar.tokenizeLine('{{ title }} and {% const x = 1 %}', state);
+  for (const t of r.tokens) {
+    const isDelimiter = t.scopes.some((s) => s.startsWith('punctuation.section.embedded.'));
+    const isJsMapped = t.scopes.includes('meta.embedded.line.mdy');
+    if (isDelimiter) assert.ok(!isJsMapped, `delimiter token carries the JS-mapped scope: ${JSON.stringify(t.scopes)}`);
+  }
+  const content = r.tokens.filter((t) => t.scopes.includes('meta.embedded.line.mdy'));
+  assert.ok(content.length >= 2, 'tag content should still carry the JS-mapped scope');
 });

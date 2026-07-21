@@ -2,6 +2,17 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "mdy",
   "scopeName": "text.html.markdown.mdy",
+  "injections": {
+    "L:text.html.markdown.mdy - meta.embedded.line.mdy - meta.frontmatter.mdy": {
+      "comment": "THE load-bearing rule. The markdown grammar claims headings, list items, emphasis, tables, quotes, fences… as its own begin/end contexts, and inside those contexts the top-level patterns below are never consulted — without this injection, `# {{ title }}` and `- {{ x }}` lose their tag delimiters entirely (the shipped 0.0.1 bug). `L:` injects these with priority at every position of every markdown context; the exclusions keep it from re-matching inside an already-open tag or inside front matter (where {{ }} is literal YAML, never templated). #document-separator is here for the same reason: after a paragraph line, markdown reads `body` + `---` as a setext heading and consumes the --- INSIDE its paragraph context, but splitDocuments splits on a bare --- unconditionally, wherever it appears. Known divergence, accepted: a tag inside an inline `code span` stays unhighlighted — the span's match starts at the earlier backtick and leftmost-wins beats injection priority — even though the engine does run tags there.",
+      "patterns": [
+        { "include": "#document-separator" },
+        { "include": "#escape" },
+        { "include": "#tag-output" },
+        { "include": "#tag-code" }
+      ]
+    }
+  },
   "patterns": [
     { "include": "#frontmatter-start" },
     { "include": "#document-separator" },
@@ -47,13 +58,14 @@
       ]
     },
     "escape": {
-      "comment": "\\{{ and \\{% render as literal {{ / {% (compileTemplateSource's emitLiteral unescape) — never tag delimiters.",
+      "comment": "\\{{ and \\{% render as literal {{ / {% (compileTemplateSource's emitLiteral unescape) — never tag delimiters. Listed before the tag rules everywhere (root and injection); at the same position isn't even needed — the escape's match starts at the backslash, one column earlier than the brace, and leftmost always wins.",
       "match": "\\\\\\{[{%]",
       "name": "constant.character.escape.mdy"
     },
     "tag-output": {
-      "comment": "{{ expr }} — an output tag; expr is a JS expression whose value is stringified into the rendered markdown.",
-      "name": "meta.embedded.line.mdy",
+      "comment": "{{ expr }} — an output tag; expr is a JS expression whose value is stringified into the rendered markdown. Closes at the FIRST }}, matching the engine (compileTemplateSource uses indexOf, not brace counting). contentName, NOT name: meta.embedded.line.mdy is mapped to JavaScript in package.json's embeddedLanguages, and a region's `name` covers its begin/end delimiters too — which made VSCode treat the {{ }} braces themselves as JS-language brackets and rainbow-colorize them as nested pairs. With contentName only the expr between the delimiters is JS; the delimiters stay mdy-language punctuation, governed by mdy's own language configuration (which disables bracket-pair colorization).",
+      "name": "meta.template.expression.mdy",
+      "contentName": "meta.embedded.line.mdy",
       "begin": "\\{\\{",
       "beginCaptures": {
         "0": { "name": "punctuation.section.embedded.begin.expression.mdy" }
@@ -63,12 +75,13 @@
         "0": { "name": "punctuation.section.embedded.end.expression.mdy" }
       },
       "patterns": [
-        { "include": "#embedded-js" }
+        { "include": "#js-in-expression-tag" }
       ]
     },
     "tag-code": {
-      "comment": "{% ... %} — a code tag; contents are raw JS statements (control flow, declarations, $.emit/$.render calls) spliced directly into the compiled template function. Braces need not balance within a single tag (a { for/if } is often opened in one tag and closed in a later one).",
-      "name": "meta.embedded.line.mdy",
+      "comment": "{% ... %} — a code tag; contents are raw JS statements (control flow, declarations, $.emit/$.render calls) spliced directly into the compiled template function. Braces need not balance within a single tag (a { for/if } is often opened in one tag and closed in a later one) — which is exactly why these patterns must NOT include the real source.js grammar: its brace-block begin/end regions would open on the unbalanced { and swallow the %} (a region's end pattern is only consulted while it is top-of-stack). The #js-* rules below are deliberately region-free (or closer-guarded) so the tag's own end pattern always stays live, and the tag closes at the FIRST %}, exactly like the engine's indexOf. contentName, not name — see tag-output's comment.",
+      "name": "meta.template.statement.mdy",
+      "contentName": "meta.embedded.line.mdy",
       "begin": "\\{%",
       "beginCaptures": {
         "0": { "name": "punctuation.section.embedded.begin.statement.mdy" }
@@ -78,17 +91,41 @@
         "0": { "name": "punctuation.section.embedded.end.statement.mdy" }
       },
       "patterns": [
-        { "include": "#embedded-js" }
+        { "include": "#js-in-statement-tag" }
       ]
     },
-    "embedded-js": {
+    "js-in-statement-tag": {
+      "comment": "JS highlighting inside {% %}. Strings and comments are guarded against %} — the engine closes the tag at the first %} even inside a string or comment (indexOf knows no JS), so a construct that spanned the closer would both diverge from the engine and eat the delimiter. Guarded constructs simply stop highlighting at the closer; the plain text that remains is a smaller loss than a swallowed tag.",
       "patterns": [
-        {
-          "comment": "$ is the template's native-function namespace ($.find, $.render, $.emit, $.resize, $.tokenize, $.rfc822, $.markdown, plus any embedder-supplied natives) — highlighted like a language-provided variable (e.g. `this`), not a plain identifier.",
-          "match": "\\$(?=\\s*\\.)",
-          "name": "variable.language.dollar.mdy"
-        },
-        { "include": "source.js" }
+        { "match": "//(?:(?!%\\})[^\\n])*", "name": "comment.line.double-slash.js.mdy" },
+        { "begin": "/\\*", "end": "\\*/|(?=%\\})", "name": "comment.block.js.mdy" },
+        { "match": "([\"'])(?:\\\\.|(?!%\\}|\\1)[^\\n\\\\])*\\1", "name": "string.quoted.js.mdy" },
+        { "begin": "`", "end": "`|(?=%\\})", "name": "string.template.js.mdy", "patterns": [{ "match": "\\\\." }] },
+        { "match": "%(?!\\})", "name": "keyword.operator.js.mdy" },
+        { "include": "#js-common" }
+      ]
+    },
+    "js-in-expression-tag": {
+      "comment": "Same as #js-in-statement-tag with }} as the guarded closer. (%} needs no guard here — it's plain content inside an output tag, and vice versa.)",
+      "patterns": [
+        { "match": "//(?:(?!\\}\\})[^\\n])*", "name": "comment.line.double-slash.js.mdy" },
+        { "begin": "/\\*", "end": "\\*/|(?=\\}\\})", "name": "comment.block.js.mdy" },
+        { "match": "([\"'])(?:\\\\.|(?!\\}\\}|\\1)[^\\n\\\\])*\\1", "name": "string.quoted.js.mdy" },
+        { "begin": "`", "end": "`|(?=\\}\\})", "name": "string.template.js.mdy", "patterns": [{ "match": "\\\\." }] },
+        { "match": "%", "name": "keyword.operator.js.mdy" },
+        { "include": "#js-common" }
+      ]
+    },
+    "js-common": {
+      "comment": "Region-free JS token rules shared by both tag types. Every rule here is a single match that cannot span a closer (single-char operator matches can start AT a closer's first char, but a region's end pattern is checked before inner patterns at the same position, so the closer still wins). $ before . is the template's native-function namespace ($.find, $.render, $.emit, $.resize, …) — highlighted like a language-provided variable, not a plain identifier.",
+      "patterns": [
+        { "match": "\\$(?=\\s*\\.)", "name": "variable.language.dollar.mdy" },
+        { "match": "\\b(?:const|let|var|function|return|if|else|for|while|do|break|continue|new|typeof|instanceof|of|in|try|catch|finally|throw|switch|case|default|async|await|yield|class|extends|import|export|from|delete|void)\\b", "name": "keyword.control.js.mdy" },
+        { "match": "\\b(?:true|false|null|undefined|NaN|Infinity)\\b", "name": "constant.language.js.mdy" },
+        { "match": "\\bthis\\b", "name": "variable.language.this.js.mdy" },
+        { "match": "\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b", "name": "constant.numeric.js.mdy" },
+        { "match": "=>", "name": "storage.type.function.arrow.js.mdy" },
+        { "match": "[+\\-*/<>=!&|?:]", "name": "keyword.operator.js.mdy" }
       ]
     },
     "markdown-body": {
