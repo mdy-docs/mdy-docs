@@ -28,18 +28,18 @@
       "begin": "\\A(?=[A-Za-z_][\\w.-]*[ \\t]*:([ \\t]|$)|\\+\\+\\+[ \\t]*$)",
       "end": "^\\+\\+\\+[ \\t]*$",
       "endCaptures": {
-        "0": { "name": "punctuation.definition.frontmatter.mdy" }
+        "0": { "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy" }
       },
       "patterns": [
         { "include": "source.yaml" }
       ]
     },
     "document-separator": {
-      "comment": "A bare --- line splits a source into multiple documents (splitDocuments). Each new document may have its own front matter, checked the same heuristic way as frontmatter-start, against the line immediately following the separator; otherwise this --- is just a plain separator and what follows is body. `end` is a zero-width lookahead for any real (non-newline) character, deliberately NOT [\\s\\S]: vscode-textmate appends a synthetic trailing newline to every tokenized line (so $ anchors work), and [\\s\\S] would match THAT, closing this region one line too early — before the nested front-matter pattern below ever gets a look at the real next line.",
+      "comment": "A bare --- line splits a source into multiple documents (splitDocuments). Each new document may have its own front matter, checked the same heuristic way as frontmatter-start, against the line immediately following the separator; otherwise this --- is just a plain separator and what follows is body. `end` is a zero-width lookahead for any real (non-newline) character, deliberately NOT [\\s\\S]: vscode-textmate appends a synthetic trailing newline to every tokenized line (so $ anchors work), and [\\s\\S] would match THAT, closing this region one line too early — before the nested front-matter pattern below ever gets a look at the real next line. The separator carries markup.heading.* IN ADDITION to its punctuation scope (space-separated names push both onto the token's scope stack, deeper one last): a bare --- is the file's most structural line — it starts a whole new document — and plain punctuation scopes render dim in most themes. markup.heading is the scope family themes reliably make bold/colored, and 'a new document starts here' is exactly a heading-weight event. Same treatment for the +++ front-matter fences.",
       "name": "meta.after-document-separator.mdy",
       "begin": "^---[ \\t]*$",
       "beginCaptures": {
-        "0": { "name": "punctuation.definition.separator.mdy" }
+        "0": { "name": "punctuation.definition.separator.mdy markup.heading.separator.mdy" }
       },
       "end": "(?=[^\\n])",
       "applyEndPatternLast": true,
@@ -49,7 +49,7 @@
           "begin": "(?=[A-Za-z_][\\w.-]*[ \\t]*:([ \\t]|$)|\\+\\+\\+[ \\t]*$)",
           "end": "^\\+\\+\\+[ \\t]*$",
           "endCaptures": {
-            "0": { "name": "punctuation.definition.frontmatter.mdy" }
+            "0": { "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy" }
           },
           "patterns": [
             { "include": "source.yaml" }

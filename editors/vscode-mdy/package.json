@@ -1,10 +1,12 @@
 {
   "name": "vscode-mdy",
   "displayName": "mdy",
-  "description": "Syntax highlighting for .mdy documents: markdown with YAML front matter and embedded {{ }} / {% %} JavaScript template tags.",
-  "version": "0.0.3",
+  "description": "Support for .mdy documents: syntax highlighting, folding, outline, and a live rendered preview. Markdown with YAML front matter and embedded {{ }} / {% %} JavaScript template tags.",
+  "version": "0.0.9",
   "private": true,
   "type": "module",
+  "main": "./extension.cjs",
+  "activationEvents": [],
   "publisher": "mdy-docs",
   "license": "BSD-2-Clause",
   "engines": {
@@ -14,9 +16,13 @@
     "Programming Languages"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "bundle-engine": "node scripts/bundle-engine.mjs",
+    "pretest": "npm run bundle-engine",
+    "test": "node --test test/*.test.js",
+    "vscode:prepublish": "npm run bundle-engine"
   },
   "devDependencies": {
+    "esbuild": "^0.28.1",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
   },
@@ -26,6 +32,58 @@
     "directory": "editors/vscode-mdy"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "mdy.showPreview",
+        "title": "Open Preview",
+        "category": "mdy",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "mdy.showPreviewToSide",
+        "title": "Open Preview to the Side",
+        "category": "mdy",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "mdy.showPreview",
+          "when": "editorLangId == mdy",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mdy.showPreviewToSide",
+          "when": "editorLangId == mdy",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mdy.showPreview",
+          "when": "editorLangId == mdy"
+        },
+        {
+          "command": "mdy.showPreviewToSide",
+          "when": "editorLangId == mdy"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "mdy.showPreview",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "editorLangId == mdy && editorTextFocus"
+      },
+      {
+        "command": "mdy.showPreviewToSide",
+        "key": "ctrl+k v",
+        "mac": "cmd+k v",
+        "when": "editorLangId == mdy && editorTextFocus"
+      }
+    ],
     "languages": [
       {
         "id": "mdy",

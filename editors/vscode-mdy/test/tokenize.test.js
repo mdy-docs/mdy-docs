@@ -87,7 +87,7 @@ function tokenize(text) {
 test('front matter at the start of a file is scoped meta.frontmatter.mdy, ending at the bare +++ line', () => {
   const lines = tokenize('title: Team Roster\n+++\n# {{ title }}');
   assert.equal(lines[0][0].scope, 'meta.frontmatter.mdy');
-  assert.equal(lines[1][0].scope, 'punctuation.definition.frontmatter.mdy');
+  assert.equal(lines[1][0].scope, 'markup.heading.frontmatter.mdy') // top-of-stack; punctuation.definition.frontmatter.mdy sits beneath it;
   assert.ok(!lines[2].some((t) => t.scope.includes('frontmatter')));
 });
 
@@ -102,16 +102,16 @@ test('a bare --- line is a document separator, and the next document gets its ow
   const lines = tokenize(
     ['title: Team Roster', '+++', '{% for (const m of $.find({})) { %}', '{% } %}', '---', 'role: member', 'name: Alice', '+++', '### {{ name }}'].join('\n')
   );
-  assert.equal(lines[4][0].scope, 'punctuation.definition.separator.mdy'); // ---
+  assert.equal(lines[4][0].scope, 'markup.heading.separator.mdy') // top-of-stack; punctuation.definition.separator.mdy sits beneath it (space-separated scopes); // ---
   assert.equal(lines[5][0].scope, 'meta.frontmatter.mdy'); // role: member
   assert.equal(lines[6][0].scope, 'meta.frontmatter.mdy'); // name: Alice
-  assert.equal(lines[7][0].scope, 'punctuation.definition.frontmatter.mdy'); // +++
+  assert.equal(lines[7][0].scope, 'markup.heading.frontmatter.mdy') // top-of-stack; punctuation.definition.frontmatter.mdy sits beneath it; // +++
   assert.ok(!lines[8].some((t) => t.scope.includes('frontmatter'))); // ### {{ name }}
 });
 
 test('--- with no front matter following (next line is body, not key: value) is just a separator', () => {
   const lines = tokenize(['title: X', '+++', 'body', '---', '# a heading, not front matter'].join('\n'));
-  assert.equal(lines[3][0].scope, 'punctuation.definition.separator.mdy');
+  assert.equal(lines[3][0].scope, 'markup.heading.separator.mdy') // top-of-stack; punctuation.definition.separator.mdy sits beneath it (space-separated scopes);
   assert.ok(!lines[4].some((t) => t.scope.includes('frontmatter')));
 });
 
