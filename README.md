@@ -147,8 +147,8 @@ mdy serve ./my-blog                   # dev server at http://localhost:4321
 - `--watch` keeps running: every save of any input file (or the
   `--data-file`) re-renders and rewrites the output, logging a timing line to
   stderr. A failing render reports the error and keeps watching — the
-  previous output is left intact — so it pairs with an editor the way the
-  web playground's live preview does. (Watches the containing directories via
+  previous output is left intact — so it pairs with an editor the way
+  mdy-web's live preview does. (Watches the containing directories via
   the filesystem layer below, so atomic editor saves don't drop the watch;
   not available with stdin.)
 
@@ -559,10 +559,17 @@ mdy examples/blog                    # plain CLI: same walk, same entry
 same way `mdy <directory>` does (see CLI, above) — one primitive, one
 implementation, whichever way you call it.
 
-**In-browser editor** ([`web/`](web/)): the whole pipeline — `renderSite()`,
-both wasm engines, a real in-memory vault — running client-side, edits and
-preview with no server. See [Playground](#playground), below, for how to
-run it.
+**Web editor** ([`packages/mdy-web`](packages/mdy-web/)): the `mdy serve`
+loop with the browser as the editor — edit any source file as raw text
+(with the vscode extension's syntax highlighting), live-preview unsaved
+changes, upload assets, and rebuild on every web save. See its
+[README](packages/mdy-web/README.md).
+
+**Live preview demo**
+([`packages/mdy-live-preview`](packages/mdy-live-preview/)): a two-pane
+Monaco editor + rendered preview, the whole engine running client-side as
+WebAssembly, seeded with `examples/document-set.mdy` — `npm run
+live-preview`.
 
 ## Development
 
@@ -593,27 +600,15 @@ npm test
 (The `file:` dependencies also act as a guard: mdy can't be published to npm
 until they are switched back to published versions.)
 
-### Playground
+### Web editor
 
-A browser site editor ([`web/`](web/)) runs the full static-site pipeline
-client-side — both engines are WebAssembly, so a site is parsed, queried,
-and built entirely in the browser, with no server:
+The browser-based site editor lives at
+[`packages/mdy-web`](packages/mdy-web/) — its own package, consuming the
+engine strictly through the `mdy-docs` package boundary:
 
 ```sh
-npm run web            # dev server → http://localhost:8090
-npm run web:build      # production bundle → dist-web/
-npm run web:preview    # serve that bundle locally
+npm run mdy-web        # serve + web-edit examples/blog → http://localhost:3000/__edit
 ```
-
-Seeded from [examples/blog](examples/blog) — `main.mdy` + `layouts/*.mdy`
-+ `posts/*` + `static/`: a file-list pane to add/edit/delete any of it; a
-live preview pane (page selector, drafts/future toggles reaching the entry
-script as plain context booleans). No "edit this page" shortcut — a
-script-defined site's entry decides output paths itself via `$.emit`, with
-no host-computed "this URL's single source file" mapping to point a button
-at; the file list is the only way in. Edits persist across reloads and sync
-live across tabs on browsers with OPFS (`opfsFsProvider`) — everything else
-is the real `renderSite()`, not a simplified stand-in.
 
 ## Test
 

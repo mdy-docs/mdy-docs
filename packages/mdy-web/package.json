@@ -1,0 +1,27 @@
+{
+  "name": "@mdy-docs/mdy-web",
+  "version": "0.1.0",
+  "description": "Web-based site editor for mdy script-defined sites: serve the site from memory, edit any source file as raw text in the browser (with the vscode extension's syntax highlighting), live-preview unsaved changes, upload assets, and rebuild on every web save.",
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "bin": {
+    "mdy-web": "bin/mdy-web.js"
+  },
+  "files": [
+    "bin/",
+    "server.mjs",
+    "editor.html"
+  ],
+  "scripts": {
+    "start": "node bin/mdy-web.js"
+  },
+  "dependencies": {
+    "@shikijs/monaco": "^4.3.1",
+    "esbuild": "^0.28.1",
+    "express": "^5.2.1",
+    "mdy-docs": "file:../..",
+    "monaco-editor": "^0.52.2",
+    "shiki": "^4.3.1",
+    "vscode-mdy": "file:../editors/vscode-mdy"
+  }
+}

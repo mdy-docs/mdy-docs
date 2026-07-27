@@ -8,14 +8,14 @@
  * This is what makes a whole document-set pipeline runnable client-side:
  * once file access goes through this interface instead of calling node:fs
  * directly, a consumer works identically against real files, an in-memory
- * `Map<path, text>`, or OPFS — edubba's web/ editor (a consumer of this
+ * `Map<path, text>`, or OPFS — a browser editor (a consumer of this
  * package, not part of it) is built on exactly that. Note on why
  * nodeFsProvider imports node:fs/node:path LAZILY, inside its methods,
  * rather than at module scope: a browser bundler's static import
  * validation rejects a named import of a browser-externalized Node
  * builtin even when nothing calls it, so this file must not import them
  * at the top level — this package needs to bundle cleanly for the browser
- * itself (mdy-docs' own web/ playground), independent of any consumer.
+ * itself, independent of any consumer.
  *
  * Interface — list/read/mtime are required, every provider below has them.
  * write/remove/watch are OPTIONAL capabilities: check for the method before

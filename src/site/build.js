@@ -12,7 +12,7 @@ import { renderScriptSite } from './script-site.js';
  * also support was removed (docs/site-plan.md's "Toward a script-defined
  * site" has the design history).
  *
- * node:path is imported LAZILY (dynamic import) — web/'s Vite bundle
+ * node:path is imported LAZILY (dynamic import) — a browser bundle
  * imports this file, and Rollup statically rejects a *static* import of a
  * browser-externalized Node builtin even when nothing would call it at
  * runtime (buildSite, disk-only, is never called from the browser; see
@@ -45,7 +45,7 @@ export function urlToOutFile(url) {
  * filtered here — even lifecycle filtering is the script's own call.
  * `now` overrides build-time "today". `fs` is a fs-provider.js provider —
  * the real filesystem by default; pass memoryFsProvider(...) to run
- * entirely in-browser (see web/), which is also why `root` is only
+ * entirely in-browser, which is also why `root` is only
  * resolve()d against the real filesystem's cwd when no custom provider is
  * given — a browser root is just a virtual string, not an OS path.
  * `onSource` — see renderScriptSite; passed straight through.

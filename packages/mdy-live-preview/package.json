@@ -1,0 +1,23 @@
+{
+  "name": "@mdy-docs/mdy-live-preview",
+  "version": "0.1.0",
+  "description": "Two-pane live mdy editor demo: Monaco on the left, the rendered document set on the right — seeded with examples/document-set.mdy. Based on mdy-docs/mdy-live-preview (a markdown-live-preview fork), ported to the current mdy-docs engine.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@shikijs/monaco": "^4.3.1",
+    "dompurify": "^3.4.0",
+    "mdy-docs": "file:../..",
+    "mermaid": "^11.15.0",
+    "shiki": "^4.3.1",
+    "vscode-mdy": "file:../editors/vscode-mdy"
+  },
+  "devDependencies": {
+    "vite": "^7.3.6"
+  }
+}

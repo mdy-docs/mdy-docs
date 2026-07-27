@@ -3,7 +3,7 @@ import { openDocumentSet } from '../mdy.js';
 
 // Pure, POSIX-only path math — NOT node:path. A resolved import's absDir
 // can be a real disk path (nodeFsProvider) or a virtual one like "/" or
-// "/blog-style-x" (memoryFsProvider, web/'s in-browser playground — see
+// "/blog-style-x" (memoryFsProvider, an in-browser consumer — see
 // fs-provider.js's root-prefix support), and node:path is a Vite
 // browser-external stub with no real implementation client-side (the
 // bug this replaced: "join is not a function" in the browser bundle).

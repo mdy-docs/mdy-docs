@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mdy site editor</title>
+<link rel="stylesheet" href="/__edit/editor.css">
+<style>
+  :root {
+    --bg: #1b1b1f; --bg-alt: #161618; --border: #2e2e32;
+    --text: rgba(255, 255, 245, 0.86); --text-dim: rgba(235, 235, 245, 0.5);
+    --brand: #7a6ff0; --ok: #10b981; --err: #f66f81;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
+    height: 44px; background: var(--bg-alt); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .root { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  header .spacer { flex: 1; }
+  #status { font-size: 12px; color: var(--text-dim); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  button {
+    background: var(--brand); color: #fff; border: 0; border-radius: 6px;
+    padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  button.alt { background: transparent; border: 1px solid var(--border); color: var(--text); font-weight: 500; }
+  button.danger { background: transparent; border: 1px solid var(--border); color: var(--err); font-weight: 500; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  /* Inline ask-bar: replaces window.prompt/confirm, which webviews (e.g.
+     an IDE's embedded browser) silently suppress. */
+  #ask {
+    display: none; align-items: center; gap: 10px; padding: 8px 16px;
+    background: rgba(122, 111, 240, 0.12); border-bottom: 1px solid var(--brand);
+    font-size: 13px;
+  }
+  #ask.open { display: flex; }
+  #ask-input {
+    flex: 1; max-width: 420px; padding: 5px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    font-family: var(--mono); font-size: 12px; outline: none;
+  }
+  #ask-input:focus { border-color: var(--brand); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #files {
+    width: 220px; flex-shrink: 0; overflow-y: auto; padding: 8px;
+    background: var(--bg-alt); border-right: 1px solid var(--border);
+  }
+  #files a {
+    display: block; padding: 4px 8px; border-radius: 5px; color: var(--text-dim);
+    font-family: var(--mono); font-size: 12px; text-decoration: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #files a:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+  #files a.active { color: #fff; background: var(--brand); }
+  #files a.binary::before { content: '◪ '; color: #6fd7ff; }
+  #editor-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #filename {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 14px; font-family: var(--mono); font-size: 12px;
+    color: var(--text-dim); border-bottom: 1px solid var(--border);
+  }
+  #filename .dirty { color: var(--err); }
+  #filename .spacer { flex: 1; }
+  /* The editor is Monaco (bundled locally by the server), tokenized by the
+     vscode extension's own mdy TextMate grammar via shiki — see the module
+     script below. */
+  #editor-body { position: relative; flex: 1; min-height: 0; }
+  #editor-host { position: absolute; inset: 0; }
+  /* Metadata view for binary files (images): the raw-document record the
+     site's document set sees, combined with the file's .mdy sidecar. */
+  #meta { position: absolute; inset: 0; overflow: auto; padding: 20px 24px; display: none; background: var(--bg); z-index: 5; }
+  #meta.open { display: block; }
+  #meta img.preview {
+    max-width: 320px; max-height: 220px; border: 1px solid var(--border);
+    border-radius: 8px; background: repeating-conic-gradient(#26262b 0% 25%, #1f1f24 0% 50%) 0 0 / 16px 16px;
+  }
+  #meta h2 { font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 22px 0 8px; }
+  #meta table { border-collapse: collapse; font-size: 13px; }
+  #meta td { padding: 3px 18px 3px 0; vertical-align: top; }
+  #meta td.k { color: var(--text-dim); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  #meta td.v { font-family: var(--mono); font-size: 12px; word-break: break-word; }
+  #meta .badge {
+    display: inline-block; font-size: 10px; font-weight: 600; border-radius: 4px;
+    padding: 1px 6px; margin-left: 8px; vertical-align: 1px;
+  }
+  #meta .badge.file { background: rgba(65, 209, 255, 0.15); color: #6fd7ff; }
+  #meta .badge.sidecar { background: rgba(122, 111, 240, 0.2); color: #a89fff; }
+  #meta pre.combined {
+    margin: 8px 0 0; padding: 12px; background: var(--bg-alt); border: 1px solid var(--border);
+    border-radius: 8px; font-family: var(--mono); font-size: 12px; overflow-x: auto;
+  }
+  #meta .sidecar-body { font-size: 13px; color: var(--text); white-space: pre-wrap; font-family: var(--mono); }
+  #meta .none { color: var(--text-dim); font-style: italic; font-size: 13px; }
+  #meta .actions { margin-top: 14px; display: flex; gap: 8px; }
+  #preview { width: 45%; flex-shrink: 0; border-left: 1px solid var(--border); background: #fff; }
+  #preview iframe { width: 100%; height: 100%; border: 0; }
+  @media (max-width: 900px) { #preview { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>mdy site editor</h1>
+  <span class="root" id="root"></span>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <button class="alt" id="upload">Upload</button>
+  <input id="upload-input" type="file" multiple hidden>
+  <button class="alt" id="new-file">New file</button>
+  <button id="save" disabled>Save</button>
+</header>
+<div id="ask">
+  <span id="ask-msg"></span>
+  <input id="ask-input" spellcheck="false">
+  <button id="ask-ok">OK</button>
+  <button class="alt" id="ask-cancel">Cancel</button>
+</div>
+<main>
+  <nav id="files"></nav>
+  <section id="editor-pane">
+    <div id="filename"><span id="current-name">no file open</span><span class="spacer"></span><button class="danger" id="delete" hidden>Delete</button></div>
+    <div id="editor-body">
+      <div id="editor-host"></div>
+      <div id="meta"></div>
+    </div>
+  </section>
+  <aside id="preview"><iframe id="frame" src="/" title="site preview"></iframe></aside>
+</main>
+<script type="module">
+// The whole editor, as one module: Monaco (bundled locally by the server,
+// no CDN) tokenized through the vscode extension's own mdy.tmLanguage.json
+// — shiki executes the TextMate grammar, @shikijs/monaco adapts it to
+// Monaco's tokenizer and theme. One grammar, every editor.
+const B = await import('/__edit/editor.mjs');
+const { monaco } = B;
+
+self.MonacoEnvironment = { getWorker: () => new Proxy({}, { get: () => () => {} }) };
+
+const mdyGrammar = await fetch('/__edit/grammar/mdy').then((r) => r.json());
+const highlighter = await B.createHighlighterCore({
+  themes: [B.darkPlus],
+  langs: [...B.markdown, ...B.yaml, ...B.javascript, ...B.json, ...B.css, ...B.html, ...B.xml, { ...mdyGrammar, name: 'mdy' }],
+  engine: B.createJavaScriptRegexEngine({ forgiving: true }),
+});
+monaco.languages.register({ id: 'mdy' });
+B.shikiToMonaco(highlighter, monaco);
+
+const editor = window.__mdyEditor = monaco.editor.create(document.getElementById('editor-host'), {
+  fontSize: 13,
+  language: 'mdy',
+  theme: 'dark-plus',
+  minimap: { enabled: false },
+  scrollBeyondLastLine: false,
+  automaticLayout: true,
+  wordWrap: 'off',
+  readOnly: true,
+  folding: true,
+});
+
+const LANG_BY_EXT = {
+  '.mdy': 'mdy', '.md': 'markdown', '.markdown': 'markdown', '.yaml': 'yaml', '.yml': 'yaml',
+  '.js': 'javascript', '.mjs': 'javascript', '.json': 'json', '.css': 'css',
+  '.html': 'html', '.svg': 'xml', '.xml': 'xml',
+};
+const langOf = (path) => LANG_BY_EXT[(path || '').slice((path || '').lastIndexOf('.')).toLowerCase()] || 'plaintext';
+
+// Programmatic content changes must not read as user edits.
+let suppressChanges = false;
+const setContent = (text, path) => {
+  suppressChanges = true;
+  editor.setValue(text);
+  monaco.editor.setModelLanguage(editor.getModel(), langOf(path));
+  suppressChanges = false;
+  editor.updateOptions({ readOnly: false });
+  editor.revealPosition({ lineNumber: 1, column: 1 });
+  editor.setPosition({ lineNumber: 1, column: 1 });
+};
+const clearContent = () => {
+  suppressChanges = true;
+  editor.setValue('');
+  suppressChanges = false;
+  editor.updateOptions({ readOnly: true });
+};
+
+const filesEl = document.getElementById('files');
+const nameEl = document.getElementById('current-name');
+const statusEl = document.getElementById('status');
+const saveBtn = document.getElementById('save');
+const deleteBtn = document.getElementById('delete');
+const metaEl = document.getElementById('meta');
+const editorHost = document.getElementById('editor-host');
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|tiff?|svg)$/i;
+
+let current = null;   // open file's site-relative path
+let base = null;      // mtime the open file was loaded at (null: new file)
+let dirty = false;
+let mode = 'text';    // 'text': Monaco | 'meta': binary-file metadata view
+let fileIndex = new Map();
+let previewTimer = null;
+
+const setMode = (m) => {
+  mode = m;
+  metaEl.classList.toggle('open', m === 'meta');
+  editorHost.style.visibility = m === 'meta' ? 'hidden' : 'visible';
+};
+
+const api = (url, opts) => fetch(url, opts).then(async (r) => ({ status: r.status, body: await r.json() }));
+const send = (method, payload) =>
+  api('/__edit/file', { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+
+const setStatus = (msg, cls) => {
+  statusEl.textContent = msg;
+  statusEl.title = msg;
+  statusEl.className = cls || '';
+};
+
+// --- inline ask-bar (no window.prompt/confirm: webviews suppress them) ---
+const askEl = document.getElementById('ask');
+const askMsg = document.getElementById('ask-msg');
+const askInput = document.getElementById('ask-input');
+const askOk = document.getElementById('ask-ok');
+const askCancel = document.getElementById('ask-cancel');
+let askResolve = null;
+const askClose = (value) => {
+  askEl.classList.remove('open');
+  const r = askResolve;
+  askResolve = null;
+  if (r) r(value);
+};
+const ask = ({ message, value = null, okLabel = 'OK' }) =>
+  new Promise((resolvePromise) => {
+    if (askResolve) askClose(null); // a newer question replaces a pending one
+    askResolve = resolvePromise;
+    askMsg.textContent = message;
+    askOk.textContent = okLabel;
+    askInput.hidden = value === null;
+    askInput.value = value ?? '';
+    askEl.classList.add('open');
+    (value === null ? askOk : askInput).focus();
+    if (value !== null) askInput.select();
+  });
+const askText = (message, value, okLabel) => ask({ message, value, okLabel });
+const askConfirm = async (message, okLabel = 'OK') => (await ask({ message, okLabel })) !== null;
+askOk.onclick = () => askClose(askInput.hidden ? true : askInput.value);
+askCancel.onclick = () => askClose(null);
+askEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target !== askCancel) {
+    e.preventDefault();
+    askOk.onclick();
+  } else if (e.key === 'Escape') {
+    askClose(null);
+  }
+});
+
+const setDirty = (d) => {
+  dirty = d;
+  saveBtn.disabled = !current || mode !== 'text' || !d;
+  nameEl.innerHTML = current
+    ? current + (d ? ' <span class="dirty">● unsaved</span>' : '')
+    : 'no file open';
+  // no delete for a not-yet-created text file; always for a binary
+  deleteBtn.hidden = !current || (mode === 'text' && base === null);
+};
+
+// Leaving unsaved work: confirm, and reset the server's live preview back
+// to what's on disk (the buffer would otherwise keep shadowing the site).
+const confirmDiscard = async () => {
+  if (!dirty) return true;
+  if (!(await askConfirm('Discard unsaved changes to ' + current + '?', 'Discard'))) return false;
+  clearTimeout(previewTimer);
+  await api('/__edit/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  return true;
+};
+
+async function loadList() {
+  const { body } = await api('/__edit/files');
+  document.getElementById('root').textContent = body.root;
+  fileIndex = new Map(body.files.map((f) => [f.path, f]));
+  filesEl.replaceChildren(
+    ...body.files
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .map((f) => {
+        const a = document.createElement('a');
+        a.href = '#' + f.path;
+        a.textContent = f.path;
+        a.className = (f.binary ? 'binary' : '') + (f.path === current ? ' active' : '');
+        a.onclick = (e) => { e.preventDefault(); f.binary ? openMeta(f.path) : open(f.path); };
+        return a;
+      })
+  );
+}
+
+async function open(path) {
+  if (!(await confirmDiscard())) return;
+  const { status, body } = await api('/__edit/file?path=' + encodeURIComponent(path));
+  if (status !== 200) return setStatus('could not open ' + path, 'err');
+  setMode('text');
+  current = body.path;
+  base = body.mtime;
+  setContent(body.text, current);
+  setDirty(false);
+  setStatus('');
+  loadList();
+  editor.focus();
+}
+
+// --- binary files: the combined-metadata view ----------------------------
+
+const fmtBytes = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B');
+const escText = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const fmtVal = (k, v) =>
+  k === 'ext' ? String(v).replace(/^\./, '').toUpperCase()
+  : k === 'size' ? fmtBytes(v)
+  : k === 'mtime' ? new Date(v).toLocaleString()
+  : typeof v === 'string' ? v
+  : JSON.stringify(v);
+const rows = (obj, badge) =>
+  Object.entries(obj)
+    .map(([k, v]) => '<tr><td class="k">' + escText(k) + '<span class="badge ' + badge + '">' + (badge === 'file' ? 'file' : 'sidecar') + '</span></td><td class="v">' + escText(fmtVal(k, v)) + '</td></tr>')
+    .join('');
+
+async function openMeta(path) {
+  if (!(await confirmDiscard())) return;
+  const { status, body } = await api('/__edit/meta?path=' + encodeURIComponent(path));
+  if (status !== 200) return setStatus('could not read ' + path, 'err');
+  setMode('meta');
+  current = path;
+  base = null;
+  setDirty(false);
+  setStatus('');
+  const { identity, sidecar, combined } = body;
+  const sidecarPath = path + '.mdy';
+  let h = '';
+  if (IMAGE_RE.test(path)) h += '<img class="preview" src="/__edit/raw?path=' + encodeURIComponent(path) + '" alt="">';
+  h += '<h2>From the file itself</h2><table>' + rows(identity, 'file') + '</table>';
+  h += '<h2>From the sidecar (' + escText(sidecarPath) + ')</h2>';
+  if (sidecar) {
+    h += Object.keys(sidecar.data).length ? '<table>' + rows(sidecar.data, 'sidecar') + '</table>' : '<p class="none">sidecar has no front matter data</p>';
+    if (sidecar.body) h += '<div class="sidecar-body">' + escText(sidecar.body) + '</div>';
+  } else {
+    h += '<p class="none">no sidecar — create one to attach license, alt text, captions…</p>';
+  }
+  h += '<h2>Combined record</h2><pre class="combined">' + escText(JSON.stringify(combined, null, 2)) + '</pre>';
+  h += '<div class="actions"><button class="alt" id="sidecar-btn">' + (sidecar ? 'Edit sidecar' : 'Create sidecar') + '</button></div>';
+  metaEl.innerHTML = h;
+  document.getElementById('sidecar-btn').onclick = () => {
+    if (sidecar) return open(sidecarPath);
+    setMode('text');
+    current = sidecarPath;
+    base = null;
+    setContent('title: ' + identity.name.replace(/\.[^.]+$/, '') + '\nalt: \nlicense: \n+++\nA description of ' + identity.name + '.\n', sidecarPath);
+    setDirty(true);
+    setStatus('new sidecar — Save creates it');
+    editor.focus();
+  };
+  loadList();
+}
+
+// --- upload ---------------------------------------------------------------
+
+const uploadInput = document.getElementById('upload-input');
+document.getElementById('upload').onclick = () => uploadInput.click();
+uploadInput.onchange = async () => {
+  const files = [...uploadInput.files];
+  uploadInput.value = '';
+  if (files.length === 0) return;
+  const dir = await askText('Upload ' + files.length + ' file(s) into which directory?', 'static/', 'Upload');
+  if (dir === null) return;
+  const prefix = dir.replace(/^\/+/, '').replace(/\/?$/, dir.trim() === '' ? '' : '/');
+  let lastPath = null;
+  for (const f of files) {
+    setStatus('uploading ' + f.name + '…');
+    const path = prefix + f.name;
+    const res = await fetch('/__edit/binary?path=' + encodeURIComponent(path), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: await f.arrayBuffer(),
+    });
+    const build = await res.json();
+    if (res.status === 400) return setStatus('cannot upload ' + f.name + ': ' + build.error, 'err');
+    if (!build.ok) return setStatus('uploaded ' + path + ', but build failed: ' + build.error, 'err');
+    lastPath = path;
+  }
+  setStatus('uploaded ' + files.length + ' file(s)', 'ok');
+  await loadList();
+  if (lastPath && fileIndex.get(lastPath)?.binary) openMeta(lastPath);
+};
+
+// --- live preview: debounce the buffer to the server, no disk write ------
+const schedulePreview = () => {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    if (!current || !dirty) return;
+    const { body } = await api('/__edit/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: current, text: editor.getValue() }),
+    });
+    if (body.skipped) return; // superseded by newer keystrokes
+    if (body.ok) setStatus('preview: ' + body.pages + ' page(s) in ' + body.ms + 'ms — unsaved', 'ok');
+    else setStatus('preview: ' + body.error, 'err'); // mid-keystroke errors are normal; last good build keeps serving
+  }, 400);
+};
+
+async function save(force) {
+  if (!current || !dirty || mode !== 'text') return;
+  clearTimeout(previewTimer);
+  setStatus('saving…');
+  saveBtn.disabled = true;
+  const { status, body } = await send('PUT', { path: current, text: editor.getValue(), base, force: Boolean(force) });
+  if (status === 409) {
+    setDirty(true);
+    const overwrite = await askConfirm(
+      current + ' changed on disk since you loaded it — overwrite with your version? (Cancel keeps your text here unsaved; reopen the file to see the disk version.)',
+      'Overwrite'
+    );
+    if (overwrite) return save(true);
+    base = body.mtime; // next save compares against what's on disk NOW
+    return setStatus('not saved — file changed on disk', 'err');
+  }
+  if (body.ok) {
+    base = body.mtime;
+    setDirty(false);
+    setStatus('saved — rebuilt ' + body.pages + ' page(s) in ' + body.ms + 'ms', 'ok');
+    loadList(); // a first save of a new file appears in the list
+  } else {
+    setDirty(true);
+    setStatus('saved, but build failed: ' + body.error, 'err');
+    base = body.mtime; // the text IS on disk — the template just doesn't compile
+  }
+}
+
+deleteBtn.onclick = async () => {
+  if (!current || !(await askConfirm('Delete ' + current + ' from disk?', 'Delete'))) return;
+  clearTimeout(previewTimer);
+  const { body } = await api('/__edit/file?path=' + encodeURIComponent(current), { method: 'DELETE' });
+  setMode('text');
+  current = null;
+  base = null;
+  clearContent();
+  setDirty(false);
+  setStatus(body.ok ? 'deleted — rebuilt ' + body.pages + ' page(s)' : 'deleted — build failed: ' + body.error, body.ok ? 'ok' : 'err');
+  loadList();
+};
+
+document.getElementById('new-file').onclick = async () => {
+  const path = await askText('New file path (relative to the site root):', 'posts/new-post.mdy', 'Create');
+  if (!path) return;
+  if (!(await confirmDiscard())) return;
+  setMode('text');
+  current = path.replace(/^\/+/, '');
+  base = null;
+  setContent('', current);
+  setDirty(true);
+  setStatus('new file — typing previews it live, Save creates it');
+  editor.focus();
+};
+
+saveBtn.onclick = () => save(false);
+editor.onDidChangeModelContent(() => {
+  if (suppressChanges) return;
+  setDirty(true);
+  schedulePreview();
+});
+editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => save(false));
+addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(false); }
+});
+addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); });
+// Left with unsaved changes anyway: put the served site back to disk state.
+addEventListener('pagehide', () => {
+  if (dirty) navigator.sendBeacon('/__edit/preview', new Blob(['{}'], { type: 'application/json' }));
+});
+
+loadList();
+</script>
+</body>
+</html>

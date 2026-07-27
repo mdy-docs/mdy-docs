@@ -140,13 +140,5 @@ dist
 !.yarn/sdks
 !.yarn/versions
 
-# Vite files
-vite.config.js.timestamp-*
-vite.config.ts.timestamp-*
-.vite/
-
-# mdy playground build output
-dist-web/
-
-# packaged VSCode extension (editors/vscode-mdy)
+# packaged VSCode extension (packages/editors/vscode-mdy)
 *.vsix

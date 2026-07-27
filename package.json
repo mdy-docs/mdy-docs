@@ -24,10 +24,8 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "example:express": "node examples/express/server.mjs",
-    "web": "vite",
-    "web:build": "vite build",
-    "web:preview": "vite preview"
+    "mdy-web": "node packages/mdy-web/bin/mdy-web.js examples/blog",
+    "live-preview": "npm --prefix packages/mdy-live-preview run dev"
   },
   "dependencies": {
     "@jsquash/jpeg": "^1.6.0",
@@ -46,8 +44,6 @@
     "unified": "^11.0.5"
   },
   "devDependencies": {
-    "express": "^5.2.1",
-    "playwright": "^1.61.1",
-    "vite": "^7.3.6"
+    "playwright": "^1.61.1"
   }
 }

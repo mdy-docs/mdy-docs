@@ -18,7 +18,7 @@ import { renderSite } from './build.js';
  *
  * node:http/node:fs/node:path are imported LAZILY (dynamic import, inside
  * serveSite) rather than at module scope — index.js re-exports serveSite
- * alongside everything else, so web/'s Vite bundle reaches this file
+ * alongside everything else, so a browser bundle of index.js reaches this file
  * transitively even though it never calls serveSite (an HTTP dev server
  * makes no sense in a browser); Rollup statically rejects a *static* named
  * import of a browser-externalized Node builtin even when nothing would
