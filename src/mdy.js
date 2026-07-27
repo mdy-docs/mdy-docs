@@ -1,4 +1,10 @@
-import MarkdownIt from 'markdown-it';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+import remarkRehype from 'remark-rehype';
+import remarkStringify from 'remark-stringify';
+import rehypeRaw from 'rehype-raw';
+import rehypeStringify from 'rehype-stringify';
 import { load as loadYaml } from 'js-yaml';
 import { connect, MemoryStorageProvider } from '@mdy-docs/nisaba-db';
 import { runProgram } from './vm.js';
@@ -132,7 +138,7 @@ const NO_BIND = new Set([
   'arguments', 'eval', 'NaN', 'Infinity',
   'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Math', 'Date',
   'RegExp', 'print',
-  '$', '__ctx', '__out', '__call', '__hostcall', '__err', '__done',
+  '$', '__ctx', '__out', '__call', '__hostcall', '__err', '__done', '__tree',
 ]);
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -186,6 +192,57 @@ const FRONT_MATTER_SEPARATOR = /^\+\+\+[ \t]*$/;
 // (`page#top` has no preceding whitespace), and markdown-escaped `\#tag`
 // (the backslash blocks the match; markdown renders `\#` as a plain `#`).
 const HASHTAG = /(?<=^|\s)#([\p{L}][\p{L}\p{N}_-]*)/gmu;
+
+// The $.parse / $.stringify natives' processors. Parsing speaks the same
+// markdown dialect as the render pipeline (remark-parse + remark-gfm), so a
+// tree a template inspects is the tree its output would render from; the
+// stringifier is that dialect in reverse. mdast trees are plain JSON, so
+// they cross the VM boundary through the ordinary __hostcall channel with
+// no marshaling of their own.
+const mdastParser = unified().use(remarkParse).use(remarkGfm);
+// bullet '-' matches how this repo (and most hand-written markdown) authors
+// lists, so normalized output stays close to what templates typically emit.
+const mdastStringifier = unified().use(remarkStringify, { bullet: '-' }).use(remarkGfm);
+
+// The block-level placeholder `$.toc()` (no argument) leaves in the output;
+// the program epilogue replaces it with a link list built from the FINAL
+// tree — after the whole template ran and any $.transform was applied — so
+// a TOC at the top of a document sees headings generated below it.
+const TOC_MARKER = '<!--mdy:toc-->';
+
+// Heading anchor slugs — same algorithm as the site layer's slugify (core
+// cannot import from src/site/); duplicate headings dedupe GitHub-style
+// (`intro`, `intro-1`, …).
+const slugifyHeading = (text) =>
+  String(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const uniqueSlug = (slug, seen) => {
+  const n = seen.get(slug) ?? 0;
+  seen.set(slug, n + 1);
+  return n === 0 ? slug : `${slug}-${n}`;
+};
+
+/** Concatenated text content of an mdast (or hast) node's subtree. */
+const textContent = (node) =>
+  typeof node.value === 'string' ? node.value : (node.children ?? []).map(textContent).join('');
+
+/** All headings of an mdast tree, in document order, with deduped slugs. */
+const tocEntries = (tree) => {
+  const seen = new Map();
+  const entries = [];
+  const walk = (node) => {
+    if (node.type === 'heading') {
+      const text = textContent(node);
+      entries.push({ depth: node.depth, text, slug: uniqueSlug(slugifyHeading(text), seen) });
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(tree);
+  return entries;
+};
 
 // Guard against a cycle of `$.render` calls rendering each other forever.
 // Each nesting level holds a live VM instance while suspended (Asyncify is
@@ -247,11 +304,18 @@ function uniqueTags(all) {
   return tags;
 }
 
-// Parser used only to LOCATE ```data fences. Using markdown-it itself (rather
-// than a hand-rolled scan) inherits CommonMark's fence rules: indentation,
-// `~~~` and longer fence runs, fences inside lists, and a ```data example
-// shown inside a longer outer fence correctly counting as display, not data.
-const fenceMd = new MarkdownIt();
+// Parser used only to LOCATE ```data fences. Using a real markdown parser
+// (rather than a hand-rolled scan) inherits CommonMark's fence rules:
+// indentation, `~~~` and longer fence runs, fences inside lists, and a
+// ```data example shown inside a longer outer fence correctly counting as
+// display, not data. remark-parse alone suffices — no plugins change fences.
+const fenceParser = unified().use(remarkParse);
+
+/** Depth-first walk over an mdast tree's fenced/indented code nodes. */
+function* codeNodes(node) {
+  if (node.type === 'code') yield node;
+  if (node.children) for (const child of node.children) yield* codeNodes(child);
+}
 
 /**
  * Pull ```data fences out of a document body, returning the parsed YAML
@@ -265,20 +329,23 @@ const fenceMd = new MarkdownIt();
  * @returns {{ blocks: object[], template: string }}
  */
 function extractDataBlocks(body) {
-  const tokens = fenceMd.parse(body, {});
+  const tree = fenceParser.parse(body);
   const blocks = [];
   const drop = new Set();
 
-  for (const t of tokens) {
-    if (t.type !== 'fence' || t.info.trim().toLowerCase() !== 'data') continue;
-    const parsed = t.content.trim() === '' ? undefined : loadYaml(t.content);
+  for (const node of codeNodes(tree)) {
+    // `lang` is the info string's first word; extra words (```data foo) keep
+    // the fence as display content, matching the previous whole-info match.
+    if ((node.lang ?? '').toLowerCase() !== 'data' || node.meta) continue;
+    const parsed = node.value.trim() === '' ? undefined : loadYaml(node.value);
     if (parsed != null) {
       if (typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error('mdy: a ```data fence must contain a YAML mapping');
       }
       blocks.push(parsed);
     }
-    if (t.map) for (let i = t.map[0]; i < t.map[1]; i++) drop.add(i);
+    const pos = node.position;
+    if (pos) for (let i = pos.start.line - 1; i < pos.end.line; i++) drop.add(i);
   }
 
   if (drop.size === 0) return { blocks, template: body };
@@ -415,8 +482,30 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * The program is an IIFE (nothing leaks into the engine's persistent scope)
  * that binds the context keys as identifiers, defines the `$` helper, runs
  * the compiled template statements, and returns a one-line JSON envelope as
- * its completion value: { out: "…" } on success, { error: "…" } if the
- * template threw.
+ * its completion value: { out: "…" } on success, { tree: {…} } when the
+ * document ended in tree form (see below), { error: "…" } if the template
+ * threw.
+ *
+ * Tree form — the epilogue after the template statements:
+ *
+ *   `$.transform = (tree) => …`  a template may install a transform; the
+ *   epilogue parses the generated markdown to mdast and runs it IN the VM
+ *   (the function never crosses the boundary, only the JSON tree does). The
+ *   unified transformer convention applies: return a node, or mutate in
+ *   place and return nothing.
+ *
+ *   `{{ $.toc() }}`  (no argument) drops a block-level placeholder into the
+ *   output; the epilogue replaces it — in the FINAL tree, after any
+ *   transform — with a nested link list of the document's own headings, so
+ *   a TOC at the top sees headings generated below it. Anchors match the
+ *   heading ids createProcessor's HTML emits. With an argument,
+ *   `$.toc(markdownOrTree)` is instead a host call returning plain
+ *   [{ depth, text, slug }] entries for the template to render itself.
+ *
+ * Either way the envelope carries the tree, not re-stringified markdown —
+ * the host feeds it straight into the HTML half of the pipeline (see
+ * createProcessor's renderTree), or stringifies it only where markdown text
+ * is genuinely needed (a nested $.render embedding, renderToMarkdown).
  *
  * The IIFE is `async` and awaited at the program's top level (the engine
  * resolves top-level await into the completion value) — so `await` is legal
@@ -427,8 +516,9 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * expression form works anywhere, and the module registry it populates
  * lives host-side of the template's own scope.
  *
- * `$` methods that need the host (find / findOne / render / emit, and any
- * `extraNativeNames`) call the engine's `__hostcall` native: the VM
+ * `$` methods that need the host (find / findOne / render / emit /
+ * parse / stringify, and any `extraNativeNames`) call the engine's
+ * `__hostcall` native: the VM
  * execution suspends while the host's async native runs (the nisaba query,
  * a nested render, an emitted output, or an embedder-supplied native — see
  * buildDocumentSet's `options.natives`), then resumes with the result — a
@@ -440,6 +530,14 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * rationale. It's fixed/always-present, the same tier as find/findOne/
  * render, not part of `extraNativeNames` — every mdy-docs consumer gets it
  * for free, not just ones that opt into embedder-specific natives.
+ *
+ * `$.parse(markdown)` / `$.stringify(tree)` are the same fixed tier:
+ * markdown ⇄ mdast, in the exact dialect the render pipeline speaks
+ * (remark-parse + remark-gfm). mdast is plain JSON, so trees cross the VM
+ * boundary like any other native's args — a template can walk another
+ * document's rendered output (`$.parse($.render(target))`), build a TOC
+ * from its headings, or assemble a tree and stringify it back, all in
+ * ordinary template JS with no host access beyond these two calls.
  *
  * `extraNativeNames` gets a generic `(...args) => __call(name, args)`
  * passthrough per name — mdy itself has no opinion on what these do (that's
@@ -467,16 +565,57 @@ const $ = {
   withTag: (t) => __call("find", [{ tags: String(t).toLowerCase() }]),
   render: (target, data) => __call("render", [target, data === undefined ? {} : data]),
   emit: (path, content) => __call("emit", [path, content]),
+  parse: (markdown) => __call("parse", [markdown]),
+  stringify: (tree) => __call("stringify", [tree]),
+  toc: (target) => target === undefined ? ${jsonForEval(TOC_MARKER)} : __call("toc", [target]),
 ${extraNativeLines}
 };
 ${contextBindings(ctx)}
 let __done = null;
+let __tree = null;
 let __err = null;
 try {
 ${body}
 __done = __out;
+if (typeof $.transform === "function" || __done.indexOf(${jsonForEval(TOC_MARKER)}) !== -1) {
+  __tree = $.parse(__done);
+  if (typeof $.transform === "function") {
+    const returned = $.transform(__tree);
+    if (returned !== undefined && returned !== null) __tree = returned;
+    if (__tree === null || typeof __tree !== "object" || typeof __tree.type !== "string") {
+      throw "$.transform must return an mdast node ({ type, ... }), or undefined after mutating in place";
+    }
+  }
+  if (__done.indexOf(${jsonForEval(TOC_MARKER)}) !== -1) {
+    const entries = __call("toc", [__tree]);
+    let items = [];
+    if (entries.length > 0) {
+      let min = 6;
+      for (const e of entries) if (e.depth < min) min = e.depth;
+      const lines = [];
+      for (const e of entries) {
+        let indent = "";
+        for (let d = e.depth - min; d > 0; d--) indent += "  ";
+        lines.push(indent + "- [" + e.text + "](#" + e.slug + ")");
+      }
+      items = $.parse(lines.join("\\n")).children;
+    }
+    const splice = (node) => {
+      if (!node.children) return;
+      for (let i = node.children.length - 1; i >= 0; i--) {
+        const child = node.children[i];
+        if (child.type === "html" && child.value.trim() === ${jsonForEval(TOC_MARKER)}) {
+          node.children = node.children.slice(0, i).concat(items).concat(node.children.slice(i + 1));
+        } else {
+          splice(child);
+        }
+      }
+    };
+    splice(__tree);
+  }
+}
 } catch (e) { __err = "" + e; }
-return JSON.stringify(__err !== null ? { error: __err } : { out: __done });
+return JSON.stringify(__err !== null ? { error: __err } : __tree !== null ? { tree: __tree } : { out: __done });
 })()`;
 }
 
@@ -616,10 +755,26 @@ async function buildDocumentSet(source, options = {}) {
       find: (query) => trackedFind(query, i),
       findOne: async (query) => (await trackedFind(query, i))[0] ?? null,
       render: async (target, data) =>
-        runDoc(await resolveIndex(target, i), data ?? {}, depth + 1),
+        embedMarkdown(await runDoc(await resolveIndex(target, i), data ?? {}, depth + 1)),
       emit: (path, content) => {
         onEmit?.({ path, content, docIndex: i });
         return null;
+      },
+      // markdown ⇄ mdast, the same dialect the render pipeline speaks. Pure
+      // functions of their input — no document identity, no set state.
+      parse: (markdown) => mdastParser.parse(String(markdown ?? '')),
+      stringify: (tree) => {
+        if (tree === null || typeof tree !== 'object' || typeof tree.type !== 'string') {
+          throw new Error('mdy: $.stringify expects an mdast node ({ type, … })');
+        }
+        return mdastStringifier.stringify(tree);
+      },
+      toc: (target) => {
+        const tree = typeof target === 'string' ? mdastParser.parse(target) : target;
+        if (tree === null || typeof tree !== 'object' || typeof tree.type !== 'string') {
+          throw new Error('mdy: $.toc expects markdown text or an mdast node');
+        }
+        return tocEntries(tree);
       },
       // Every extra native gets (docIndex, docData) appended after whatever
       // args the template itself passed — a generic "which document is
@@ -656,10 +811,33 @@ async function buildDocumentSet(source, options = {}) {
     if (envelope.error !== undefined) {
       throw new Error(`mdy: template error in document ${i}: ${envelope.error}`);
     }
-    return envelope.out;
+    // Two completion shapes (see buildProgram): plain markdown, or — when the
+    // document installed a $.transform or used a no-arg $.toc() — the final
+    // mdast tree, kept AS a tree so the HTML path never re-stringifies it.
+    return envelope.tree !== undefined
+      ? { markdown: null, tree: envelope.tree }
+      : { markdown: envelope.out, tree: null };
   };
 
-  return { docs: documents, runDoc, hostFind, resolveIndex, trackedFind };
+  // Text of a render result for EMBEDDING into another template's output (a
+  // nested $.render): byte-exact for string-form documents — a template may
+  // legitimately produce non-markdown text this way (the blog example's
+  // RSS / robots.txt layouts, emitted verbatim) — while tree-form documents
+  // ($.transform / no-arg $.toc()) serialize through remark-stringify, the
+  // only text they can have.
+  const embedMarkdown = (result) =>
+    result.tree !== null ? mdastStringifier.stringify(result.tree) : result.markdown;
+
+  // Markdown text at the PUBLIC markdown boundary (openDocumentSet's render,
+  // and renderToMarkdown / renderEach / the CLI's markdown output on top of
+  // it): ALWAYS emitted through remark-stringify — string-form output is
+  // parsed and re-serialized — so the markdown these APIs return is one
+  // consistent dialect regardless of how any document produced its text. The
+  // byte-exact template output stays reachable via renderResult().markdown.
+  const resultMarkdown = (result) =>
+    mdastStringifier.stringify(result.tree !== null ? result.tree : mdastParser.parse(result.markdown));
+
+  return { docs: documents, runDoc, embedMarkdown, resultMarkdown, hostFind, resolveIndex, trackedFind };
 }
 
 /**
@@ -677,7 +855,23 @@ async function buildDocumentSet(source, options = {}) {
  *   findOne(query)       first match or null
  *   render(target, ctx)  render the document at index `target`, or the first
  *                        one matching query `target`, with `ctx` overriding
- *                        its own data → generated markdown
+ *                        its own data → generated markdown. ALWAYS emitted
+ *                        through remark-stringify (the template's output is
+ *                        parsed and re-serialized), so formatting is one
+ *                        consistent dialect whether the document ended as a
+ *                        string or a tree ($.transform / no-arg $.toc())
+ *   renderRaw(target, ctx)  same render, embedding semantics: byte-exact
+ *                        template output for string-form documents (which may
+ *                        deliberately not be markdown — RSS, robots.txt),
+ *                        tree-form serialized. What the in-set $.render (and
+ *                        a cross-package import's .render) returns
+ *   renderResult(target, ctx)  same render, but the raw completion shape:
+ *                        { markdown, tree } with exactly one non-null —
+ *                        `markdown` is the template's byte-exact output (no
+ *                        normalization), `tree` the final mdast when the
+ *                        document ended in tree form. createProcessor's HTML
+ *                        path uses this to feed the tree straight into
+ *                        rehype, never re-stringifying
  *
  * Sources may carry identity (`{ text, meta }`, see parseDocuments), so
  * `find` can route on file-level fields and rendered documents know where
@@ -711,15 +905,20 @@ async function buildDocumentSet(source, options = {}) {
  *   find: (query?: object) => Promise<object[]>,
  *   findOne: (query?: object) => Promise<object | null>,
  *   render: (target: number | object, ctx?: object) => Promise<string>,
+ *   renderRaw: (target: number | object, ctx?: object) => Promise<string>,
+ *   renderResult: (target: number | object, ctx?: object) => Promise<{ markdown: string | null, tree: object | null }>,
  * }>}
  */
 export async function openDocumentSet(source, options = {}) {
-  const { docs, runDoc, resolveIndex, trackedFind } = await buildDocumentSet(source, options);
+  const { docs, runDoc, embedMarkdown, resultMarkdown, resolveIndex, trackedFind } = await buildDocumentSet(source, options);
+  const renderResult = async (target, ctx = {}) => runDoc(await resolveIndex(target, null), ctx, 0);
   return {
     docs,
     find: (query) => trackedFind(query, null),
     findOne: async (query) => (await trackedFind(query, null))[0] ?? null,
-    render: async (target, ctx = {}) => runDoc(await resolveIndex(target, null), ctx, 0),
+    render: async (target, ctx = {}) => resultMarkdown(await renderResult(target, ctx)),
+    renderRaw: async (target, ctx = {}) => embedMarkdown(await renderResult(target, ctx)),
+    renderResult,
   };
 }
 
@@ -739,6 +938,15 @@ export async function openDocumentSet(source, options = {}) {
  *   $.data(i)              document i's data (positional)
  *   $.documents            [{ index, data }, …] (positional)
  *   $.count                number of documents
+ *   $.parse(markdown)      markdown → mdast syntax tree (plain JSON)
+ *   $.stringify(tree)      mdast syntax tree → markdown
+ *   $.toc()                (no argument) placeholder replaced at end of
+ *                          render with a link list of THIS document's final
+ *                          headings; $.toc(markdownOrTree) instead returns
+ *                          [{ depth, text, slug }] entries to render manually
+ *   $.transform = fn       install (tree) => tree | undefined, run on the
+ *                          document's final mdast before output (see
+ *                          buildProgram)
  *
  * One-shot: the set is built, one document renders, the set is dropped. To
  * render many pages from one set, use openDocumentSet.
@@ -782,24 +990,75 @@ export async function renderEach(source, extraContext = {}, entry = 0) {
   return out;
 }
 
+// Default rehype plugin: give every heading a GitHub-style id, computed with
+// the SAME slugger (and dedupe order) as the $.toc native's entries — that
+// shared algorithm is what makes a template-built TOC's `#anchors` land on
+// the rendered headings. Runs after rehype-raw, so raw `<h2>` headings get
+// ids too. Headings that already carry an id keep it.
+const rehypeHeadingIds = () => (tree) => {
+  const seen = new Map();
+  const visit = (node) => {
+    if (/^h[1-6]$/.test(node.tagName ?? '')) {
+      node.properties ??= {};
+      if (node.properties.id === undefined) {
+        node.properties.id = uniqueSlug(slugifyHeading(textContent(node)), seen);
+      }
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(tree);
+};
+
 /**
- * Create a processor bound to a configured markdown-it instance.
+ * Create a processor bound to a configured unified (remark → rehype) pipeline.
+ *
+ * The base chain is remark-parse → remark-gfm → remark-rehype → rehype-raw →
+ * heading ids → rehype-stringify: GFM covers the old `linkify` behavior
+ * (autolink literals, plus tables/strikethrough templates commonly generate),
+ * rehype-raw preserves raw HTML in documents (the old `html: true`), and
+ * every heading gets a GitHub-style `id` so `$.toc()` links (or any deep
+ * link) land.
+ *
  * @param {object} [options]
- * @param {MarkdownIt} [options.md] a preconfigured markdown-it (e.g. with a highlighter)
- * @returns {{ md: MarkdownIt, renderToMarkdown: Function, render: Function }}
+ * @param {Array} [options.remarkPlugins] plugins run on the markdown (mdast)
+ *   side, before the tree converts to HTML — each a plugin or
+ *   `[plugin, options]` tuple
+ * @param {Array} [options.rehypePlugins] plugins run on the HTML (hast) side,
+ *   after raw HTML is reparsed — e.g. a syntax highlighter
+ * @returns {{ processor: object, renderMarkdown: Function, renderTree: Function, renderToMarkdown: Function, render: Function }}
  */
 export function createProcessor(options = {}) {
-  const md = options.md ?? new MarkdownIt({ html: true, linkify: true });
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(options.remarkPlugins ?? [])
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(rehypeRaw)
+    .use(rehypeHeadingIds)
+    .use(options.rehypePlugins ?? [])
+    .use(rehypeStringify);
+
+  /** Markdown string → HTML string (no template layer — just the pipeline). */
+  const renderMarkdown = async (markdown) => String(await processor.process(markdown));
+
+  /** mdast tree → HTML string — the parse step skipped, the transformers and
+   * compiler applied as usual. This is where a document that ended in tree
+   * form ($.transform / no-arg $.toc()) becomes HTML with no intermediate
+   * re-stringification to markdown. */
+  const renderTree = async (tree) => String(processor.stringify(await processor.run(tree)));
 
   /** Document source(s) → generated markdown string (front matter extracted + templates run). */
   const renderToMarkdown = (source, extraContext = {}, entry = 0) =>
     renderDocumentSet(source, extraContext, entry);
 
   /** Document source(s) → final HTML. */
-  const render = async (source, extraContext = {}, entry = 0) =>
-    md.render(await renderToMarkdown(source, extraContext, entry));
+  const render = async (source, extraContext = {}, entry = 0) => {
+    const set = await openDocumentSet(source);
+    const { markdown, tree } = await set.renderResult(entry, extraContext);
+    return tree !== null ? renderTree(tree) : renderMarkdown(markdown);
+  };
 
-  return { md, renderToMarkdown, render };
+  return { processor, renderMarkdown, renderTree, renderToMarkdown, render };
 }
 
 // A ready-to-use default processor.
@@ -814,5 +1073,3 @@ export function render(source, extraContext = {}, entry = 0) {
 export function renderToMarkdown(source, extraContext = {}, entry = 0) {
   return processor.renderToMarkdown(source, extraContext, entry);
 }
-
-export { MarkdownIt };

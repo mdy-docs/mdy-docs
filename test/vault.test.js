@@ -140,16 +140,16 @@ test('walkFiles: defaults to the real filesystem and reports real sizes', async 
 
 test('walkRawSources: a .mdy file gets its real text, front matter extractable via openDocumentSet', async () => {
   const files = new Map([
-    ['index.mdy', 'title: Hello\n+++\nbody'],
+    ['main.mdy', 'title: Hello\n+++\nbody'],
     ['other.mdy', 'title: Other\n+++\nirrelevant'],
   ]);
   const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
 
   assert.equal(sources.length, 2);
   const set = await openDocumentSet(sources);
-  const index = set.docs.find((d) => d.data.path === 'index.mdy');
+  const index = set.docs.find((d) => d.data.path === 'main.mdy');
   assert.equal(index.data.title, 'Hello'); // front matter, merged in by mdy's own parser
-  assert.equal(index.data.name, 'index.mdy');
+  assert.equal(index.data.name, 'main.mdy');
   assert.equal(index.data.ext, '.mdy');
   assert.equal(typeof index.data.size, 'number');
   assert.ok(index.data.mtime instanceof Date);
@@ -244,14 +244,14 @@ test('walkRawSources: an empty .yaml file is just an identity record, no parsed 
 
 test('walkRawSources: dist/, node_modules/, and dotfiles/dot-directories are excluded', async () => {
   const files = new Map([
-    ['index.mdy', '+++\nhi'],
+    ['main.mdy', '+++\nhi'],
     ['dist/index.html', 'built'],
     ['node_modules/x/index.js', 'dep'],
     ['.git/HEAD', 'ref'],
     ['.env', 'secret'],
   ]);
   const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
-  assert.deepEqual(sources.map((s) => s.meta.path), ['index.mdy']);
+  assert.deepEqual(sources.map((s) => s.meta.path), ['main.mdy']);
 });
 
 test('walkVault: defaults to the real filesystem and works against a real directory', async () => {

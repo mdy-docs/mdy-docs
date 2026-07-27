@@ -8,7 +8,7 @@ import { tokenize } from '../src/site/search.js';
 // pages/bodies) was removed with the conventional content/layouts/site.yaml
 // pipeline — a script-defined site builds its own search-index.json
 // entirely in template code via this same tokenize() as the $.tokenize
-// native (see script-site.js and examples/blog/index.mdy).
+// native (see script-site.js and examples/blog/main.mdy).
 
 test('tokenize: lowercases, strips punctuation, dedupes, drops short words and stopwords', () => {
   assert.deepEqual(

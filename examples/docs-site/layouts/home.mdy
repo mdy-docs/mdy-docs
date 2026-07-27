@@ -1,0 +1,24 @@
+{% const acts = hero.actions || []; %}
+<div class="home">
+<section class="hero">
+<div class="hero-text">
+<h1 class="hero-name">{{ hero.name }}</h1>
+<p class="hero-heading">{{ hero.text }}</p>
+<p class="hero-tagline">{{ hero.tagline }}</p>
+<div class="hero-actions">
+{% for (const a of acts) { %}
+<a class="hero-action {{ a.theme }}" href="{{ a.link }}"{{ a.link.indexOf("http") === 0 ? ' target="_blank" rel="noreferrer"' : "" }}>{{ a.text }}</a>
+{% } %}
+</div>
+</div>
+<div class="hero-image"><img src="/favicon.svg" alt=""></div>
+</section>
+<section class="features">
+{% for (const f of features) { %}
+<div class="feature">
+<h2 class="feature-title">{{ f.title }}</h2>
+<p class="feature-details">{{ f.details }}</p>
+</div>
+{% } %}
+</section>
+</div>

@@ -53,7 +53,7 @@ Usage:
   mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
       dev server: watch, rebuild, live reload (default port: 4321)
 
-Every site is a script-defined site: site-dir's entry document (index.mdy,
+Every site is a script-defined site: site-dir's entry document (main.mdy,
 or --entry <path>) decides everything itself — content, URLs, layouts,
 output shape — via $/$.find/$.render/$.emit. --drafts/--future are
 threaded through as plain context booleans for it to interpret, not
@@ -195,7 +195,7 @@ Arguments:
                         them — it alone decides what any file/path means
                         (which are "posts", what URL/layout each gets, …),
                         entirely in template code. The entry defaults to
-                        index.mdy; --entry picks another file.
+                        main.mdy; --entry picks another file.
 
 Options:
   -o, --out <file>      Write output to <file> (default: stdout). If <file>
@@ -205,7 +205,7 @@ Options:
                         that case, since there is no filename for it).
       --html            Emit HTML instead of generated markdown.
       --entry <path>    Directory input only: the entry document's path,
-                        relative to the directory (default: index.mdy).
+                        relative to the directory (default: main.mdy).
       --emit-js         Emit the compiled JavaScript instead of rendering
                         (debug): every document for a file input, just the
                         entry document for a directory input.
@@ -228,7 +228,7 @@ Examples:
   mdy report.mdy -d env=prod -d 'build=42' --data-file overrides.yaml
   mdy report.mdy -o report.md --watch             # live re-render on save
   cat report.mdy | mdy - --html                   # stdin → HTML on stdout
-  mdy ./my-site                                   # scan the dir, render index.mdy
+  mdy ./my-site                                   # scan the dir, render main.mdy
   mdy ./my-site --entry other.mdy -o dist         # write $.emit output`;
 
   function fail(msg) {
@@ -390,7 +390,7 @@ Examples:
       // collect any named side outputs. Shared with mdy build/serve's own
       // script-site detection (src/site/build.js) — same primitive, same
       // natives, one implementation.
-      const entryPath = values.entry ?? 'index.mdy';
+      const entryPath = values.entry ?? 'main.mdy';
       if (values['emit-js']) {
         const sources = await walkRawSources(inputAbs, { fs });
         const docs = parseDocuments(sources);
@@ -404,7 +404,7 @@ Examples:
           onSource: logSource,
         });
         emitted = new Map([...outputs, ...binaryOutputs]);
-        output = values.html ? createProcessor().md.render(md) : md;
+        output = values.html ? await createProcessor().renderMarkdown(md) : md;
       }
     } else {
       // 'file' or 'stdin': just that one input's own text, no site walk.
@@ -430,7 +430,7 @@ Examples:
         });
         const md = await set.render(0, context);
         emitted = localEmitted;
-        output = values.html ? createProcessor().md.render(md) : md;
+        output = values.html ? await createProcessor().renderMarkdown(md) : md;
       }
     }
 

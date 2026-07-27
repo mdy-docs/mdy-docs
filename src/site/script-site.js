@@ -1,4 +1,4 @@
-import { MarkdownIt } from '../mdy.js';
+import { createProcessor } from '../mdy.js';
 import { nodeFsProvider } from '../fs-provider.js';
 import { normalizeDate, rfc822 } from './vault.js';
 import { createResizeNative } from './images.js';
@@ -21,7 +21,8 @@ import { buildImportGraph } from './imports.js';
  * host-dependent primitives no amount of template JS can replace:
  * $.resize (WASM image codecs), $.tokenize (the search widget's word
  * list), $.rfc822 (RSS pubDate — the lamassu VM forbids `new Date()`), and
- * $.markdown (CommonMark → HTML — markdown-it, not a hand-rollable parser).
+ * $.markdown (CommonMark → HTML — the unified/remark pipeline, not a
+ * hand-rollable parser).
  * None of these four carry any policy of their own — resize doesn't decide
  * which images get resized, tokenize doesn't decide what's searchable,
  * rfc822 doesn't decide what's in the feed, markdown doesn't decide which
@@ -48,7 +49,7 @@ import { buildImportGraph } from './imports.js';
  *                   raw document; dist/, node_modules/, and dotfiles/
  *                   dot-directories are excluded (walkRawSources)
  *   options.entry   path to the entry script, relative to root
- *                   (default: 'index.mdy')
+ *                   (default: 'main.mdy')
  *   options.now     build-time "today", threaded into the entry script's
  *                   context as a canonical YYYY-MM-DD *string* (`today`)
  *                   — never a Date object, since the sandboxed VM cannot
@@ -86,12 +87,12 @@ export async function renderScriptSite(root, options = {}) {
   if (!options.fs) root = (await import('node:path')).resolve(root);
 
   const binaryOutputs = new Map();
-  const md = new MarkdownIt({ html: true, linkify: true });
+  const { renderMarkdown } = createProcessor();
   const buildNatives = (absDir) => ({
     resize: createResizeNative({ fs, root: absDir, registerBinaryOutput: (path, bytes) => binaryOutputs.set(path, bytes) }),
     tokenize,
     rfc822,
-    markdown: (text) => md.render(String(text ?? '')),
+    markdown: (text) => renderMarkdown(String(text ?? '')),
   });
 
   const outputs = new Map();
@@ -105,7 +106,7 @@ export async function renderScriptSite(root, options = {}) {
     roots,
   });
 
-  const entryPath = options.entry ?? 'index.mdy';
+  const entryPath = options.entry ?? 'main.mdy';
   const entryIndex = set.docs.find((d) => d.data.path === entryPath)?.index;
   if (entryIndex === undefined) {
     throw new Error(`renderScriptSite: entry script not found at ${JSON.stringify(entryPath)} (looked among ${set.docs.length} document(s) under ${root})`);

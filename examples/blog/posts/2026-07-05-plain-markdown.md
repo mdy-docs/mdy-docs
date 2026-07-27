@@ -16,7 +16,7 @@ const config = { retries: 3 };
 ```
 
 The `}` in that snippet, and the one two paragraphs up, don't do anything
-special — this whole document went straight to markdown-it with no
+special — this whole document went straight to the markdown renderer with no
 template pass at all.
 
 Still taggable, though: #wet clay and #history, spotted the ordinary way.

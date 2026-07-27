@@ -11,7 +11,6 @@ export {
   createProcessor,
   render,
   renderToMarkdown,
-  MarkdownIt,
 } from './src/mdy.js';
 
 // "Getting files into the document set" — the filesystem/vault layer,

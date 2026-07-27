@@ -12,7 +12,7 @@ const exampleBlog = join(here, '..', 'examples', 'blog');
 const exampleBlogStyleX = join(here, '..', 'examples', 'blog-style-x');
 
 // The watch test edits content, so serve a throwaway copy of the example —
-// blog-style-x copied alongside it as a real sibling (blog/index.mdy
+// blog-style-x copied alongside it as a real sibling (blog/main.mdy
 // imports it as "../blog-style-x"), not just blog itself.
 let tmpRoot;
 let siteDir;
@@ -43,7 +43,7 @@ test('serves rendered pages from memory, with the reload client injected', async
 test('slashless pretty URLs resolve', async () => {
   const res = await get('/posts/hello');
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /<h1>Hello world<\/h1>/);
+  assert.match(await res.text(), /<h1 id="[^"]*">Hello world<\/h1>/);
 });
 
 test('static files come from static/ on disk', async () => {
@@ -114,13 +114,13 @@ test('editing content rebuilds and pings live-reload clients', async () => {
   await reader.cancel();
 
   const html = await (await get('/about/')).text();
-  assert.match(html, /<h1>About the tablet house<\/h1>/);
+  assert.match(html, /<h1 id="[^"]*">About the tablet house<\/h1>/);
   assert.match(html, /Rewritten while the server watched/);
 });
 
 test('editing one post rebuilds the whole script-defined site (no incremental reuse — see script-site.js)', async () => {
   // Unlike the conventional content/layouts/site.yaml pipeline, a
-  // script-defined site (index.mdy, here) has no incremental cache — every
+  // script-defined site (main.mdy, here) has no incremental cache — every
   // rebuild walks the whole directory and re-runs the entry from scratch
   // (src/site/script-site.js's own file-level comment). So editing ONE
   // post rebuilds EVERY output, not just that post's page.

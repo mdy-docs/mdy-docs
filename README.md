@@ -49,7 +49,8 @@ title: Appendix        ← the next document begins
    [lamassu](https://github.com/mdy-docs/lamassu-js) VM — a sandboxed
    JavaScript-subset engine in WebAssembly — with the document's data bound as
    identifiers, producing markdown. Template code has no host access.
-5. **Render** the markdown to HTML with markdown-it.
+5. **Render** the markdown to HTML with the unified pipeline
+   (remark-parse → remark-gfm → remark-rehype → rehype-raw → rehype-stringify).
 
 ## Template syntax
 
@@ -74,10 +75,11 @@ const html = await render(documentSource);           // → HTML
 const md   = await renderToMarkdown(documentSource); // → generated markdown
 const docs = parseDocuments(documentSource);         // → [{ data, content }, …] (sync)
 
-// Custom markdown-it (e.g. a syntax highlighter for ```yaml blocks):
-import MarkdownIt from 'markdown-it';
+// Custom plugins (e.g. a syntax highlighter for ```yaml blocks):
+import rehypeHighlight from 'rehype-highlight';
 const { render: r } = createProcessor({
-  md: new MarkdownIt({ highlight: (code, lang) => myHighlight(code, lang) }),
+  remarkPlugins: [],                    // run on the markdown (mdast) side
+  rehypePlugins: [rehypeHighlight],     // run on the HTML (hast) side
 });
 ```
 
@@ -97,13 +99,13 @@ mdy [path] [options]
                         — it alone decides what any file/path means (which
                         are "posts", what URL/layout each gets, …), entirely
                         in template code (see Static sites). The entry
-                        defaults to index.mdy; --entry picks another file.
+                        defaults to main.mdy; --entry picks another file.
   -o, --out <file>      write output to <file> (default: stdout); if <file>
                         is an existing directory, $.emit output is written
                         under it instead (see Static sites)
       --html            emit HTML instead of generated markdown
       --entry <path>    directory input only: the entry document's path,
-                        relative to the directory (default: index.mdy)
+                        relative to the directory (default: main.mdy)
       --emit-js         emit the compiled JavaScript instead of rendering
                         (debug): every document for a file input, just the
                         entry document for a directory input
@@ -125,7 +127,7 @@ mdy report.mdy --html -o report.html  # → HTML file
 mdy report.mdy -o report.md -d env=prod --data-file overrides.yaml
 mdy report.mdy -o report.md --watch   # live re-render on save
 cat report.mdy | mdy - --html         # stdin → HTML on stdout
-mdy ./my-site                         # scan the dir, render index.mdy
+mdy ./my-site                         # scan the dir, render main.mdy
 mdy ./my-site --entry other.mdy -o dist   # write $.emit output
 
 mdy build ./my-blog --out ./dist      # build a site
@@ -135,7 +137,7 @@ mdy serve ./my-blog                   # dev server at http://localhost:4321
 - Output goes to **stdout**; pass `-o` to write a file (it won't overwrite the input).
 - A non-`.mdy` file input is processed but **warns** on stderr.
 - A directory input is walked with `walkRawSources` (raw identity only, see
-  Filesystem/Static sites below) and its entry (`index.mdy`, or `--entry`)
+  Filesystem/Static sites below) and its entry (`main.mdy`, or `--entry`)
   is the one document that decides what any other file/path means. A
   document with no `$.emit` calls just renders to stdout/`-o` as always;
   `$.emit` output is written under `-o` only when it's an existing
@@ -248,7 +250,8 @@ report:
   even below it. See
   [`examples/order-independent.mdy`](examples/order-independent.mdy).
 
-Fences are located with markdown-it itself, so CommonMark rules apply — a
+Fences are located with a real markdown parser (remark), so CommonMark rules
+apply — a
 ` ```data ` example shown inside a longer outer fence (like the one above) is
 display, not data.
 
@@ -310,12 +313,16 @@ attributes**, MongoDB-style:
 | `$.data(i)` | document `i`'s data (positional) |
 | `$.documents` | `[{ index, data }, …]` (positional) |
 | `$.count` | number of documents |
+| `$.parse(markdown)` | markdown → [mdast](https://github.com/syntax-tree/mdast) syntax tree (plain JSON), in the render pipeline's own dialect — walk another document's rendered output (`$.parse($.render(target))`), build a TOC from its headings, … |
+| `$.stringify(tree)` | mdast syntax tree → markdown — the inverse of `$.parse`, so a template can assemble or rewrite a tree and turn it back into markdown |
+| `$.toc()` | with no argument: drops a placeholder that is replaced, at the end of the render, with a nested link list of **this document's** final headings — including generated ones, and after any `$.transform`; anchors match the heading `id`s the HTML pipeline emits. `$.toc(markdownOrTree)` instead returns `[{ depth, text, slug }]` entries to render however you like (e.g. `$.toc($.render(1))` for a cross-document TOC) |
+| `$.transform = fn` | not a call — an assignment: install a `(tree) => tree` transform over the document's final mdast (return a new node, or mutate in place and return nothing). It runs **inside the sandbox** after the template finishes, and the resulting tree feeds straight into the HTML pipeline with no re-stringification |
 
 Document 0 (the entry) is rendered by default; it composes the rest via `$`.
 From the library, the `entry` argument to `render`/`renderToMarkdown` (or
 `openDocumentSet(...).render(target, data)`) renders a different one — the
 CLI always renders document 0 (a file's first document, or a directory
-input's `index.mdy`/`--entry`). Give documents identifying attributes and
+input's `main.mdy`/`--entry`). Give documents identifying attributes and
 both the data selection and the template selection become queries — no
 document needs to know another's position — see
 [`examples/document-set.mdy`](examples/document-set.mdy):
@@ -418,7 +425,7 @@ const gen = compileTemplate(body);       // gen.source === src
 
 ```sh
 mdy report.mdy --emit-js             # compiled JS of every document in the file
-mdy mysite --emit-js                 # compiled JS of just the entry document (index.mdy/--entry)
+mdy mysite --emit-js                 # compiled JS of just the entry document (main.mdy/--entry)
 ```
 
 `compileTemplate` runs the statements in the **host** runtime via
@@ -449,7 +456,7 @@ The exception is `compileTemplate()`, which executes in the host via
 A static site generator — in the family of Hugo / Jekyll / Eleventy — built
 entirely on the primitives above, with one governing idea: every site is a
 **script-defined site**. There's no host-side content/layouts/site.yaml
-convention deciding what a path means — one entry document (`index.mdy` by
+convention deciding what a path means — one entry document (`main.mdy` by
 default) does ALL of that itself, in template code, via `$.find`/`$.render`/
 `$.emit`. `mdy build`/`mdy serve` (see CLI, above) and the whole
 implementation live in [`src/site/`](src/site/); the design brief and
@@ -477,7 +484,7 @@ format's job, not a convention" reasoning as `.mdy`'s own front matter:
   gets `width`/`height` (header-only, via `image-size`), so `$.resize`
   (below) has what it needs with no `kind: 'file'` convention layered on.
 
-One entry document (`index.mdy`, or `--entry`/`options.entry`) then renders,
+One entry document (`main.mdy`, or `--entry`/`options.entry`) then renders,
 via `$.find`/`$.render`/`$.emit` — which files are "posts", what URL/layout
 each gets, tag grouping, pagination, drafts/future filtering — plus four
 small, genuinely host-dependent natives no amount of template JS could
@@ -536,7 +543,7 @@ async context.
 (`.mdy` *and* `.md`), tags, an RSS feed, sitemap, robots.txt, a search
 index, and an `about` page with a resized image and a `.yaml` data record
 queried directly — entirely defined by
-[examples/blog/index.mdy](examples/blog/index.mdy) plus its `layouts/*.mdy`
+[examples/blog/main.mdy](examples/blog/main.mdy) plus its `layouts/*.mdy`
 shells, importing its look (the base HTML shell, CSS, search widget,
 `logo.png`) from **[examples/blog-style-x](examples/blog-style-x)** — swap
 that one `import` line for a different package and only the look changes.
@@ -598,7 +605,7 @@ npm run web:build      # production bundle → dist-web/
 npm run web:preview    # serve that bundle locally
 ```
 
-Seeded from [examples/blog](examples/blog) — `index.mdy` + `layouts/*.mdy`
+Seeded from [examples/blog](examples/blog) — `main.mdy` + `layouts/*.mdy`
 + `posts/*` + `static/`: a file-list pane to add/edit/delete any of it; a
 live preview pane (page selector, drafts/future toggles reaching the entry
 script as plain context booleans). No "edit this page" shortcut — a

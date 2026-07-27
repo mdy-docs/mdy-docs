@@ -36,7 +36,7 @@ function resolvePath(base, spec) {
 
 /*
  * Importing another mdy project — "just like a normal JavaScript import,
- * but the thing being imported is a package's own index.mdy, compiled to
+ * but the thing being imported is a package's own main.mdy, compiled to
  * JS, that the importing script can choose to run" (docs/site-plan.md has
  * the fuller design history). This is how a script-defined site pulls in
  * another package's files — a style/theme, or anything else — without any
@@ -211,8 +211,11 @@ export async function buildImportGraph(absDir, ctx, ancestors = new Set()) {
 
     const extraNatives = {
       ...buildNatives(absDir),
+      // renderRaw, not render: a cross-package render is an EMBEDDING (its
+      // result lands inside the importing template's own output, possibly
+      // raw XML/HTML) — byte-exact, same semantics as the in-set $.render.
       __importRender: async (spec, target, importCtx, _i, docData) =>
-        (await lookupImport(spec, docData)).render(target, importCtx),
+        (await lookupImport(spec, docData)).renderRaw(target, importCtx),
       __importFind: async (spec, query, _i, docData) => (await lookupImport(spec, docData)).find(query),
       __importFindOne: async (spec, query, _i, docData) => (await lookupImport(spec, docData)).findOne(query),
       __importResize: async (spec, record, options, _i, docData) =>

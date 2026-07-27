@@ -14,7 +14,7 @@ import { makePng } from './png-fixture.js';
 
 test('renderSite over memoryFsProvider builds a real site with zero disk I/O', async () => {
   const files = new Map([
-    ['index.mdy', '+++\n{% const body = $.render({ path: "hello.mdy" }, {}) %}\n{% $.emit("hello/index.html", "<html><body>" + body + "</body></html>") %}'],
+    ['main.mdy', '+++\n{% const body = $.render({ path: "hello.mdy" }, {}) %}\n{% $.emit("hello/index.html", "<html><body>" + body + "</body></html>") %}'],
     ['hello.mdy', 'title: Hello\n+++\nBuilt entirely in memory.'],
   ]);
   const fs = memoryFsProvider(files);
@@ -28,7 +28,7 @@ test('renderSite over memoryFsProvider builds a real site with zero disk I/O', a
 
 test('renderSite over memoryFsProvider: an edit is reflected on the next render (live-editing shape)', async () => {
   const files = new Map([
-    ['index.mdy', '+++\n{% const body = $.render({ path: "note.mdy" }, {}) %}\n{% $.emit("note/index.html", body) %}'],
+    ['main.mdy', '+++\n{% const body = $.render({ path: "note.mdy" }, {}) %}\n{% $.emit("note/index.html", body) %}'],
     ['note.mdy', 'title: Draft one\n+++\nfirst version'],
   ]);
   const fs = memoryFsProvider(files);
@@ -44,7 +44,7 @@ test('renderSite over memoryFsProvider: an edit is reflected on the next render 
 test('a script can $.find raw file records — static assets are queryable even though they are not renderable pages', async () => {
   const files = new Map([
     [
-      'index.mdy',
+      'main.mdy',
       '+++\n' +
         '{% const images = $.find({ ext: ".png" }) %}\n' +
         '{% const lines = images.map((f) => "asset: " + f.path + " (" + f.size + " bytes)").join("\\n") %}\n' +
@@ -64,7 +64,7 @@ test('a script can $.find raw file records — static assets are queryable even 
 test('a script can $.resize a raw image record — a real, correctly-sized thumbnail lands in binaryOutputs', async () => {
   const files = new Map([
     [
-      'index.mdy',
+      'main.mdy',
       '+++\n' +
         '{% const logo = $.findOne({ path: "static/logo.png" }) %}\n' +
         '{% const thumb = $.resize(logo, { width: 20 }) %}\n' +
@@ -97,7 +97,7 @@ test('an entry document can $.emit its own output files — a script defining a 
     ['posts/other.mdy', 'title: Other\ntags: [wasm]\n+++\nMore.'],
     ['posts/unrelated.mdy', 'title: Unrelated\ntags: [misc]\n+++\nSkip me.'],
     [
-      'index.mdy',
+      'main.mdy',
       '+++\n' +
         '{% const posts = $.find({}).filter((d) => d.path && d.path.indexOf("posts/") === 0) %}\n' +
         '{% const wasmPosts = posts.filter((p) => (p.tags || []).includes("wasm")) %}\n' +

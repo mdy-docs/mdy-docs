@@ -753,19 +753,19 @@ edubba's own build):
    fallback already uses — never read as text, safe for real binary
    content. Meta is *only* `{ path, name, ext, size, mtime }` — no
    section, no slug, no url, no kind.
-3. One designated document (`options.entry`, default `index.mdy`) is
+3. One designated document (`options.entry`, default `main.mdy`) is
    `.render()`ed once, with `onEmit` collecting everything it (or
    anything it `$.render`s) produces.
 
 Proven with a real site on real disk, not a synthetic fixture:
 [examples/scripted-blog](../examples/scripted-blog) — two real posts,
-one real layout, and `index.mdy` doing the *entire* interpretation:
+one real layout, and `main.mdy` doing the *entire* interpretation:
 finds documents whose `path` starts with `content/posts/`, derives
 `date`/`slug` from the filename via a regex literal, decides which
 layout wraps them, groups by `tags` into a plain object, and `$.emit`s
 both the posts and a tag index — verified via `test/script-site.test.js`
 running the actual example directory through `renderScriptSite`, not a
-mock. `index.mdy`'s own file-level prose explains the model for a human
+mock. `main.mdy`'s own file-level prose explains the model for a human
 reading the source, since — unlike edubba's own blog — the *interesting*
 code here is the thing being demonstrated, not incidental to a feature.
 
@@ -865,7 +865,7 @@ the retirement above stayed only for `--emit-js` (a debug path that compiles
 without rendering, so it can't reuse `renderScriptSite` itself).
 
 `renderSite`'s dispatch is a one-line question asked before anything else:
-does `root` have an entry document (`index.mdy`, or `options.entry`)? If so,
+does `root` have an entry document (`main.mdy`, or `options.entry`)? If so,
 render it as a script-defined site and return early — same `{ site, pages,
 layouts, outputs, binaryOutputs, theme, cache, stats }` shape either way, so
 `buildSite`/`serveSite` needed zero changes to work on either kind of site.
@@ -899,7 +899,7 @@ parity with the conventional version it replaced: 3 posts (2 `.mdy` + 1
 `.md`) + an about page (itself querying a `.yaml` data record) + tag pages
 + a tags index, a homepage, `404.html`, `feed.xml`, `sitemap.xml`,
 `robots.txt`, `search-index.json`, and a `$.resize`d image thumbnail — all
-of it decided by `examples/blog/index.mdy` alone (front matter as `site`
+of it decided by `examples/blog/main.mdy` alone (front matter as `site`
 config; date/slug/url derived from each `posts/*` filename or its own front
 matter; tag grouping via a plain object; RSS/sitemap/robots via their own
 small layout files, `layouts/{rss,sitemap,robots,404}.mdy`, replacing what
@@ -934,7 +934,7 @@ own `name: Ada Lovelace` field behind the file's basename identity instead
 — a non-mapping or unparseable YAML degrades to an identity-only record
 (a warning, not a build failure — a whole-directory walk can't assume
 every stray `.yaml` under the root is even meant to be a data record).
-`examples/blog/index.mdy` now includes `posts/2026-07-05-plain-markdown.md`
+`examples/blog/main.mdy` now includes `posts/2026-07-05-plain-markdown.md`
 in its post list (`raw.ext === '.md' ? raw.body : $.render(...)` — no
 `$.render` needed for a file that was never compiled) and `about.mdy`
 queries `author.yaml` directly, restoring the exact two demonstrations
@@ -951,7 +951,7 @@ conventional fixture (`vaultDir()`, a pattern the file already used
 elsewhere) since `openVault` itself is still real, load-bearing code for
 themed-blog/theme-mono, just no longer exercised via examples/blog.
 `web/main.js`'s playground (glob-seeded from examples/blog) needed its own
-updates: `pickInitialFile()` now opens `index.mdy` when present instead of
+updates: `pickInitialFile()` now opens `main.mdy` when present instead of
 assuming a `content/` prefix, the "new file" starter templates dropped the
 `content/`-specific one, and the file-level comment documents the "edit this
 page" button's new limitation (always disabled for a script-defined site,
@@ -1005,7 +1005,7 @@ tests (openVault's own extensive `.md`/`.yaml`/`kind:'file'`/sidecar
 coverage went with the function). `test/build.test.js` lost its
 `resolveLayout` test and entire theme block, and its `$.resize` fixture
 (previously a synthetic *conventional* site — `layouts/`+`content/`+
-`site.yaml`) became a synthetic script-defined one (a bare `index.mdy`
+`site.yaml`) became a synthetic script-defined one (a bare `main.mdy`
 calling `$.resize` and `$.emit`ting the result) — same property proved
 (a real, correctly-sized thumbnail lands in `binaryOutputs`, the source is
 untouched), different fixture shape. `test/serve.test.js` lost its themed-
@@ -1015,7 +1015,7 @@ browser playground's own foundation), surfaced only when the full suite
 ran: every one of its five tests used `kind:'file'`/`content/posts/`/
 `site.yaml` fixtures and failed outright once `renderSite` stopped
 recognizing them; rewritten as script-defined-site fixtures (a bare
-`index.mdy` per test, same properties proved — in-memory zero-disk-I/O
+`main.mdy` per test, same properties proved — in-memory zero-disk-I/O
 rendering, live-edit-reflected-on-next-render, raw-file `$.find`, `$.resize`,
 `$.emit`-driven aggregate pages) rather than deleted, since "renderSite
 works entirely in memory" is still exactly the property the playground
@@ -1037,7 +1037,7 @@ pipeline (above), on the reasoning that themes-as-a-concept needed host
 convention to exist. Asked directly whether importing should come back, the
 answer was narrower and better: not themes specifically, and not a host
 convention — a script importing another mdy project, the same way JS code
-imports a package, entirely from `index.mdy` itself:
+imports a package, entirely from `main.mdy` itself:
 
 ```
 {% import style from "../blog-style-x" %}
@@ -1124,7 +1124,7 @@ real disk build.
 shell — head/nav/search-widget/footer) plus `static/` (style.css,
 search.js, logo.png + its sidecar) — the "skin" — extracted out of
 `examples/blog`, which now imports it. Swapping styles is swapping which
-directory `index.mdy`'s one `import` line points at; nothing else in the
+directory `main.mdy`'s one `import` line points at; nothing else in the
 site's own content/URL/tag logic changes. `about.mdy` needed its own
 `{% import %}` too (imports aren't inherited — each document that wants
 one declares it) to reach `style.resize`/`style.findOne`/`style.render`

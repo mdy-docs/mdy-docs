@@ -3,7 +3,7 @@ import { renderScriptSite } from './script-site.js';
 
 /*
  * mdy build/serve — every site is a script-defined site: root has an entry
- * document (index.mdy by default, or options.entry) that decides
+ * document (main.mdy by default, or options.entry) that decides
  * everything itself — content conventions, URLs, layouts, output shape —
  * via $.find/$.render/$.emit (see script-site.js). renderSite, below, is
  * the thin "resolve root/entry, call renderScriptSite, reshape the result"
@@ -40,7 +40,7 @@ export function urlToOutFile(url) {
  * scratch; see script-site.js's own file-level comment), so `reused` is
  * always empty.
  *
- * Options: `entry` (default 'index.mdy'). `drafts`/`future` thread through
+ * Options: `entry` (default 'main.mdy'). `drafts`/`future` thread through
  * as plain context booleans for the entry script to interpret itself, not
  * filtered here — even lifecycle filtering is the script's own call.
  * `now` overrides build-time "today". `fs` is a fs-provider.js provider —
@@ -58,7 +58,7 @@ export function urlToOutFile(url) {
 export async function renderSite(root, options = {}) {
   if (!options.fs) root = (await import('node:path')).resolve(root);
   const fs = options.fs ?? nodeFsProvider();
-  const entry = options.entry ?? 'index.mdy';
+  const entry = options.entry ?? 'main.mdy';
 
   const { outputs, binaryOutputs, roots } = await renderScriptSite(root, {
     fs,

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import vm from 'node:vm';
 
 // The widget (examples/blog-style-x/static/search.js — imported by
-// examples/blog/index.mdy as its "style" package, see imports.js) is plain
+// examples/blog/main.mdy as its "style" package, see imports.js) is plain
 // browser JS with no bundler — it can't be imported as a module. This runs
 // the actual shipped source against a minimal fake DOM in node:vm, so the
 // test exercises the real file a browser would load, not a reimplementation

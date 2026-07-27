@@ -2,7 +2,7 @@
   "name": "vscode-mdy",
   "displayName": "mdy",
   "description": "Support for .mdy documents: syntax highlighting, folding, outline, and a live rendered preview. Markdown with YAML front matter and embedded {{ }} / {% %} JavaScript template tags.",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "private": true,
   "type": "module",
   "main": "./extension.cjs",

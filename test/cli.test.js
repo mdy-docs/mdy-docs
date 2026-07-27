@@ -12,7 +12,7 @@ const example = (name) => join(here, '..', 'examples', name);
 const exampleBlog = join(here, '..', 'examples', 'blog');
 const exampleBlogStyleX = join(here, '..', 'examples', 'blog-style-x');
 const workdir = () => mkdtempSync(join(tmpdir(), 'mdy-'));
-// blog/index.mdy imports "../blog-style-x" — copy it as a real sibling,
+// blog/main.mdy imports "../blog-style-x" — copy it as a real sibling,
 // not just blog itself, so a copied fixture resolves the same way the real
 // examples/ directory does.
 const site = () => {
@@ -52,7 +52,7 @@ test('reads stdin with "-" and writes stdout', () => {
 
 test('--html emits HTML on stdout from stdin', () => {
   const { stdout } = run(['-', '--html'], '# Hi {{ 2 * 3 }}');
-  assert.match(stdout, /<h1>Hi 6<\/h1>/);
+  assert.match(stdout, /<h1 id="[^"]*">Hi 6<\/h1>/);
 });
 
 test('-d supplies context; JSON values parse, bare stays a string', () => {
@@ -98,7 +98,7 @@ test('-o --html writes HTML to a file', () => {
 
   const { status } = run([src, '--html', '-o', out]);
   assert.equal(status, 0);
-  assert.match(readFileSync(out, 'utf8'), /<h1>Fibonacci<\/h1>/);
+  assert.match(readFileSync(out, 'utf8'), /<h1 id="[^"]*">Fibonacci<\/h1>/);
 });
 
 // --- warnings & guards ----------------------------------------------------
@@ -126,12 +126,12 @@ test('-o refuses to overwrite the input file', () => {
 
 test('a file input has no access to sibling files (unlike a directory input)', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\n{{ $.find({}).length }}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n{{ $.find({}).length }}');
   writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nirrelevant body');
 
-  const { status, stdout } = run([join(dir, 'index.mdy')]);
+  const { status, stdout } = run([join(dir, 'main.mdy')]);
   assert.equal(status, 0);
-  assert.equal(stdout.trim(), '1'); // just index.mdy's own (single) document
+  assert.equal(stdout.trim(), '1'); // just main.mdy's own (single) document
 });
 
 test('--emit-js prints the compiled function of every document in a file', () => {
@@ -197,22 +197,22 @@ test('stdin given more than once fails (a second positional)', () => {
   assert.match(stderr, /single input/);
 });
 
-// --- directory input: full scan, index.mdy (or --entry) as the entry -----
+// --- directory input: full scan, main.mdy (or --entry) as the entry -----
 
 test('a directory input is scanned in full; the entry\'s $.find reaches every file', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\n# Siblings\n{% for (const d of $.find({})) { %}\n- {{ d.path }}\n{% } %}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n# Siblings\n{% for (const d of $.find({})) { %}\n- {{ d.path }}\n{% } %}');
   writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nirrelevant body');
 
   const { status, stdout } = run([dir]);
   assert.equal(status, 0);
-  assert.match(stdout, /- index\.mdy/);
+  assert.match(stdout, /- main\.mdy/);
   assert.match(stdout, /- other\.mdy/);
 });
 
 test('a directory sibling that is not the entry is inserted with raw identity only', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}{{ o.name }}/{{ o.ext }}/{{ typeof o.title }}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}{{ o.name }}/{{ o.ext }}/{{ typeof o.title }}');
   writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nbody');
 
   const { stdout } = run([dir]);
@@ -221,7 +221,7 @@ test('a directory sibling that is not the entry is inserted with raw identity on
 
 test('--entry picks a different entry document', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\ndefault entry');
+  writeFileSync(join(dir, 'main.mdy'), '+++\ndefault entry');
   writeFileSync(join(dir, 'other.mdy'), '+++\nother entry');
 
   const { status, stdout } = run([dir, '--entry', 'other.mdy']);
@@ -231,7 +231,7 @@ test('--entry picks a different entry document', () => {
 
 test('--entry with a missing file fails clearly', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\nhi');
+  writeFileSync(join(dir, 'main.mdy'), '+++\nhi');
 
   const { status, stderr } = run([dir, '--entry', 'nope.mdy']);
   assert.equal(status, 1);
@@ -249,7 +249,7 @@ test('--entry is rejected for a file or stdin input', () => {
 
 test('--emit-js on a directory input compiles just the entry document', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\nhi {{ x }}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\nhi {{ x }}');
   writeFileSync(join(dir, 'other.mdy'), '+++\nother {{ y }}');
 
   const { status, stdout } = run([dir, '--emit-js']);
@@ -260,7 +260,7 @@ test('--emit-js on a directory input compiles just the entry document', () => {
 
 test('-o refuses to overwrite a directory input', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\nhi');
+  writeFileSync(join(dir, 'main.mdy'), '+++\nhi');
 
   const { status, stderr } = run([dir, '-o', dir]);
   assert.equal(status, 1);
@@ -333,7 +333,7 @@ test('--watch rejects stdin input', () => {
 test('--watch on a directory re-renders when ANY file under it changes', async () => {
   const dir = workdir();
   const out = join(dir, 'out.md');
-  writeFileSync(join(dir, 'index.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}other says {{ o.text }}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}other says {{ o.text }}');
   writeFileSync(join(dir, 'other.mdy'), 'text: hi\n+++\n');
 
   const child = spawn('node', [bin, dir, '-o', out, '--watch']);
@@ -375,7 +375,7 @@ test('mdy build excludes drafts unless --drafts is given', () => {
 
 test('mdy build --entry picks a different entry document', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'index.mdy'), '+++\n{% $.emit("index.html", "default entry") %}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n{% $.emit("index.html", "default entry") %}');
   writeFileSync(join(dir, 'other.mdy'), '+++\n{% $.emit("index.html", "other entry") %}');
   const { status } = runIn(['build', '.', '--entry', 'other.mdy'], dir);
   assert.equal(status, 0);

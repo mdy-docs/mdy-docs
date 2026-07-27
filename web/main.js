@@ -6,7 +6,7 @@
 //
 // Every site is a SCRIPT-DEFINED site (the conventional content/layouts/
 // site.yaml pipeline was removed — see docs/site-plan.md's "Toward a
-// script-defined site"): the seed (examples/blog) is one index.mdy entry
+// script-defined site"): the seed (examples/blog) is one main.mdy entry
 // document deciding everything itself — which files are "posts", what URL/
 // layout each gets, tags, feed/sitemap/robots, even the search index — via
 // $.find/$.render/$.emit (plus $.resize/$.tokenize/$.rfc822/$.markdown; see
@@ -34,7 +34,7 @@ import { renderSite, memoryFsProvider, opfsFsProvider } from '../index.js';
 // Seed the in-memory site from examples/blog — every file, eagerly.
 // import.meta.glob keys are paths relative to this file; strip the leading
 // '../examples/blog/' to get vault-relative paths ("posts/hello.mdy",
-// "layouts/base.mdy", "index.mdy", …).
+// "layouts/base.mdy", "main.mdy", …).
 //
 // Two passes, not one: `?raw` decodes as UTF-8 text, which is correct for
 // every document/config file but would silently corrupt a real binary file
@@ -59,7 +59,7 @@ const binarySeedUrls = import.meta.glob('../examples/blog/**/*.{png,jpg,jpeg,gif
   import: 'default',
 });
 
-// examples/blog/index.mdy imports "../blog-style-x" (src/site/imports.js) —
+// examples/blog/main.mdy imports "../blog-style-x" (src/site/imports.js) —
 // seeded into this SAME in-memory vault, under a "blog-style-x/" prefix:
 // memoryFsProvider treats any non-'/' root as a namespace prefix into its
 // one flat Map (see fs-provider.js), so resolving that relative import
@@ -210,11 +210,11 @@ const newFileForm = $id('new-file-form');
 const newFilePath = $id('new-file-path');
 
 function pickInitialFile() {
-  // A script-defined site's own entry point (index.mdy) is the whole
+  // A script-defined site's own entry point (main.mdy) is the whole
   // definition of the site — the natural first thing to look at. Falls
   // back to the first file alphabetically for a conventional site (no
-  // index.mdy at the root) or any other layout.
-  if (files.has('index.mdy')) return 'index.mdy';
+  // main.mdy at the root) or any other layout.
+  if (files.has('main.mdy')) return 'main.mdy';
   return [...files.keys()].sort()[0];
 }
 

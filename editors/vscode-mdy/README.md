@@ -40,7 +40,7 @@ full-size in the editor's own group (`mdy: Open Preview`,
 preview offers. Either way it shows exactly what
 `mdy <file> --html` prints: the file's own `---`-split documents form a
 set, the FIRST document is the entry, and its output renders through the
-same markdown-it configuration. Like the CLI's file input, the file
+same rendering pipeline. Like the CLI's file input, the file
 renders alone — no site walk, no access to sibling files. Templates run
 in the engine's usual wasm sandbox, so re-rendering on every keystroke
 (debounced, like `--watch`) is safe.

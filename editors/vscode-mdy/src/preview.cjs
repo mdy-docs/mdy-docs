@@ -8,8 +8,8 @@
  *
  * The preview shows exactly what `mdy <file> --html` prints: the file's
  * own `---`-split documents form a set, the FIRST document is the entry,
- * and its generated markdown goes through the same markdown-it
- * configuration (createProcessor). Like the CLI's file input, the file
+ * and its generated markdown goes through the same rendering pipeline
+ * (createProcessor). Like the CLI's file input, the file
  * renders alone — no site walk, no access to sibling files.
  *
  * The engine loads from one of two places, workspace first:
@@ -83,7 +83,11 @@ async function renderPreview(engine, text, context = {}) {
     onEmit: ({ path }) => emittedPaths.push(path),
   });
   const markdown = await set.render(0, context);
-  return { html: engine.createProcessor().md.render(markdown), emittedPaths };
+  // renderMarkdown is the unified-based engine's markdown→HTML; `.md.render`
+  // keeps a workspace-resolved older (markdown-it-based) engine previewing.
+  const proc = engine.createProcessor();
+  const html = proc.renderMarkdown ? await proc.renderMarkdown(markdown) : proc.md.render(markdown);
+  return { html, emittedPaths };
 }
 
 /** Minimal HTML text escaping for error messages and notes. */

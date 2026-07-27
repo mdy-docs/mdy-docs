@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
+    "example:express": "node examples/express/server.mjs",
     "web": "vite",
     "web:build": "vite build",
     "web:preview": "vite preview"
@@ -36,9 +37,16 @@
     "@mdy-docs/nisaba-db": "file:third_party/nisaba-db",
     "image-size": "^2.0.2",
     "js-yaml": "^5.2.1",
-    "markdown-it": "^14.3.0"
+    "rehype-raw": "^7.0.0",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "remark-stringify": "^11.0.0",
+    "unified": "^11.0.5"
   },
   "devDependencies": {
+    "express": "^5.2.1",
     "playwright": "^1.61.1",
     "vite": "^7.3.6"
   }

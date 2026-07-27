@@ -20,11 +20,11 @@ test('urlToOutFile: pretty URLs land on index.html', () => {
   assert.equal(urlToOutFile('/posts/hello/'), 'posts/hello/index.html');
 });
 
-// --- building the example blog: a script-defined site (index.mdy) — every
+// --- building the example blog: a script-defined site (main.mdy) — every
 // site is one now (the conventional content/layouts/site.yaml pipeline was
 // removed; see docs/site-plan.md's "Toward a script-defined site"). Every
 // one of these tests exercises renderSite's dispatch to renderScriptSite
-// (src/site/build.js). See examples/blog/index.mdy itself for the site's
+// (src/site/build.js). See examples/blog/main.mdy itself for the site's
 // whole definition. --------------------------------------------------------
 
 const outDir = await mkdtemp(join(tmpdir(), 'mdy-test-'));
@@ -97,14 +97,14 @@ test('a post renders through post layout and base shell', async () => {
   const html = await page('posts/hello/index.html');
   assert.match(html, /<!doctype html>/);
   assert.match(html, /<title>Hello world — Tablet House<\/title>/);
-  assert.match(html, /<h1>Hello world<\/h1>/);
+  assert.match(html, /<h1 id="[^"]*">Hello world<\/h1>/);
   assert.match(html, /<em>2026-07-18<\/em>/); // post layout's *{{ date }}*, from front matter, not the filename
   assert.match(html, /tablet house is open/);
 });
 
-test("index.mdy's own $.render-computed `related` surfaces posts sharing a tag, excluding itself", async () => {
+test("main.mdy's own $.render-computed `related` surfaces posts sharing a tag, excluding itself", async () => {
   // diggings and hello both carry #writing — related is computed by the
-  // script itself (index.mdy), passed into layouts/post.mdy as context,
+  // script itself (main.mdy), passed into layouts/post.mdy as context,
   // not a $.find the layout runs itself (script mode has no kind/section
   // convention for a layout to query against).
   const diggings = await page('posts/diggings/index.html');
@@ -128,7 +128,7 @@ test('the homepage lists posts newest-first via the list layout', async () => {
 
 test('the about page uses the page layout, and its own $.resize/$.render calls work', async () => {
   const html = await page('about/index.html');
-  assert.match(html, /<h1>About<\/h1>/);
+  assert.match(html, /<h1 id="[^"]*">About<\/h1>/);
   assert.match(html, /<strong>mdy-docs<\/strong>/);
   assert.match(html, /<img src="\/logo-120x84\.png" alt="A stylized clay tablet">/);
   assert.match(html, /CC0-1\.0 — generated for this example/); // its static/logo.png.mdy sidecar, $.render'd directly
@@ -194,7 +194,7 @@ test('drafts are excluded by default and included with { drafts: true }', async 
   after(() => rm(draftsDir, { recursive: true, force: true }));
   await buildSite(exampleBlog, { outDir: draftsDir, drafts: true });
   const html = await readFile(join(draftsDir, 'posts/clay-tablets/index.html'), 'utf8');
-  assert.match(html, /<h1>Clay tablets<\/h1>/);
+  assert.match(html, /<h1 id="[^"]*">Clay tablets<\/h1>/);
 });
 
 test('future-dated pages are excluded relative to `now`', async () => {
@@ -209,7 +209,7 @@ test('--entry picks a different entry document', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'mdy-entry-'));
   after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'index.mdy'), '+++\n{% $.emit("index.html", "default entry") %}');
+  await writeFile(join(dir, 'main.mdy'), '+++\n{% $.emit("index.html", "default entry") %}');
   await writeFile(join(dir, 'other.mdy'), '+++\n{% $.emit("index.html", "other entry") %}');
 
   const built = await buildSite(dir, { outDir: join(dir, 'out'), entry: 'other.mdy' });
@@ -227,7 +227,7 @@ test('buildSite: onSource fires once per ingested file, onWrite once per file ac
   after(() => rm(outDir, { recursive: true, force: true }));
 
   await mkdir(join(dir, 'static'), { recursive: true });
-  await writeFile(join(dir, 'index.mdy'), '+++\n{% $.emit("index.html", "hi") %}');
+  await writeFile(join(dir, 'main.mdy'), '+++\n{% $.emit("index.html", "hi") %}');
   await writeFile(join(dir, 'static', 'style.css'), 'body{}');
 
   const sources = [];
@@ -239,7 +239,7 @@ test('buildSite: onSource fires once per ingested file, onWrite once per file ac
   });
 
   assert.equal(built.pages, 1);
-  assert.deepEqual(sources.sort(), ['index.mdy', 'static/style.css']);
+  assert.deepEqual(sources.sort(), ['main.mdy', 'static/style.css']);
   assert.deepEqual(writes.sort(), ['index.html', 'style.css']);
 });
 
@@ -284,9 +284,9 @@ test('the example blog ships a working search widget wired to the index', async 
 // (see src/vault.js's walkRawSources — the file FORMAT's own interpretation,
 // same reasoning as .mdy's front matter, not a site-building convention)
 
-test('.md: renders with no template interpolation of its own body, wrapped by index.mdy exactly like an .mdy post', async () => {
+test('.md: renders with no template interpolation of its own body, wrapped by main.mdy exactly like an .mdy post', async () => {
   const html = await page('posts/plain-markdown/index.html');
-  assert.match(html, /<h1>Plain markdown<\/h1>/); // title: humanized from the filename (no front matter at all)
+  assert.match(html, /<h1 id="[^"]*">Plain markdown<\/h1>/); // title: humanized from the filename (no front matter at all)
   assert.match(html, /<em>2026-07-05<\/em>/); // date: from the filename prefix (no front matter to override it)
   // The body went through untouched: a bare --- didn't split the document,
   // and {{ }}/{% %} rendered as literal text, not tags — because
@@ -319,7 +319,7 @@ test('buildSite: a template $.resize call writes a real, correctly-sized image f
 
   await mkdir(join(root, 'static'), { recursive: true });
   await writeFile(
-    join(root, 'index.mdy'),
+    join(root, 'main.mdy'),
     '+++\n' +
       '{% const logo = $.findOne({ path: "static/logo.png" }) %}\n' +
       '{% const thumb = $.resize(logo, { width: 20 }) %}\n' +

@@ -1,0 +1,27 @@
+layout: home
+
+hero:
+  name: lamassu-js
+  text: A JavaScript subset, sandboxed
+  tagline: A strict, safe JavaScript-subset engine written in C, compiled to WebAssembly — for running untrusted scripts inside a web-framework templating language.
+  actions:
+    - theme: brand
+      text: Read the Guide
+      link: /guide/
+    - theme: alt
+      text: API Reference
+      link: /api/
+    - theme: alt
+      text: Try it live
+      link: https://mdy-docs.github.io/lamassu-js/
+
+features:
+  - title: Sandboxed by construction
+    details: WebAssembly linear memory is the trust boundary. Bounded CPU (fuel metering), bounded memory, and bounded stack depth make it safe to run scripts you didn't write.
+  - title: Compile once, run repeatedly
+    details: Source compiles to a versioned, validated bytecode format. Cache it, ship it, run it — the validating loader treats bytecode as hostile input, never as trusted state.
+  - title: Real async, two ways
+    details: Guest-level await of a native-returned promise for ordinary host calls, and a synchronous-looking __hostcall for embedders who'd rather not thread await through guest code.
+  - title: Small, deliberate subset
+    details: let/const only, strict mode only, no classes/eval/Function constructor. Every omission is a design decision, documented — not a missing feature.
++++

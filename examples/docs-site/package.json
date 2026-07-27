@@ -1,0 +1,11 @@
+{
+  "name": "@mdy-docs/lamassu-docs-mdy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The lamassu-js documentation site rebuilt as an mdy script-defined site — same markdown content as ../docs-site, no VitePress.",
+  "scripts": {
+    "dev": "node ../../bin/mdy.js serve .",
+    "build": "node ../../bin/mdy.js build . --out dist"
+  }
+}

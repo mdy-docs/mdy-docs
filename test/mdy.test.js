@@ -19,7 +19,6 @@ import {
   render,
   renderToMarkdown,
   createProcessor,
-  MarkdownIt,
 } from '../index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -316,7 +315,7 @@ test('hashtags example: entry composes the docs tagged #fred', async () => {
 
 test('roster example: front matter drives the template, yaml block survives', async () => {
   const html = await render(example('roster.mdy'));
-  assert.match(html, /<h1>Team Roster<\/h1>/);
+  assert.match(html, /<h1 id="[^"]*">Team Roster<\/h1>/);
   assert.match(html, /Ada Lovelace/);
   assert.match(html, /team lead/);
   assert.match(html, /2 of 3 are team leads/);
@@ -339,13 +338,21 @@ test('shared-scope example computes across tags', async () => {
   assert.match(out, /sum is 12/);
 });
 
-test('createProcessor accepts a custom markdown-it (highlight hook)', async () => {
-  const custom = new MarkdownIt({
-    highlight: (code) => `<HL>${code.trim()}</HL>`,
-  });
-  const { render: r } = createProcessor({ md: custom });
+test('createProcessor accepts custom rehype plugins (highlight hook)', async () => {
+  // A stand-in for a real highlighter: wrap fenced code text in <mark>.
+  const highlight = () => (tree) => {
+    const visit = (node) => {
+      if (node.tagName === 'code' && node.properties?.className?.includes('language-yaml')) {
+        node.children = [{ type: 'element', tagName: 'mark', properties: {}, children: node.children }];
+        return;
+      }
+      for (const child of node.children ?? []) visit(child);
+    };
+    visit(tree);
+  };
+  const { render: r } = createProcessor({ rehypePlugins: [highlight] });
   const html = await r('```yaml\nk: v\n```');
-  assert.match(html, /<HL>k: v<\/HL>/);
+  assert.match(html, /<code class="language-yaml"><mark>k: v\s*<\/mark>/);
 });
 
 test('extraContext is available to the template and overrides data', async () => {
@@ -388,7 +395,7 @@ test('$.find supports MongoDB query operators', async () => {
     '---', 'name: Alice', 'age: 30', '+++',
     '---', 'name: Bob', 'age: 41', '+++',
   ].join('\n');
-  assert.equal((await renderDocumentSet(src)).trim(), '[Bob]');
+  assert.equal((await renderDocumentSet(src)).trim(), '\\[Bob]'); // normalized markdown escapes the literal bracket
 });
 
 test('$.findOne returns the first match or null', async () => {
@@ -472,9 +479,9 @@ test('entry index selects which document renders', async () => {
 
 test('document-set example: entry composes cards over members by query', async () => {
   const html = await render(example('document-set.mdy'));
-  assert.match(html, /<h1>Team Roster<\/h1>/);
-  assert.match(html, /<h3>Alice<\/h3>/);
-  assert.match(html, /<h3>Bob<\/h3>/);
+  assert.match(html, /<h1 id="[^"]*">Team Roster<\/h1>/);
+  assert.match(html, /<h3 id="[^"]*">Alice<\/h3>/);
+  assert.match(html, /<h3 id="[^"]*">Bob<\/h3>/);
   assert.match(html, /go, rust/);
 });
 
@@ -563,7 +570,7 @@ test('meta fields are queryable and visible in templates', async () => {
     { text: '{% for (const p of $.find({ section: "posts" })) { %}{{ p.title }}@{{ p.path }};{% } %}' },
     { text: 'title: One\n+++\n---\ntitle: Two\n+++\n', meta: { section: 'posts', path: 'p.mdy' } },
   ]);
-  assert.equal(out.trim(), 'One@p.mdy;Two@p.mdy;');
+  assert.equal(out.trim(), '<One@p.mdy>;<Two@p.mdy>;'); // normalization makes the email-shaped autolinks explicit
 });
 
 // --- openDocumentSet ------------------------------------------------------
@@ -614,7 +621,141 @@ test('openDocumentSet: templates can still $.find and $.render inside the VM', a
     'card: true\n+++\n[{{ n }}]',
     'n: 1\n+++\n---\nn: 2\n+++\n',
   ]);
-  assert.equal((await set.render(0)).replace(/\s+/g, ''), '[1][2]');
+  assert.equal((await set.render(0)).replace(/\s+/g, ''), '\\[1]\\[2]'); // normalized markdown escapes reference-link lookalikes
+});
+
+// --- $.parse / $.stringify --------------------------------------------------
+
+test('$.parse gives the template an mdast tree it can walk', async () => {
+  const out = await renderToMarkdown(
+    '{% const tree = $.parse("# Title\\n\\nSome text") %}' +
+      '{{ tree.children[0].type }}/{{ tree.children[0].depth }}/{{ tree.children[0].children[0].value }}'
+  );
+  assert.equal(out.trim(), 'heading/1/Title');
+});
+
+test('$.parse speaks the render pipeline dialect: GFM tables parse as tables', async () => {
+  const out = await renderToMarkdown(
+    '{% const tree = $.parse("| a | b |\\n| - | - |\\n| 1 | 2 |") %}{{ tree.children[0].type }}'
+  );
+  assert.equal(out.trim(), 'table');
+});
+
+test('$.stringify turns a hand-built mdast node back into markdown', async () => {
+  const out = await renderToMarkdown(
+    '{{ $.stringify({ type: "heading", depth: 2, children: [{ type: "text", value: "Built" }] }) }}'
+  );
+  assert.match(out, /## Built/);
+});
+
+test('$.parse → $.stringify round-trips a document', async () => {
+  const out = await renderToMarkdown('{{ $.stringify($.parse("# Hi\\n\\n- one\\n- two")) }}');
+  assert.match(out, /# Hi/);
+  assert.match(out, /[-*] one/);
+  assert.match(out, /[-*] two/);
+});
+
+test('a template can build a TOC from another document\'s rendered headings', async () => {
+  const src = [
+    [
+      '{% const tree = $.parse($.render(1)) %}',
+      '{% for (const n of tree.children) { if (n.type === "heading") { %}',
+      '- {{ n.children.map((c) => c.value).join("") }} (h{{ n.depth }})',
+      '{% } } %}',
+    ].join('\n'),
+    '# Alpha\n\ntext\n\n## Beta\n\nmore text\n\n## {{ "Gam" + "ma" }}',
+  ];
+  const out = await renderToMarkdown(src);
+  const lines = out.trim().split('\n');
+  assert.deepEqual(lines, ['- Alpha (h1)', '- Beta (h2)', '- Gamma (h2)']);
+});
+
+test('$.stringify on a non-node is a template error, not an engine crash', async () => {
+  await assert.rejects(renderToMarkdown('{{ $.stringify(null) }}'), /expects an mdast node/);
+});
+
+// --- $.transform / $.toc ----------------------------------------------------
+
+test('$.transform mutates the final tree in place (unified convention: return nothing)', async () => {
+  const src = [
+    '{% $.transform = (tree) => { %}',
+    '{%   for (const n of tree.children) { %}',
+    '{%     if (n.type === "heading") n.children = [{ type: "text", value: "REPLACED" }] %}',
+    '{%   } %}',
+    '{% } %}',
+    '# Original',
+    '',
+    'Body text.',
+  ].join('\n');
+  const md = await renderToMarkdown(src);
+  assert.match(md, /# REPLACED/);
+  assert.match(md, /Body text\./);
+  const html = await render(src);
+  assert.match(html, /<h1[^>]*>REPLACED<\/h1>/);
+});
+
+test('$.transform may return a whole new tree', async () => {
+  const src =
+    '{% $.transform = () => ({ type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: "swapped" }] }] }) %}anything';
+  assert.equal((await renderToMarkdown(src)).trim(), 'swapped');
+});
+
+test('$.transform returning a non-node is a template error', async () => {
+  await assert.rejects(
+    renderToMarkdown('{% $.transform = () => 42 %}x'),
+    /must return an mdast node/
+  );
+});
+
+test('a transformed document embeds into another via $.render as markdown', async () => {
+  const set = await openDocumentSet([
+    'before / {{ $.render(1) }} / after',
+    '{% $.transform = (tree) => { tree.children.push({ type: "paragraph", children: [{ type: "text", value: "appended" }] }) } %}inner',
+  ]);
+  const out = await set.render(0);
+  assert.match(out, /before \/ inner\s+appended\s+\/ after/);
+});
+
+test('{{ $.toc() }} resolves to a link list of the document\'s own headings, including generated ones', async () => {
+  const src = [
+    '{{ $.toc() }}',
+    '',
+    '# Intro',
+    '',
+    'text',
+    '',
+    '## Details',
+    '',
+    '## {{ "Gener" + "ated" }}',
+  ].join('\n');
+  const md = await renderToMarkdown(src);
+  assert.match(md, /\[Intro\]\(#intro\)/);
+  assert.match(md, /\[Details\]\(#details\)/);
+  assert.match(md, /\[Generated\]\(#generated\)/);
+  // nested: h2 entries sit in a sub-list under the h1 entry
+  assert.match(md, /^ +- \[Details\]/m);
+});
+
+test('$.toc() anchors land: rendered HTML gives headings matching GitHub-style ids', async () => {
+  const html = await render('{{ $.toc() }}\n\n# One Two\n\n## One Two');
+  assert.match(html, /<h1 id="one-two">One Two<\/h1>/);
+  assert.match(html, /<h2 id="one-two-1">One Two<\/h2>/); // duplicate deduped
+  assert.match(html, /<a href="#one-two">One Two<\/a>/);
+  assert.match(html, /<a href="#one-two-1">One Two<\/a>/);
+});
+
+test('$.toc(target) returns plain entries for the template to render itself', async () => {
+  const src = [
+    '{% const entries = $.toc($.render(1)) %}{% for (const e of entries) { %}{{ e.depth }}:{{ e.text }}:{{ e.slug }};{% } %}',
+    '# Alpha\n\n## Beta Gamma',
+  ];
+  const out = await renderToMarkdown(src);
+  assert.equal(out.trim(), '1:Alpha:alpha;2:Beta Gamma:beta-gamma;');
+});
+
+test('$.toc() with no headings just removes the placeholder', async () => {
+  const md = await renderToMarkdown('{{ $.toc() }}\n\njust a paragraph');
+  assert.equal(md.trim(), 'just a paragraph');
 });
 
 // --- openDocumentSet: onQuery -----------------------------------------------
@@ -726,7 +867,7 @@ test('natives: coexist with find/findOne/render — no interference either direc
   const set = await openDocumentSet(['{{ $.tag($.findOne({ n: 1 }).n) }}', 'n: 1\n+++\n'], {
     natives: { tag: (n) => `#${n}` },
   });
-  assert.equal((await set.render(0)).trim(), '#1');
+  assert.equal((await set.render(0)).trim(), '\\#1'); // normalized markdown escapes a line-leading #
 });
 
 test('natives: an invalid native name rejects with a clear error rather than a broken program', async () => {

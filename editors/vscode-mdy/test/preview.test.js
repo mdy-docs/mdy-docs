@@ -33,7 +33,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 test('renders the entry document: front matter feeds {{ }} tags, markdown becomes HTML', async () => {
   const { html, emittedPaths } = await renderPreview(engine, 'title: Hello\n+++\n# {{ title }}\n');
-  assert.match(html, /<h1>Hello<\/h1>/);
+  assert.match(html, /<h1 id="[^"]*">Hello<\/h1>/);
   assert.deepEqual(emittedPaths, []);
 });
 
@@ -57,7 +57,7 @@ test('multi-document files render document 0 as the entry, with $.find reaching 
 
 test('extra context overrides front matter, like the CLI -d flag', async () => {
   const { html } = await renderPreview(engine, 'title: Hello\n+++\n# {{ title }}\n', { title: 'Override' });
-  assert.match(html, /<h1>Override<\/h1>/);
+  assert.match(html, /<h1 id="[^"]*">Override<\/h1>/);
 });
 
 test('$.emit output is collected, not lost', async () => {
@@ -75,7 +75,7 @@ test('the BUNDLED engine (dist/, built by pretest) renders standalone — sandbo
   const bundled = await import('../dist/mdy-engine.mjs');
   const source = 'title: Bundled\n+++\n# {{ title }}\n\n{% for (const d of $.find({})) { %}- {{ d.title }}\n{% } %}';
   const { html } = await renderPreview(bundled, source);
-  assert.match(html, /<h1>Bundled<\/h1>/); // lamassu.wasm ran the template
+  assert.match(html, /<h1 id="[^"]*">Bundled<\/h1>/); // lamassu.wasm ran the template
   assert.match(html, /<li>Bundled<\/li>/); // nisaba.wasm answered $.find
 });
 
