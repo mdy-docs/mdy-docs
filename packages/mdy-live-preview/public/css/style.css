@@ -57,6 +57,12 @@ header a:hover {
   text-decoration: underline;
 }
 
+/* github-markdown-css relies on GitHub's mr-2 utility (absent here) to space
+   the alert-title octicon from its text — supply the 8px gap ourselves. */
+.markdown-body .markdown-alert .markdown-alert-title .octicon {
+  margin-right: 8px;
+}
+
 #menu-items {
     display: flex;
 }
@@ -66,10 +72,6 @@ header a:hover {
 }
 
 #copy-button {
-    margin-left: 16px;
-}
-
-#export-button {
     margin-left: 16px;
 }
 
@@ -101,25 +103,12 @@ header input[type="checkbox"] {
   width: 16px;
 }
 
-footer {
-  padding: 8px;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  background-color: #fff;
-  color: #fff;
-  text-align: center;
-  justify-content: center;
-  align-items: center;
-}
-
 #container {
   flex-grow: 1;
   overflow: hidden;
   width: 100%;
   margin: 0 auto;
   background-color: #fff;
-  border-bottom: 1px solid #e8e8e8;
   display: flex;
 }
 
@@ -227,8 +216,4 @@ footer {
 
 [data-theme="dark"] .split-divider.active {
   background: #768390;
-}
-
-[data-theme="dark"] footer {
-  background-color: #333;
 }

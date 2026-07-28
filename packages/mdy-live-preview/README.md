@@ -19,7 +19,7 @@ npm run build      # production bundle → dist/
 
 Also in the box: mermaid fences rendered as diagrams, dark mode (editor,
 preview css, and diagrams switch together), sync-scroll, draggable split,
-copy, PDF export, and content persistence in localStorage.
+copy, and content persistence in localStorage.
 
 Based on [mdy-docs/mdy-live-preview](https://github.com/mdy-docs/mdy-live-preview)
 (itself a fork of [tanabe/markdown-live-preview](https://github.com/tanabe/markdown-live-preview),
@@ -27,8 +27,7 @@ see [LICENSE](LICENSE)), ported to the current engine: `mdy-docs` is a
 `file:` link to this repo, `render()` is async and raced by version so a
 fast typist can't outrun it, and mermaid fences are lifted from the
 engine's ordinary code-block output after sanitization. Monaco is loaded
-from a CDN (as upstream does) and html2pdf from a CDN `<script>` — the rest
-is bundled locally by Vite.
+from a CDN (as upstream does) — the rest is bundled locally by Vite.
 
 Monaco's tokenization comes from the
 [vscode-mdy](../editors/vscode-mdy) extension's own `mdy.tmLanguage.json`

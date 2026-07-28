@@ -904,6 +904,20 @@ test('{{ $.toc() }} resolves to a link list of the document\'s own headings, inc
   assert.match(md, /^ +- \[Details\]/m);
 });
 
+test('> [!WARNING] blockquotes render as GitHub alert boxes', async () => {
+  const html = await render('> [!WARNING]\n> Careful **here**.');
+  assert.match(html, /class="markdown-alert markdown-alert-warning"/);
+  assert.match(html, /markdown-alert-title/);
+  assert.match(html, /Careful <strong>here<\/strong>/);
+});
+
+test('alerts are an HTML-side transform only: $.parse still sees a plain blockquote', async () => {
+  const out = await renderToMarkdown(
+    '{% const tree = $.parse("> [!NOTE]\\n> hi") %}{{ tree.children[0].type }}'
+  );
+  assert.equal(out.trim(), 'blockquote');
+});
+
 test('$.toc() anchors land: rendered HTML gives headings matching GitHub-style ids', async () => {
   const html = await render('{{ $.toc() }}\n\n# One Two\n\n## One Two');
   assert.match(html, /<h1 id="one-two">One Two<\/h1>/);

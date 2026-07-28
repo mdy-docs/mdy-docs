@@ -2,6 +2,7 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkRehype from 'remark-rehype';
+import { remarkAlert } from 'remark-github-blockquote-alert';
 import remarkStringify from 'remark-stringify';
 import rehypeRaw from 'rehype-raw';
 import rehypeStringify from 'rehype-stringify';
@@ -1081,12 +1082,14 @@ const rehypeHeadingIds = () => (tree) => {
 /**
  * Create a processor bound to a configured unified (remark → rehype) pipeline.
  *
- * The base chain is remark-parse → remark-gfm → remark-rehype → rehype-raw →
- * heading ids → rehype-stringify: GFM covers the old `linkify` behavior
- * (autolink literals, plus tables/strikethrough templates commonly generate),
- * rehype-raw preserves raw HTML in documents (the old `html: true`), and
- * every heading gets a GitHub-style `id` so `$.toc()` links (or any deep
- * link) land.
+ * The base chain is remark-parse → remark-gfm → github alerts →
+ * remark-rehype → rehype-raw → heading ids → rehype-stringify: GFM covers
+ * the old `linkify` behavior (autolink literals, plus tables/strikethrough
+ * templates commonly generate), `> [!NOTE]`-style blockquotes become
+ * GitHub alert boxes (`.markdown-alert-*` markup, an HTML-side transform
+ * only — $.parse still sees them as plain blockquotes), rehype-raw
+ * preserves raw HTML in documents (the old `html: true`), and every heading
+ * gets a GitHub-style `id` so `$.toc()` links (or any deep link) land.
  *
  * @param {object} [options]
  * @param {Array} [options.remarkPlugins] plugins run on the markdown (mdast)
@@ -1100,6 +1103,7 @@ export function createProcessor(options = {}) {
   const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
+    .use(remarkAlert)
     .use(options.remarkPlugins ?? [])
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)

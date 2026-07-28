@@ -372,105 +372,6 @@ skills: [go, rust]
         }, 1000)
     };
 
-    // ----- export preview -----
-
-    let exportLightCssPromise = null;
-
-    let getLightMarkdownCss = () => {
-        if (exportLightCssPromise) {
-            return exportLightCssPromise;
-        }
-
-        exportLightCssPromise = fetch(PREVIEW_CSS_LIGHT)
-            .then((response) => {
-                if (!response.ok) {
-                    throw new Error(`Failed to load export CSS: ${response.status}`);
-                }
-                return response.text();
-            })
-            .catch((error) => {
-                console.error('Failed to load light markdown CSS', error);
-                return '';
-            });
-
-        return exportLightCssPromise;
-    };
-
-    let exportPreviewToPdf = () => {
-        const previewElement = document.querySelector('#preview-wrapper');
-        if (!previewElement) {
-            return;
-        }
-
-        if (typeof window.html2pdf !== 'function') {
-            window.alert('PDF export is not available yet. Please try again in a moment.');
-            return;
-        }
-
-        const restoreDarkMermaid = getMermaidTheme() === 'dark';
-
-        renderMermaidDiagrams('default').then(() => getLightMarkdownCss()).then((lightCss) => {
-            const options = {
-                margin: 10,
-                filename: 'mdy-preview.pdf',
-                image: { type: 'jpeg', quality: 0.98 },
-                html2canvas: {
-                    scale: 2,
-                    useCORS: true,
-                    onclone: (clonedDoc) => {
-                        clonedDoc.documentElement.setAttribute('data-theme', 'light');
-
-                        const markdownLink = clonedDoc.getElementById('gh-markdown-link');
-                        if (markdownLink) {
-                            markdownLink.setAttribute('href', PREVIEW_CSS_LIGHT);
-                        }
-
-                        if (lightCss) {
-                            const style = clonedDoc.createElement('style');
-                            style.id = 'export-light-css';
-                            style.textContent = `${lightCss}
-#preview-wrapper, #output, body {
-  background: #fff !important;
-  color: #24292f !important;
-}`;
-                            clonedDoc.head.appendChild(style);
-                        }
-
-                        const clonedPreview = clonedDoc.getElementById('preview-wrapper');
-                        if (clonedPreview) {
-                            clonedPreview.style.background = '#fff';
-                            clonedPreview.style.color = '#24292f';
-                            clonedPreview.style.width = '190mm';
-                            clonedPreview.style.maxWidth = '190mm';
-                        }
-
-                        const clonedOutput = clonedDoc.getElementById('output');
-                        if (clonedOutput) {
-                            clonedOutput.style.background = '#fff';
-                            clonedOutput.style.color = '#24292f';
-                            clonedOutput.style.width = '190mm';
-                            clonedOutput.style.maxWidth = '190mm';
-                        }
-                    }
-                },
-                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-            };
-
-            window.html2pdf()
-                .set(options)
-                .from(previewElement)
-                .save()
-                .catch((error) => {
-                    console.error('Failed to export PDF', error);
-                })
-                .finally(() => {
-                    if (restoreDarkMermaid) {
-                        renderMermaidDiagrams();
-                    }
-                });
-        });
-    };
-
     // ----- setup -----
 
     let setupResetButton = () => {
@@ -490,17 +391,6 @@ skills: [go, rust]
                 () => {
                     // nothing to do
                 });
-        });
-    };
-
-    let setupExportButton = () => {
-        const exportButton = document.querySelector('#export-button');
-        if (!exportButton) {
-            return;
-        }
-        exportButton.addEventListener('click', (event) => {
-            event.preventDefault();
-            exportPreviewToPdf();
         });
     };
 
@@ -590,7 +480,6 @@ skills: [go, rust]
     }
     setupResetButton();
     setupCopyButton(editor);
-    setupExportButton();
 
     initScrollBarSync(storageGet(scrollBarKey) === '1');
     initThemeToggle(storageGet(themeKey) === 'dark');

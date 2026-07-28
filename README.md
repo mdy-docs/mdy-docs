@@ -53,7 +53,12 @@ title: Appendix        ← the next document begins
    bound as `self` and caller-passed data as `arg`, producing markdown.
    Template code has no host access.
 5. **Render** the markdown to HTML with the unified pipeline
-   (remark-parse → remark-gfm → remark-rehype → rehype-raw → rehype-stringify).
+   (remark-parse → remark-gfm → GitHub alerts → remark-rehype → rehype-raw →
+   rehype-stringify). GitHub alert blockquotes — `> [!NOTE]`, `[!TIP]`,
+   `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` — become `.markdown-alert-*`
+   boxes, the exact markup github-markdown-css styles. This is an HTML-side
+   transform only: `$.parse` (and any `$.transform`) still sees them as
+   plain blockquotes.
 
 ## Template syntax
 
