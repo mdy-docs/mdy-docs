@@ -665,6 +665,36 @@ test('$.parse → $.stringify round-trips a document', async () => {
   assert.match(out, /[-*] two/);
 });
 
+// --- $.table ----------------------------------------------------------------
+
+test('$.table turns a 2-D array into a GFM table (first row is the header)', async () => {
+  const out = await renderToMarkdown('{{ $.table([["name", "age"], ["ann", 33], ["ben", 4]]) }}');
+  assert.equal(
+    out.trim(),
+    ['| name | age |', '| ---- | --- |', '| ann  | 33  |', '| ben  | 4   |'].join('\n')
+  );
+});
+
+test('$.table aligns columns; full words and initials both work', async () => {
+  const out = await renderToMarkdown('{{ $.table([["a", "b", "c"], [1, 2, 3]], ["l", "center", "R"]) }}');
+  assert.match(out, /\| :- \| :-: \| -: \|/);
+});
+
+test('$.table cells keep inline markdown and escape pipes; null reads as empty', async () => {
+  const out = await renderToMarkdown('{{ $.table([["h"], ["**bold**"], ["a|b"], [null]]) }}');
+  assert.match(out, /\| \*\*bold\*\* \|/);
+  assert.match(out, /\| a\\\|b +\|/);
+});
+
+test('$.table output round-trips through $.parse as a table', async () => {
+  const out = await renderToMarkdown('{{ $.parse($.table([["a"], ["x|y"]])).children[0].type }}');
+  assert.equal(out.trim(), 'table');
+});
+
+test('$.table on a non-array is a template error, not an engine crash', async () => {
+  await assert.rejects(renderToMarkdown('{{ $.table("nope") }}'), /expects an array of row arrays/);
+});
+
 test('a template can build a TOC from another document\'s rendered headings', async () => {
   const src = [
     [

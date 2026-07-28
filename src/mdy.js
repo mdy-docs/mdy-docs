@@ -214,6 +214,30 @@ const mdastParser = unified().use(remarkParse).use(remarkGfm);
 // lists, so normalized output stays close to what templates typically emit.
 const mdastStringifier = unified().use(remarkStringify, { bullet: '-' }).use(remarkGfm);
 
+// $.table cell → phrasing children. A cell is parsed as markdown so inline
+// syntax (**bold**, `code`, links) survives into the table; block content has
+// no place in a GFM cell, so anything that doesn't parse to a single
+// paragraph falls back to the literal text (which the serializer escapes).
+const tableCellChildren = (value) => {
+  const text = value === null || value === undefined ? '' : String(value);
+  if (text.trim() === '') return [];
+  const parsed = mdastParser.parse(text).children;
+  return parsed.length === 1 && parsed[0].type === 'paragraph'
+    ? parsed[0].children
+    : [{ type: 'text', value: text }];
+};
+
+// $.table's align argument → mdast table align. Accepts full words or
+// initials ('l' / 'center' / 'R'); anything else in the array means default.
+const TABLE_ALIGN = { l: 'left', c: 'center', r: 'right' };
+const tableAlign = (align) => {
+  if (align === null || align === undefined) return undefined;
+  if (!Array.isArray(align)) {
+    throw new Error("mdy: $.table align must be an array like ['left', 'center', 'right']");
+  }
+  return align.map((a) => TABLE_ALIGN[String(a ?? '').toLowerCase()[0]] ?? null);
+};
+
 // The block-level placeholder `$.toc()` (no argument) leaves in the output;
 // the program epilogue replaces it with a link list built from the FINAL
 // tree — after the whole template ran and any $.transform was applied — so
@@ -537,7 +561,7 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * lives host-side of the template's own scope.
  *
  * `$` methods that need the host (find / findOne / render / emit /
- * parse / stringify, and any `extraNativeNames`) call the engine's
+ * parse / stringify / table, and any `extraNativeNames`) call the engine's
  * `__hostcall` native: the VM
  * execution suspends while the host's async native runs (the nisaba query,
  * a nested render, an emitted output, or an embedder-supplied native — see
@@ -558,6 +582,11 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * document's rendered output (`$.parse($.render(target))`), build a TOC
  * from its headings, or assemble a tree and stringify it back, all in
  * ordinary template JS with no host access beyond these two calls.
+ *
+ * `$.table(rows, align?)` is a convenience over that same stringifier: a 2-D
+ * array (first row = header) becomes a GFM table via remark-gfm's own
+ * serializer (the `markdown-table` package underneath), so padding,
+ * alignment, and pipe-escaping match what the pipeline itself would emit.
  *
  * `extraNativeNames` gets a generic `(...args) => __call(name, args)`
  * passthrough per name — mdy itself has no opinion on what these do (that's
@@ -587,6 +616,7 @@ const $ = {
   emit: (path, content) => __call("emit", [path, content]),
   parse: (markdown) => __call("parse", [markdown]),
   stringify: (tree) => __call("stringify", [tree]),
+  table: (rows, align) => __call("table", [rows, align === undefined ? null : align]),
   toc: (target) => target === undefined ? ${jsonForEval(TOC_MARKER)} : __call("toc", [target]),
 ${extraNativeLines}
 };
@@ -788,6 +818,20 @@ async function buildDocumentSet(source, options = {}) {
           throw new Error('mdy: $.stringify expects an mdast node ({ type, … })');
         }
         return mdastStringifier.stringify(tree);
+      },
+      table: (rows, align) => {
+        if (!Array.isArray(rows) || rows.some((row) => !Array.isArray(row))) {
+          throw new Error('mdy: $.table expects an array of row arrays (first row is the header)');
+        }
+        if (rows.length === 0) return '';
+        return mdastStringifier.stringify({
+          type: 'table',
+          align: tableAlign(align),
+          children: rows.map((row) => ({
+            type: 'tableRow',
+            children: row.map((cell) => ({ type: 'tableCell', children: tableCellChildren(cell) })),
+          })),
+        });
       },
       toc: (target) => {
         const tree = typeof target === 'string' ? mdastParser.parse(target) : target;
