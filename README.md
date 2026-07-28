@@ -16,7 +16,9 @@ An `.mdy` source is read in two passes:
 
 1. **Split into documents** on bare `---` lines. Everything before the first
    `---`, between any two, and after the last is a document; a source with no
-   `---` is a single document. Documents that are only whitespace are dropped.
+   `---` is a single document. Documents that are only whitespace are dropped
+   (but an empty or all-whitespace source is a single empty document, so an
+   empty file renders to nothing rather than erroring).
 2. **Split each document on its first bare `+++` line.** The text before `+++`
    is YAML front matter (parsed into a data object); the text after it is the
    markdown body — the template. A document with no `+++` is all body.
@@ -61,6 +63,18 @@ title: Appendix        ← the next document begins
 | `\{{` / `\{%` | a literal `{{` / `{%` |
 
 - **Shared scope**: a `let`/`const` in one tag is visible to every later tag.
+- **Missing data is graceful**: an identifier the context doesn't carry
+  reads as `undefined` instead of throwing — so a shared template can
+  reference optional properties and fall back explicitly:
+  `{{ age ?? 'unknown' }}`, `{{ (skills ?? []).join(', ') }}` (ternaries
+  and `?.` work too). Only bare-identifier resolution is forgiving;
+  `{{ missing.prop }}` is still a real `TypeError`, and every other error
+  still fails the render. `{{ missing }}` alone renders the string
+  `undefined` — write the fallback when you don't want that. (Under the
+  hood the executor re-runs a document whose render hit
+  `ReferenceError: x is not defined` with `x` bound to `undefined`;
+  templates are deterministic — the VM has no clock or randomness — so
+  the replay is exact.)
 - **Whitespace control**: a `{% %}` tag alone on its line leaves no blank
   line, so generated tables and lists stay contiguous.
 

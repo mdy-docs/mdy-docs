@@ -1,0 +1,17 @@
+{
+    // How to invoke the mdy CLI for the preview command. Override with an
+    // absolute path (["/usr/local/bin/mdy"]) or a repo checkout
+    // (["node", "/path/to/mdy-docs/bin/mdy.js"]) — GUI-launched Sublime
+    // doesn't inherit your shell PATH, so absolute paths are the norm.
+    "mdy_command": ["npx", "mdy"],
+
+    // Single { } are NOT a bracket pair in mdy — a {% %} tag legitimately
+    // opens a JS brace it closes in a LATER tag, so a character-based
+    // matcher pairs that { with the } of %}. The vscode extension's
+    // language-configuration makes the same call (its bracket pairs are
+    // {% %} and {{ }}, never lone braces); Sublime has no multi-char
+    // bracket pairs, so the mdy-specific equivalent is disabling curly
+    // matching here. ( ) and [ ] matching stay on.
+    // This file is named after the syntax, so these apply to mdy files only.
+    "match_brackets_braces": false
+}

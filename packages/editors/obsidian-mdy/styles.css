@@ -1,0 +1,42 @@
+/* mdy view: preview + source stacked in the content area, one visible. */
+.mdy-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+}
+
+.mdy-hidden {
+  display: none !important;
+}
+
+.mdy-preview {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--file-margins);
+  max-width: var(--file-line-width);
+  margin: 0 auto;
+  width: 100%;
+}
+
+.mdy-source {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-text-size, 14px);
+  line-height: 1.6;
+  padding: var(--file-margins);
+  tab-size: 2;
+}
+
+.mdy-error {
+  color: var(--text-error);
+  white-space: pre-wrap;
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+}

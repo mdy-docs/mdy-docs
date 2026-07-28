@@ -85,6 +85,19 @@ function scanDocuments(lines) {
       titleLine,
     });
   }
+  // Mirror splitDocuments: an empty (or all-whitespace) source is ONE
+  // empty document, not zero — an empty file renders to nothing.
+  if (docs.length === 0) {
+    docs.push({
+      index: 0,
+      startLine: 0,
+      endLine: Math.max(0, lines.length - 1),
+      separatorLine: null,
+      frontMatterEndLine: null,
+      title: null,
+      titleLine: null,
+    });
+  }
   return docs;
 }
 

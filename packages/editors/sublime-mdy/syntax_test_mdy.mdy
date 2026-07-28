@@ -1,0 +1,32 @@
+# SYNTAX TEST "Packages/sublime-mdy/mdy.sublime-syntax"
+
+# {{ title }}
+# ^^ punctuation.section.embedded.begin.expression.mdy
+#    ^^^^^ meta.embedded.line.mdy
+#          ^^ punctuation.section.embedded.end.expression.mdy
+
+A paragraph with {{ count + 1 }} inline.
+#                ^^ punctuation.section.embedded.begin.expression.mdy
+#                         ^ keyword.operator.js.mdy
+#                             ^^ punctuation.section.embedded.end.expression.mdy
+
+{% for (const m of $.find({ role: 'member' })) { %}
+# <- punctuation.section.embedded.begin.statement.mdy
+#  ^^^ keyword.control.js.mdy
+#       ^^^^^ keyword.control.js.mdy
+#                  ^ variable.language.dollar.mdy
+#                                 ^^^^^^^^ string.quoted.js.mdy
+#                                                ^^ punctuation.section.embedded.end.statement.mdy
+
+\{{ literal braces
+# <- constant.character.escape.mdy
+---
+# <- punctuation.definition.separator.mdy
+role: member
+# <- meta.frontmatter.mdy
+name: Alice
+# <- meta.frontmatter.mdy
++++
+# <- punctuation.definition.frontmatter.mdy
+body of the second document with {{ name }}
+#                                ^^ punctuation.section.embedded.begin.expression.mdy

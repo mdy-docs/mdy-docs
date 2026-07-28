@@ -1,0 +1,165 @@
+%YAML 1.2
+---
+# mdy for Sublime Text — a NATIVE port of the vscode extension's
+# mdy.tmLanguage.json (../vscode-mdy/syntaxes/). Two conversion routes
+# were tried and abandoned:
+#
+#  - a mechanical tmLanguage conversion: Sublime's TextMate layer has no
+#    `injections` support, and that table is load-bearing — without it the
+#    embedded markdown grammar claims every body context and {{ }} / {% %}
+#    never highlight;
+#  - `with_prototype` around an embedded markdown push: the prototype's
+#    tag contexts are reachable from themselves through the injected
+#    prototype, and Sublime's compiler explodes ("apparent recursion …
+#    25000 context sanity limit").
+#
+# This file uses the pattern Sublime's own PHP syntax uses to embed HTML:
+# `extends` the whole Markdown syntax and inject the mdy rules through the
+# `prototype` context (meta_prepend) — prepended to every inherited
+# markdown context, no cloning, no recursion. Tag delimiters therefore
+# highlight inside headings, list items, and everything else markdown
+# claims, matching what the vscode grammar's injections achieve.
+#
+# Regexes, scope names, and the engine-mirroring rules (front-matter
+# heuristic, first-}} closing, closer-guarded strings/comments, region-free
+# JS) are carried over verbatim from the JSON grammar — if you change that
+# grammar, change this file to match. syntax_test_mdy.mdy pins the
+# behavior (open it in Sublime, Cmd+B).
+name: mdy
+scope: text.html.markdown.mdy
+version: 2
+extends: Packages/Markdown/Markdown.sublime-syntax
+file_extensions:
+  - mdy
+
+contexts:
+  prototype:
+    - meta_prepend: true
+    # YAML front matter at the very start of the file. One-line heuristic
+    # (a line-based engine can't look ahead to a later bare +++): front
+    # matter starts where the first line looks like a YAML `key:` entry,
+    # or is +++ itself (an empty block, which the engine allows).
+    - match: '\A(?=[A-Za-z_][\w.-]*[ \t]*:([ \t]|$)|\+\+\+[ \t]*$)'
+      push: mdy-frontmatter
+    # A bare --- splits documents (splitDocuments), wherever it appears —
+    # prepended here so it wins over markdown's setext-heading reading.
+    - match: '^---[ \t]*$'
+      scope: punctuation.definition.separator.mdy markup.heading.separator.mdy
+      push: mdy-after-separator
+    # \{{ and \{% render as literal {{ / {% — never tag delimiters.
+    - match: '\\\{[{%]'
+      scope: constant.character.escape.mdy
+    - match: '\{\{'
+      scope: punctuation.section.embedded.begin.expression.mdy keyword.other.template.mdy
+      push: mdy-tag-output
+    - match: '\{%'
+      scope: punctuation.section.embedded.begin.statement.mdy keyword.other.template.mdy
+      push: mdy-tag-code
+
+  mdy-frontmatter:
+    - meta_include_prototype: false
+    - meta_scope: meta.frontmatter.mdy
+    - match: '^\+\+\+[ \t]*$'
+      scope: punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy
+      pop: true
+    - include: scope:source.yaml
+
+  # After a separator, the first non-empty line decides: YAML-looking →
+  # new front matter, anything else → back to markdown.
+  mdy-after-separator:
+    - meta_include_prototype: false
+    - match: '(?=[A-Za-z_][\w.-]*[ \t]*:([ \t]|$)|\+\+\+[ \t]*$)'
+      set: mdy-frontmatter
+    - match: '(?=[^\n])'
+      pop: true
+
+  # {{ expr }} — closes at the FIRST }}, matching the engine's indexOf.
+  mdy-tag-output:
+    - meta_include_prototype: false
+    - meta_scope: meta.template.expression.mdy
+    - meta_content_scope: meta.embedded.line.mdy
+    - match: '\}\}'
+      scope: punctuation.section.embedded.end.expression.mdy keyword.other.template.mdy
+      pop: true
+    - include: mdy-js-in-expression-tag
+
+  # {% statements %} — closes at the FIRST %}; braces need not balance
+  # within one tag, which is why the real JS syntax is NOT embedded here
+  # (its brace regions would swallow the %}).
+  mdy-tag-code:
+    - meta_include_prototype: false
+    - meta_scope: meta.template.statement.mdy
+    - meta_content_scope: meta.embedded.line.mdy
+    - match: '%\}'
+      scope: punctuation.section.embedded.end.statement.mdy keyword.other.template.mdy
+      pop: true
+    - include: mdy-js-in-statement-tag
+
+  # JS inside {{ }} — strings/comments guarded against }} (the engine
+  # closes the tag there even mid-string; a construct spanning the closer
+  # would eat the delimiter).
+  mdy-js-in-expression-tag:
+    - meta_include_prototype: false
+    - match: '//(?:(?!\}\})[^\n])*'
+      scope: comment.line.double-slash.js.mdy
+    - match: '/\*'
+      push:
+        - meta_include_prototype: false
+        - meta_scope: comment.block.js.mdy
+        - match: '\*/|(?=\}\})'
+          pop: true
+    - match: '(["''])(?:\\.|(?!\}\}|\1)[^\n\\])*\1'
+      scope: string.quoted.js.mdy
+    - match: '`'
+      push:
+        - meta_include_prototype: false
+        - meta_scope: string.template.js.mdy
+        - match: '`|(?=\}\})'
+          pop: true
+        - match: '\\.'
+    - match: '%'
+      scope: keyword.operator.js.mdy
+    - include: mdy-js-common
+
+  # JS inside {% %} — same, guarded against %}.
+  mdy-js-in-statement-tag:
+    - meta_include_prototype: false
+    - match: '//(?:(?!%\})[^\n])*'
+      scope: comment.line.double-slash.js.mdy
+    - match: '/\*'
+      push:
+        - meta_include_prototype: false
+        - meta_scope: comment.block.js.mdy
+        - match: '\*/|(?=%\})'
+          pop: true
+    - match: '(["''])(?:\\.|(?!%\}|\1)[^\n\\])*\1'
+      scope: string.quoted.js.mdy
+    - match: '`'
+      push:
+        - meta_include_prototype: false
+        - meta_scope: string.template.js.mdy
+        - match: '`|(?=%\})'
+          pop: true
+        - match: '\\.'
+    - match: '%(?!\})'
+      scope: keyword.operator.js.mdy
+    - include: mdy-js-common
+
+  # Region-free JS token rules shared by both tag types. $ before . is the
+  # template's native-function namespace ($.find, $.render, $.emit, …).
+  mdy-js-common:
+    - meta_include_prototype: false
+    - match: '\$(?=\s*\.)'
+      scope: variable.language.dollar.mdy
+    - match: '\b(?:const|let|var|function|return|if|else|for|while|do|break|continue|new|typeof|instanceof|of|in|try|catch|finally|throw|switch|case|default|async|await|yield|class|extends|import|export|from|delete|void)\b'
+      scope: keyword.control.js.mdy
+    - match: '\b(?:true|false|null|undefined|NaN|Infinity)\b'
+      scope: constant.language.js.mdy
+    - match: '\bthis\b'
+      scope: variable.language.this.js.mdy
+    - match: '\b\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?\b'
+      scope: constant.numeric.js.mdy
+    - match: '=>'
+      scope: storage.type.function.arrow.js.mdy
+    - match: '[+\-*/<>=!&|?:]'
+      scope: keyword.operator.js.mdy

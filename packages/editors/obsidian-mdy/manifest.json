@@ -1,0 +1,10 @@
+{
+  "id": "mdy",
+  "name": "mdy",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Open and edit .mdy documents — markdown with YAML front matter and sandboxed {{ }} / {% %} template tags — with a live rendered preview of the whole document set.",
+  "author": "mdy-docs",
+  "authorUrl": "https://github.com/mdy-docs/mdy-docs",
+  "isDesktopOnly": true
+}

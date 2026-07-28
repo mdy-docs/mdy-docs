@@ -10,8 +10,8 @@ template: member-card
 +++
 ### {{ name }}
 
-- Age: {{ age }}
-- Skills: {{ skills.join(', ') }}
+- Age: {{ age ?? 'unknown' }}
+- Skills: {{ (skills ?? []).join(', ') }}
 ---
 role: member
 name: Alice
@@ -21,6 +21,5 @@ skills: [js, python]
 ---
 role: member
 name: Bob
-age: 41
 skills: [go, rust]
 +++

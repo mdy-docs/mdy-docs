@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Headings of an mdy document in the symbol list (Cmd+R), the same role
+     the vscode extension's outline plays. Scoped to the mdy syntax so the
+     stock Markdown package's preferences are untouched. -->
+<plist version="1.0">
+<dict>
+	<key>scope</key>
+	<string>text.html.markdown.mdy markup.heading</string>
+	<key>settings</key>
+	<dict>
+		<key>showInSymbolList</key>
+		<integer>1</integer>
+	</dict>
+</dict>
+</plist>

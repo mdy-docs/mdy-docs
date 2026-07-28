@@ -148,11 +148,21 @@ const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * prepending to compiled template statements. Keys that aren't valid
  * identifiers (or would shadow the program's own names) are skipped — they
  * stay reachable as `__ctx["the key"]`.
+ *
+ * `extraNames` binds additional identifiers the same way even though the
+ * context lacks them (so they read as `undefined`) — the mechanism behind
+ * graceful missing-data handling: the executor re-runs a template that hit
+ * `ReferenceError: x is not defined` with x added here (see runDoc), so a
+ * template can reference optional properties and fall back with `??` or a
+ * ternary instead of erroring.
  * @param {object} context
+ * @param {Iterable<string>} [extraNames]
  * @returns {string} JavaScript statements
  */
-export function contextBindings(context) {
-  return Object.keys(context)
+export function contextBindings(context, extraNames = []) {
+  const names = new Set(Object.keys(context));
+  for (const n of extraNames) names.add(n);
+  return [...names]
     .filter((k) => IDENTIFIER.test(k) && !NO_BIND.has(k))
     .map((k) => `let ${k} = __ctx[${jsonForEval(k)}];`)
     .join('\n');
@@ -248,6 +258,11 @@ const tocEntries = (tree) => {
 // Each nesting level holds a live VM instance while suspended (Asyncify is
 // not reentrant), so this is deliberately modest.
 const MAX_RENDER_DEPTH = 16;
+
+// Cap on distinct missing identifiers a single document render will bind as
+// undefined before giving up (see runDoc's retry loop) — a runaway backstop,
+// far above what a real template references.
+const MAX_MISSING_BINDINGS = 100;
 
 /**
  * Extract inline hashtags from a document body.
@@ -380,7 +395,12 @@ export function splitDocuments(source) {
     }
   }
   docs.push(current.join('\n'));
-  return docs.filter((doc) => doc.trim() !== '');
+  const kept = docs.filter((doc) => doc.trim() !== '');
+  // The whitespace filter drops blank chunks BETWEEN separators; when
+  // nothing at all survives (an empty or all-whitespace source), the
+  // source is ONE empty document, not zero documents — an empty file
+  // renders to nothing instead of erroring on "no document at index 0".
+  return kept.length > 0 ? kept : [''];
 }
 
 /**
@@ -544,7 +564,7 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * entirely the embedder-supplied native function's business), it only
  * wires the guest-side call shape.
  */
-function buildProgram({ body, ctx, documents, extraNativeNames = [] }) {
+function buildProgram({ body, ctx, documents, extraNativeNames = [], extraBindings = [] }) {
   for (const name of extraNativeNames) {
     if (!VALID_NATIVE_NAME.test(name)) {
       throw new Error(`mdy: invalid native name ${JSON.stringify(name)} (must be a valid identifier)`);
@@ -570,7 +590,7 @@ const $ = {
   toc: (target) => target === undefined ? ${jsonForEval(TOC_MARKER)} : __call("toc", [target]),
 ${extraNativeLines}
 };
-${contextBindings(ctx)}
+${contextBindings(ctx, extraBindings)}
 let __done = null;
 let __tree = null;
 let __err = null;
@@ -789,7 +809,6 @@ async function buildDocumentSet(source, options = {}) {
       ),
     };
 
-    const program = buildProgram({ body: doc.body, ctx: fullCtx, documents, extraNativeNames });
     // Same "(docIndex, docData) appended" contract as the extra natives: a
     // loader resolving a template's own import needs to know which file is
     // asking; module-to-module imports carry that in `referrer` instead.
@@ -801,22 +820,57 @@ async function buildDocumentSet(source, options = {}) {
             : undefined,
         }
       : undefined;
-    const reply = await runProgram(program, natives, moduleOptions);
-    let envelope;
-    try {
-      envelope = JSON.parse(reply);
-    } catch {
-      throw new Error(`mdy: unexpected engine reply: ${reply}`);
+
+    // Missing data is graceful: a template referencing a property its data
+    // doesn't carry ({{ age }} on an age-less record) reads `undefined`,
+    // so `{{ age ?? 'n/a' }}` and ternaries work — instead of the whole
+    // render dying on `ReferenceError: age is not defined`. There is no JS
+    // parser here to find free identifiers up front; the VM's own error IS
+    // the parser: on that exact error, re-run with the named identifier
+    // added to the bindings (bound from __ctx, whose missing key reads as
+    // undefined). Templates are deterministic (the VM has no Date/random),
+    // so a re-run's side effects ($.emit, nested $.render) replay
+    // identically — emits are path-keyed Map writes downstream, so the
+    // replay collapses. Bounded, and only the exact whole-message shape is
+    // retried — a ReferenceError inside a longer message, or any other
+    // error, still throws.
+    const missingBindings = new Set();
+    for (;;) {
+      const program = buildProgram({
+        body: doc.body,
+        ctx: fullCtx,
+        documents,
+        extraNativeNames,
+        extraBindings: missingBindings,
+      });
+      const reply = await runProgram(program, natives, moduleOptions);
+      let envelope;
+      try {
+        envelope = JSON.parse(reply);
+      } catch {
+        throw new Error(`mdy: unexpected engine reply: ${reply}`);
+      }
+      if (envelope.error !== undefined) {
+        const missing = /^ReferenceError: ([A-Za-z_$][A-Za-z0-9_$]*) is not defined$/.exec(envelope.error);
+        if (
+          missing &&
+          !missingBindings.has(missing[1]) &&
+          !NO_BIND.has(missing[1]) &&
+          missingBindings.size < MAX_MISSING_BINDINGS
+        ) {
+          missingBindings.add(missing[1]);
+          continue;
+        }
+        throw new Error(`mdy: template error in document ${i}: ${envelope.error}`);
+      }
+      // Two completion shapes (see buildProgram): plain markdown, or — when
+      // the document installed a $.transform or used a no-arg $.toc() — the
+      // final mdast tree, kept AS a tree so the HTML path never
+      // re-stringifies it.
+      return envelope.tree !== undefined
+        ? { markdown: null, tree: envelope.tree }
+        : { markdown: envelope.out, tree: null };
     }
-    if (envelope.error !== undefined) {
-      throw new Error(`mdy: template error in document ${i}: ${envelope.error}`);
-    }
-    // Two completion shapes (see buildProgram): plain markdown, or — when the
-    // document installed a $.transform or used a no-arg $.toc() — the final
-    // mdast tree, kept AS a tree so the HTML path never re-stringifies it.
-    return envelope.tree !== undefined
-      ? { markdown: null, tree: envelope.tree }
-      : { markdown: envelope.out, tree: null };
   };
 
   // Text of a render result for EMBEDDING into another template's output (a

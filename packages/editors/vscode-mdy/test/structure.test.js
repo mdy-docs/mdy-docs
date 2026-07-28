@@ -23,6 +23,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 const lines = (text) => text.split('\n');
 
+test('an empty source is one empty document, matching the engine', () => {
+  // splitDocuments' rule: nothing surviving the whitespace filter means ONE
+  // empty document (index 0), never zero — an empty file renders to
+  // nothing rather than erroring, and the outline agrees.
+  for (const text of ['', '   \n---\n\n']) {
+    const docs = scanDocuments(lines(text));
+    assert.equal(docs.length, 1);
+    assert.equal(docs[0].index, 0);
+    assert.equal(parseDocuments(text).length, 1);
+  }
+});
+
 test('one document per --- chunk, with engine indexes, separator anchors, and front-matter titles', () => {
   const docs = scanDocuments(lines('title: Roster\n+++\nbody one\n---\ntitle: Alice\nrole: member\n+++\nbody two'));
   assert.equal(docs.length, 2);

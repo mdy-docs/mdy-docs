@@ -171,7 +171,17 @@ test('splitDocuments drops whitespace-only documents', () => {
   // leading, trailing, and doubled --- contribute nothing
   assert.deepEqual(splitDocuments('---\na\n---'), ['a']);
   assert.deepEqual(splitDocuments('a\n---\n---\nb'), ['a', 'b']);
-  assert.deepEqual(splitDocuments('   \n---\n\n'), []);
+});
+
+test('an empty source is one empty document, and renders to nothing', async () => {
+  // NOT zero documents: an empty file must render (to an empty string),
+  // never error with "no document at index 0" — an editor's brand-new
+  // buffer is the canonical case.
+  assert.deepEqual(splitDocuments(''), ['']);
+  assert.deepEqual(splitDocuments('   \n---\n\n'), ['']);
+  assert.deepEqual(parseDocuments(''), [{ data: {}, content: '' }]);
+  assert.equal(await render(''), '');
+  assert.equal(await render('  \n \n'), '');
 });
 
 // --- data fences ----------------------------------------------------------
@@ -668,6 +678,57 @@ test('a template can build a TOC from another document\'s rendered headings', as
   const out = await renderToMarkdown(src);
   const lines = out.trim().split('\n');
   assert.deepEqual(lines, ['- Alpha (h1)', '- Beta (h2)', '- Gamma (h2)']);
+});
+
+// --- graceful missing data --------------------------------------------------
+
+test('a missing identifier reads as undefined instead of erroring', async () => {
+  // The document-set case: a shared template references properties a data
+  // record may not carry. The executor binds identifiers the VM reports as
+  // undefined ("ReferenceError: x is not defined" → re-run with x bound
+  // from the context, where a missing key reads undefined), so ?? and
+  // ternary fallbacks work.
+  assert.equal(await renderToMarkdown('x: 1\n+++\nv={{ missing }}'), 'v=undefined\n');
+  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ age ?? "n/a" }}'), 'n/a\n');
+  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ age ? age : "none" }}'), 'none\n');
+  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ (skills ?? []).join(", ") }}'), '');
+  // several distinct missing identifiers in one document
+  assert.equal(await renderToMarkdown('+++\n{{ a ?? 1 }}/{{ b ?? 2 }}/{{ c ?? 3 }}'), '1/2/3\n');
+});
+
+test('a shared template renders records that lack referenced properties', async () => {
+  const src = [
+    'title: T',
+    '+++',
+    '{% for (const m of $.find({ role: "member" })) { %}',
+    '{{ $.render({ template: "card" }, m) }}',
+    '{% } %}',
+    '---',
+    'template: card',
+    '+++',
+    '### {{ name ?? "(unnamed)" }} — {{ age ?? "?" }} — {{ (skills ?? []).join("/") }}',
+    '---',
+    'role: member',
+    'name: Alice',
+    'age: 30',
+    'skills: [js]',
+    '+++',
+    '---',
+    'role: member',
+    'name: Bob',
+    '+++',
+  ].join('\n');
+  assert.equal(await renderToMarkdown(src), '### Alice — 30 — js\n\n### Bob — ? —\n');
+});
+
+test('only identifier resolution is graceful — other errors still throw', async () => {
+  // property access on the resulting undefined is a real TypeError
+  await assert.rejects(renderToMarkdown('+++\n{{ missing.prop }}'), /template error/);
+  // and a thrown ReferenceError-shaped string is not retried (whole-message match only)
+  await assert.rejects(
+    renderToMarkdown('+++\n{% throw "boom: ReferenceError: x is not defined (fake)" %}'),
+    /boom/
+  );
 });
 
 test('$.stringify on a non-node is a template error, not an engine crash', async () => {
