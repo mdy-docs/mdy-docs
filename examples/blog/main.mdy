@@ -9,9 +9,11 @@ description: Notes from the scribal school.
   // blog-style-x directory) for a different look — nothing else in this
   // file's own content/URL/layout logic below depends on where base.mdy
   // (or static/style.css, search.js, logo.png) actually live.
-  const site = { title: title, baseURL: baseURL, author: author, description: description };
-  const draftsOn = typeof drafts !== "undefined" ? drafts : false;
-  const futureOn = typeof future !== "undefined" ? future : false;
+  // This file's own front matter is `self`; the build's context (drafts /
+  // future / today, see src/site/script-site.js) arrives as `arg`.
+  const site = { title: self.title, baseURL: self.baseURL, author: self.author, description: self.description };
+  const draftsOn = arg.drafts ?? false;
+  const futureOn = arg.future ?? false;
 
   const humanize = (s) => s.replace(/-+/g, " ").trim().replace(/^./, (c) => c.toUpperCase());
   const summarize = (text) => text.replace(/^#.*$/m, "").replace(/[#*_>]/g, "").replace(/\s+/g, " ").trim().slice(0, 200);
@@ -32,7 +34,7 @@ description: Notes from the scribal school.
     const slug = m ? stem.slice(m[1].length + 1) : stem;
     const postTitle = raw.title || humanize(slug);
     const isDraft = raw.draft === true;
-    const isFuture = date > today;
+    const isFuture = date > arg.today;
     if ((!isDraft || draftsOn) && (!isFuture || futureOn)) {
       const bodyMd = raw.ext === ".md" ? raw.body : $.render({ path: raw.path }, {});
       posts.push({ path: raw.path, date: date, slug: slug, url: "/posts/" + slug + "/", title: postTitle, tags: raw.tags || [], summary: summarize(bodyMd), body: bodyMd });
@@ -71,7 +73,7 @@ description: Notes from the scribal school.
   sitemapUrls.push("/about/");
 
   // tags: every taggable page (posts + about), grouped; /tags/<tag>/ + /tags/
-  const taggable = posts.concat([{ title: aboutTitle, url: "/about/", date: today, tags: aboutRaw.tags || [] }]);
+  const taggable = posts.concat([{ title: aboutTitle, url: "/about/", date: arg.today, tags: aboutRaw.tags || [] }]);
   const tagged = {};
   for (const p of taggable) {
     for (const t of p.tags) {

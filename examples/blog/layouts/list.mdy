@@ -1,13 +1,13 @@
-# {{ site.title }}
+# {{ arg.site.title }}
 
-{{ site.description }}
+{{ arg.site.description }}
 
-{% for (const p of posts) { %}
+{% for (const p of arg.posts) { %}
 - [{{ p.title }}]({{ p.url }}) — {{ p.date }}
 {%
   }
-  if (pagination.totalPages > 1) {
+  if (arg.pagination.totalPages > 1) {
 %}
 
-{% if (pagination.prevUrl) { %}[← newer]({{ pagination.prevUrl }}) · {% } %}page {{ pagination.page }} of {{ pagination.totalPages }}{% if (pagination.nextUrl) { %} · [older →]({{ pagination.nextUrl }}){% } %}
+{% if (arg.pagination.prevUrl) { %}[← newer]({{ arg.pagination.prevUrl }}) · {% } %}page {{ arg.pagination.page }} of {{ arg.pagination.totalPages }}{% if (arg.pagination.nextUrl) { %} · [older →]({{ arg.pagination.nextUrl }}){% } %}
 {% } %}

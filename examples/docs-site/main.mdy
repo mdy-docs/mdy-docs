@@ -72,9 +72,9 @@ footer:
 
   // Flatten each section's sidebar for prev/next links, VitePress-style.
   const flat = {};
-  for (const key of Object.keys(sidebar)) {
+  for (const key of Object.keys(self.sidebar)) {
     const items = [];
-    for (const g of sidebar[key]) {
+    for (const g of self.sidebar[key]) {
       for (const it of g.items) { items.push(it); }
     }
     flat[key] = items;
@@ -93,14 +93,14 @@ footer:
       if (items[i].link === p.url) { at = i; }
     }
     const pageHtml = $.render({ path: "layouts/base.mdy" }, {
-      site: site, nav: nav, footer: footer, socialLinks: socialLinks,
+      site: self.site, nav: self.nav, footer: self.footer, socialLinks: self.socialLinks,
       page: { title: title, url: p.url, layout: "doc", section: p.section },
       content: $.markdown(body),
-      sidebarHtml: html.sidebarHtml(sidebar[p.section] || [], p.url),
+      sidebarHtml: html.sidebarHtml(self.sidebar[p.section] || [], p.url),
       outlineHtml: html.outlineHtml(headings.filter((e) => e.depth === 2 || e.depth === 3)),
       prevNextHtml: html.prevNextHtml(at > 0 ? items[at - 1] : null, at >= 0 && at < items.length - 1 ? items[at + 1] : null),
-      editUrl: editLink.pattern.replace(":path", p.raw.path),
-      editText: editLink.text,
+      editUrl: self.editLink.pattern.replace(":path", p.raw.path),
+      editText: self.editLink.text,
       lastUpdated: md.formatDate(p.raw.mtime),
     });
     $.emit(p.url.slice(1) + "index.html", pageHtml);
@@ -112,17 +112,17 @@ footer:
   const home = $.findOne({ path: "index.mdy" });
   const heroHtml = $.render({ path: "layouts/home.mdy" }, { hero: home.hero || {}, features: home.features || [] });
   $.emit("index.html", $.render({ path: "layouts/base.mdy" }, {
-    site: site, nav: nav, footer: footer, socialLinks: socialLinks,
+    site: self.site, nav: self.nav, footer: self.footer, socialLinks: self.socialLinks,
     page: { title: "", url: "/", layout: "home", section: "" },
     content: heroHtml,
     sidebarHtml: "", outlineHtml: "", prevNextHtml: "", editUrl: "", editText: "", lastUpdated: "",
   }));
-  searchRecords.push({ url: "/", title: (home.hero && home.hero.name) || site.title, excerpt: (home.hero && home.hero.tagline) || site.description, words: $.tokenize(site.title + " " + site.description) });
+  searchRecords.push({ url: "/", title: (home.hero && home.hero.name) || self.site.title, excerpt: (home.hero && home.hero.tagline) || self.site.description, words: $.tokenize(self.site.title + " " + self.site.description) });
 
   // 404 page (VitePress emits one too).
   const nfHtml = '<div class="not-found"><p class="nf-code">404</p><h1 class="nf-title">PAGE NOT FOUND</h1><div class="nf-divider"></div><blockquote class="nf-quote">But if you don\'t change your direction, and if you keep looking, you may end up where you are heading.</blockquote><a class="hero-action brand" href="/">Take me home</a></div>';
   $.emit("404.html", $.render({ path: "layouts/base.mdy" }, {
-    site: site, nav: nav, footer: footer, socialLinks: socialLinks,
+    site: self.site, nav: self.nav, footer: self.footer, socialLinks: self.socialLinks,
     page: { title: "404", url: "/404.html", layout: "home", section: "" },
     content: nfHtml,
     sidebarHtml: "", outlineHtml: "", prevNextHtml: "", editUrl: "", editText: "", lastUpdated: "",

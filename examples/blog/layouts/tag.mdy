@@ -1,6 +1,6 @@
-# Tagged “{{ tag }}”
+# Tagged “{{ arg.tag }}”
 
-{% for (const p of posts) { %}
+{% for (const p of arg.posts) { %}
 - [{{ p.title }}]({{ p.url }}) — {{ p.date }}
 {% } %}
 

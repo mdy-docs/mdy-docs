@@ -1,7 +1,6 @@
 export {
   compileTemplate,
   compileTemplateSource,
-  contextBindings,
   splitDocuments,
   parseDocuments,
   extractTags,

@@ -84,7 +84,7 @@ test('a script can render another package via an import, and reach its other fil
         '{{ page }} ({{ meta.license }})',
       ].join('\n')
     );
-    await writeFile(join(parent, 'style', 'layouts', 'base.mdy'), '<html>{{ content }}</html>');
+    await writeFile(join(parent, 'style', 'layouts', 'base.mdy'), '<html>{{ arg.content }}</html>');
     await writeFile(join(parent, 'style', 'meta.yaml'), 'license: CC0\n');
 
     const { output } = await renderScriptSite(join(parent, 'site'));
@@ -220,7 +220,7 @@ test("an imported package's own templates load modules from the PACKAGE's direct
     );
     await writeFile(
       join(parent, 'style', 'layouts', 'base.mdy'),
-      '+++\n{% const fmt = await import("../lib/fmt.js") %}\n{{ fmt.wrap(content) }}'
+      '+++\n{% const fmt = await import("../lib/fmt.js") %}\n{{ fmt.wrap(arg.content) }}'
     );
     await writeFile(join(parent, 'style', 'lib', 'fmt.js'), 'export const wrap = (s) => "[" + s + "]";\n');
 
@@ -286,7 +286,7 @@ test('JS module imports work through memoryFsProvider too — the browser playgr
   const files = new Map([
     ['main.mdy', '+++\n{% import style from "/style-pkg" %}\n{% const u = await import("./lib/util.js") %}\n{{ u.exclaim(style.render({ path: "base.mdy" }, { content: "m" })) }}'],
     ['lib/util.js', 'export const exclaim = (s) => s + "!";'],
-    ['style-pkg/base.mdy', '+++\n{% const fmt = await import("./fmt.js") %}\n{{ fmt.wrap(content) }}'],
+    ['style-pkg/base.mdy', '+++\n{% const fmt = await import("./fmt.js") %}\n{{ fmt.wrap(arg.content) }}'],
     ['style-pkg/fmt.js', 'export const wrap = (s) => "<" + s + ">";'],
   ]);
   const { output } = await renderScriptSite('/', { fs: memoryFsProvider(files) });

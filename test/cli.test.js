@@ -56,13 +56,16 @@ test('--html emits HTML on stdout from stdin', () => {
 });
 
 test('-d supplies context; JSON values parse, bare stays a string', () => {
-  const { stdout } = run(['-', '-d', 'n=3', '-d', 'name=ada'], '{{ name }}×{{ n }}={{ name.repeat(n) }}');
+  const { stdout } = run(['-', '-d', 'n=3', '-d', 'name=ada'], '{{ arg.name }}×{{ arg.n }}={{ arg.name.repeat(arg.n) }}');
   assert.equal(stdout.trim(), 'ada×3=adaadaada');
 });
 
-test('-d overrides front matter data', () => {
-  const { stdout } = run(['-', '-d', 'who=world'], 'who: nobody\n+++\nhi {{ who }}');
-  assert.equal(stdout.trim(), 'hi world');
+test('-d data is arg, front matter is self; overriding is an explicit fallback', () => {
+  const src = 'who: nobody\n+++\nhi {{ arg.who ?? self.who }}';
+  // -d values arrive as `arg` and win in the template's own fallback…
+  assert.equal(run(['-', '-d', 'who=world'], src).stdout.trim(), 'hi world');
+  // …while with nothing passed, the front matter (`self`) is the default.
+  assert.equal(run(['-'], src).stdout.trim(), 'hi nobody');
 });
 
 // --- file input → stdout by default ---------------------------------------
@@ -135,12 +138,12 @@ test('a file input has no access to sibling files (unlike a directory input)', (
 });
 
 test('--emit-js prints the compiled function of every document in a file', () => {
-  const src = 'hi {{ x }}\n---\ny: 2\n+++\n{% let z = 1 %}z is {{ z }}';
+  const src = 'hi {{ arg.x }}\n---\ny: 2\n+++\n{% let z = 1 %}z is {{ z }}';
   const { status, stdout } = run(['-', '--emit-js'], src);
   assert.equal(status, 0);
-  assert.match(stdout, /function __doc0\(__ctx\)/);
-  assert.match(stdout, /function __doc1\(__ctx\)/);
-  assert.match(stdout, /__out \+= \(x\)/);
+  assert.match(stdout, /function __doc0\(self, arg\)/);
+  assert.match(stdout, /function __doc1\(self, arg\)/);
+  assert.match(stdout, /__out \+= \(arg\.x\)/);
   assert.match(stdout, /let z = 1/);
 });
 
@@ -249,13 +252,13 @@ test('--entry is rejected for a file or stdin input', () => {
 
 test('--emit-js on a directory input compiles just the entry document', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'main.mdy'), '+++\nhi {{ x }}');
-  writeFileSync(join(dir, 'other.mdy'), '+++\nother {{ y }}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\nhi {{ arg.x }}');
+  writeFileSync(join(dir, 'other.mdy'), '+++\nother {{ arg.y }}');
 
   const { status, stdout } = run([dir, '--emit-js']);
   assert.equal(status, 0);
-  assert.match(stdout, /__out \+= \(x\)/);
-  assert.doesNotMatch(stdout, /__out \+= \(y\)/);
+  assert.match(stdout, /__out \+= \(arg\.x\)/);
+  assert.doesNotMatch(stdout, /__out \+= \(arg\.y\)/);
 });
 
 test('-o refuses to overwrite a directory input', () => {
@@ -311,7 +314,7 @@ test('--watch re-renders when the --data-file changes', async () => {
   const src = join(dir, 'doc.mdy');
   const data = join(dir, 'ctx.yaml');
   const out = join(dir, 'out.md');
-  writeFileSync(src, 'env is {{ env }}\n');
+  writeFileSync(src, 'env is {{ arg.env }}\n');
   writeFileSync(data, 'env: dev\n');
 
   const child = spawn('node', [bin, src, '--data-file', data, '-o', out, '--watch']);

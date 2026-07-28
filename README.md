@@ -30,8 +30,8 @@ An `.mdy` source is read in two passes:
 title: Report          ← YAML front matter
 author: Grace Hopper
 +++                     ← front matter separator
-# {{ title }}          ← markdown body (the template)
-By {{ author }}.
+# {{ self.title }}     ← markdown body (the template)
+By {{ self.author }}.
 ---                     ← document separator
 title: Appendix        ← the next document begins
 +++
@@ -49,8 +49,9 @@ title: Appendix        ← the next document begins
    all template tags share one scope.
 4. **Run** the compiled template inside the
    [lamassu](https://github.com/mdy-docs/lamassu-js) VM — a sandboxed
-   JavaScript-subset engine in WebAssembly — with the document's data bound as
-   identifiers, producing markdown. Template code has no host access.
+   JavaScript-subset engine in WebAssembly — with the document's own data
+   bound as `self` and caller-passed data as `arg`, producing markdown.
+   Template code has no host access.
 5. **Render** the markdown to HTML with the unified pipeline
    (remark-parse → remark-gfm → remark-rehype → rehype-raw → rehype-stringify).
 
@@ -60,21 +61,33 @@ title: Appendix        ← the next document begins
 | --- | --- |
 | `{{ expr }}` | append the expression's value to the output |
 | `{% code %}` | run statements, append nothing (loops, `if`, `let`, …) |
+| `write(value, …)` | append explicitly from inside `{% %}` code — `{% write($.render(card, m)) %}` is the code-tag equivalent of `{{ $.render(card, m) }}`, with the same string coercion |
 | `\{{` / `\{%` | a literal `{{` / `{%` |
 
 - **Shared scope**: a `let`/`const` in one tag is visible to every later tag.
-- **Missing data is graceful**: an identifier the context doesn't carry
-  reads as `undefined` instead of throwing — so a shared template can
-  reference optional properties and fall back explicitly:
-  `{{ age ?? 'unknown' }}`, `{{ (skills ?? []).join(', ') }}` (ternaries
-  and `?.` work too). Only bare-identifier resolution is forgiving;
-  `{{ missing.prop }}` is still a real `TypeError`, and every other error
-  still fails the render. `{{ missing }}` alone renders the string
-  `undefined` — write the fallback when you don't want that. (Under the
-  hood the executor re-runs a document whose render hit
-  `ReferenceError: x is not defined` with `x` bound to `undefined`;
-  templates are deterministic — the VM has no clock or randomness — so
-  the replay is exact.)
+  `$`, `self`, `arg`, and `write` are the template layer's reserved names —
+  redeclaring them is a template error. Output accumulates as a plain
+  markdown **string** (structure exists only through `$.parse`/`$.stringify`
+  and the final `$.transform`/`$.toc()` pass).
+- **`self` is the document's own data; `arg` is what the caller passed** —
+  two separate objects, never merged. `self` holds the document's front
+  matter and data fences: `{{ self.title }}`,
+  `{% for (const m of self.members) { %}`. `arg` holds exactly the data
+  handed to this render — `$.render(target, data)`'s second argument, the
+  CLI's `-d`/`--data-file`, a `renderEach` record — and is `{}` when
+  nothing was passed, so an entry document's `{{ arg.title }}` is honestly
+  `undefined` even though the document declares a `title:`. Defaulting is
+  the template's own explicit choice: `{{ arg.title ?? self.title }}`. A
+  key that isn't a valid identifier is `arg["the key"]`.
+- **Missing data is graceful by construction**: property access on an object
+  never throws for an absent key, so optional data reads as `undefined` and
+  falls back explicitly: `{{ arg.age ?? 'unknown' }}`,
+  `{{ (self.skills ?? []).join(', ') }}` (ternaries and `?.` work too).
+  `{{ arg.missing }}` alone renders the string `undefined` — write the
+  fallback when you don't want that. There is no forgiving name resolution
+  beyond that: `{{ arg.missing.prop }}` is a real `TypeError`, and a bare
+  identifier the template never declared (`{{ title }}`) is a real
+  `ReferenceError` that fails the render.
 - **Whitespace control**: a `{% %}` tag alone on its line leaves no blank
   line, so generated tables and lists stay contiguous.
 
@@ -224,7 +237,7 @@ report:
   title: "Invoice #42"
   owner: Grace Hopper
 +++
-# {{ report.title }}
+# {{ self.report.title }}
 ```
 
 - **No `+++`** ⇒ the whole document is body with no data (plain markdown just
@@ -246,7 +259,7 @@ All other fences (` ```yaml `, ` ```js `, …) are left alone and render as
 normal code blocks.
 
 ````
-# {{ report.title }}
+# {{ self.report.title }}
 
 ```data
 report:
@@ -321,7 +334,7 @@ attributes**, MongoDB-style:
 | --- | --- |
 | `$.find(query)` | data of the documents matching `query`, in document order (full Mongo operators: `{ age: { $gt: 35 } }`, array-contains, …) |
 | `$.findOne(query)` | first match, or `null` |
-| `$.render(target, data)` | run the document matching `target` (a query — or an index) with `data` overriding its own; returns markdown |
+| `$.render(target, data)` | run the document `target` with `data` as its `arg` (its own front matter stays separate, on its `self`); returns markdown. `target` is a `$.find`/`$.findOne` result (rendered by identity, no re-query — `$.render($.findOne({ template: 'card' }), m)`), an index, or a query object as shorthand for its first match |
 | `$.withTag(tag)` | shorthand for `$.find({ tags: tag })` (see Hashtags) |
 | `$.emit(path, content)` | produce a named output as a side effect of this render — see `openDocumentSet`'s `onEmit` below; a no-op if the embedder didn't ask for it |
 | `$.data(i)` | document `i`'s data (positional) |
@@ -345,7 +358,7 @@ document needs to know another's position — see
 ```
 title: Team Roster
 +++
-# {{ title }}
+# {{ self.title }}
 
 {% for (const m of $.find({ role: 'member' })) { %}
 {{ $.render({ template: 'member-card' }, m) }}
@@ -353,8 +366,8 @@ title: Team Roster
 ---
 template: member-card
 +++
-### {{ name }}
-- Age: {{ age }}
+### {{ arg.name }}
+- Age: {{ arg.age }}
 ---
 role: member
 name: Alice
@@ -391,11 +404,13 @@ const pages = renderEach([templateSource, dataSource]); // → string[], one per
 ```
 
 `renderEach` renders the entry document (the template) once **per other
-document** in the set, with that document's front matter as its data. The
-template's own front matter acts as defaults — each record overrides it, and
-`extraContext` overrides both — so the template still renders standalone with
-its sample data. A data file is just `---`-separated documents, each ending in
-a trailing `+++` so it is data-only with an empty body:
+document** in the set, with that document's front matter (merged with
+`extraContext`, which wins) arriving as the template's `arg`. The template's
+own front matter is its `self`, so sample-data defaults are the template's
+explicit `{{ arg.x ?? self.x }}` — written that way, it still renders
+standalone (empty `arg`) with its sample data. A data file is just
+`---`-separated documents, each ending in a trailing `+++` so it is
+data-only with an empty body:
 
 ```
 report: { title: "Invoice #57", owner: Ada Lovelace }
@@ -424,15 +439,15 @@ See [`examples/`](examples/) for runnable documents and
 
 Each document body is transpiled to a statement sequence: literal text becomes
 `__out += "…"`, `{{ expr }}` becomes `__out += (expr)`, and `{% code %}` is
-inserted verbatim. The statements reference data as bare identifiers; the
-executor prepends `let` bindings for the context keys (`contextBindings`) —
-there is no `with`, so only keys that are valid identifiers become bindings
-(others stay reachable as `__ctx["the key"]`).
+inserted verbatim. The statements reference data through the two bindings the
+executor declares first — `self` (the document's own data) and `arg`
+(caller-passed data) — plain property access, so there is no `with`, no
+per-key bindings, and no special name resolution.
 
 That source is available three ways:
 
 ```js
-import { compileTemplateSource, compileTemplate, contextBindings } from 'mdy';
+import { compileTemplateSource, compileTemplate } from 'mdy';
 
 const src = compileTemplateSource(body); // the statement sequence
 const gen = compileTemplate(body);       // gen.source === src
@@ -446,8 +461,9 @@ mdy mysite --emit-js                 # compiled JS of just the entry document (m
 `compileTemplate` runs the statements in the **host** runtime via
 `new Function` — a debug path, deliberately simple and **not sandboxed**. The
 real pipeline never uses it: `render`/`renderToMarkdown` assemble a
-self-contained program per render (context JSON + bindings + `$` helper +
-compiled statements) and evaluate it inside the lamassu VM. `$` calls that
+self-contained program per render (own data bound as `self`, passed data as
+`arg`, plus the `$` helper and compiled statements) and evaluate it inside
+the lamassu VM. `$` calls that
 need the host (`find`/`findOne`/`render`) are **async host natives**
 (lamassu's `__hostcall`): the VM execution suspends while the host answers —
 a nisaba query, or a nested render on another pooled VM instance — and
@@ -543,7 +559,7 @@ in the same package — with the standard dynamic-import expression:
 
 ```
 {% const util = await import("./lib/util.js") %}
-{{ util.slugify(title) }}
+{{ util.slugify(self.title) }}
 ```
 
 The module runs inside the same sandboxed VM (it's instantiated by the

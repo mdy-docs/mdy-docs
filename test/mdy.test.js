@@ -9,7 +9,6 @@ import vm from 'node:vm';
 import {
   compileTemplate,
   compileTemplateSource,
-  contextBindings,
   splitDocuments,
   parseDocuments,
   extractTags,
@@ -27,8 +26,15 @@ const example = (name) => readFileSync(join(here, '..', 'examples', name), 'utf8
 // --- compileTemplate ------------------------------------------------------
 
 test('emits literal text and interpolated expressions', () => {
-  const gen = compileTemplate('Hello {{ name.toUpperCase() }}, {{ 2 + 2 }}');
-  assert.equal(gen({ name: 'ada' }), 'Hello ADA, 4');
+  const gen = compileTemplate('Hello {{ arg.name.toUpperCase() }}, {{ 2 + 2 }}');
+  assert.equal(gen({}, { name: 'ada' }), 'Hello ADA, 4');
+});
+
+test('generate takes (self, arg): two separate bindings, both defaulting to {}', () => {
+  const gen = compileTemplate('{{ self.x }}/{{ arg.x }}/{{ arg.x ?? self.x }}');
+  assert.equal(gen({ x: 'mine' }, { x: 'passed' }), 'mine/passed/passed');
+  assert.equal(gen({ x: 'mine' }), 'mine/undefined/mine');
+  assert.equal(gen(), 'undefined/undefined/undefined');
 });
 
 test('{% code %} runs without emitting, {{ }} emits', () => {
@@ -38,14 +44,29 @@ test('{% code %} runs without emitting, {{ }} emits', () => {
 
 test('shared scope across tags: loops build output', () => {
   const gen = compileTemplate(
-    '{% for (const n of nums) { %}[{{ n }}]{% } %}'
+    '{% for (const n of arg.nums) { %}[{{ n }}]{% } %}'
   );
-  assert.equal(gen({ nums: [1, 2, 3] }), '[1][2][3]');
+  assert.equal(gen({}, { nums: [1, 2, 3] }), '[1][2][3]');
 });
 
 test('variables declared in one tag persist to later tags', () => {
   const gen = compileTemplate('{% let total = 0 %}{% total += 10 %}{% total *= 2 %}{{ total }}');
   assert.equal(gen({}), '20');
+});
+
+test('write() appends from inside {% %} — the code-tag equivalent of {{ }}', () => {
+  const gen = compileTemplate('{% write("a=", arg.a, "; ") %}{% if (arg.a > 1) { write("big") } %}');
+  assert.equal(gen({}, { a: 2 }), 'a=2; big');
+  // same string coercion as {{ }}: numbers, undefined, null all via +=
+  assert.equal(compileTemplate('{% write(arg.x) %}|{{ arg.x }}')({}, {}), 'undefined|undefined');
+});
+
+test('write() is declared in the compiled prologue, so it exists in every executor', async () => {
+  assert.match(compileTemplateSource(''), /const write = /);
+  const out = await renderToMarkdown(
+    '{% const card = $.findOne({ t: "card" }) %}{% write($.render(card, { name: "Ada" })) %}\n---\nt: card\n+++\nhi {{ arg.name }}'
+  );
+  assert.equal(out.trim(), 'hi Ada');
 });
 
 test('\\{{ and \\{% are literals', () => {
@@ -60,56 +81,53 @@ test('unclosed tags throw', () => {
 
 test('standalone {% %} lines collapse (no blank lines in output)', () => {
   const tpl = [
-    '{% for (const n of nums) { %}',
+    '{% for (const n of arg.nums) { %}',
     '- item {{ n }}',
     '{% } %}',
     'done',
   ].join('\n');
   const gen = compileTemplate(tpl);
-  assert.equal(gen({ nums: [1, 2] }), '- item 1\n- item 2\ndone');
+  assert.equal(gen({}, { nums: [1, 2] }), '- item 1\n- item 2\ndone');
 });
 
 // --- compileTemplateSource ------------------------------------------------
 
 test('compileTemplateSource exposes the generated JS statements (no `with`)', () => {
-  const src = compileTemplateSource('Hi {{ name }}{% let n = 1 %}{{ n }}');
+  const src = compileTemplateSource('Hi {{ arg.name }}{% let n = 1 %}{{ n }}');
   assert.doesNotMatch(src, /with \(/);
-  assert.match(src, /__out \+= \(name\)/);
+  assert.match(src, /__out \+= \(arg\.name\)/);
   assert.match(src, /let n = 1/);
-  // an embedder binds the context keys, runs the statements, reads __out:
-  const fn = new Function('__ctx', `${contextBindings({ name: '' })}\n${src}\nreturn __out;`);
-  assert.equal(fn({ name: 'ada' }), 'Hi ada1');
+  // an embedder declares the two bindings — `self` (the document's own
+  // data) and `arg` (caller-passed data) — runs the statements, reads __out:
+  const fn = new Function('self', 'arg', `${src}\nreturn __out;`);
+  assert.equal(fn({}, { name: 'ada' }), 'Hi ada1');
 });
 
 test('a compiled template carries its source', () => {
-  const gen = compileTemplate('x={{ x }}');
-  assert.equal(gen.source, compileTemplateSource('x={{ x }}'));
-  assert.equal(gen({ x: 5 }), 'x=5');
+  const gen = compileTemplate('x={{ arg.x }}');
+  assert.equal(gen.source, compileTemplateSource('x={{ arg.x }}'));
+  assert.equal(gen({}, { x: 5 }), 'x=5');
 });
 
-test('contextBindings skips non-identifier and reserved keys', () => {
-  const bindings = contextBindings({ ok: 1, 'not ok': 2, for: 3, JSON: 4 });
-  assert.match(bindings, /let ok = __ctx\["ok"\];/);
-  assert.doesNotMatch(bindings, /not ok|let for|let JSON/);
+test('non-identifier and reserved-word keys are reachable via arg[...]', () => {
+  const gen = compileTemplate('{{ arg.ok }}/{{ arg["not ok"] }}/{{ arg["for"] }}/{{ arg.JSON }}');
+  assert.equal(gen({}, { ok: 1, 'not ok': 2, for: 3, JSON: 4 }), '1/2/3/4');
 });
 
 test('compiled source runs in a node:vm sandbox', () => {
-  const src = compileTemplateSource('Hello {{ who }}, {{ 2 + 3 }}');
-  const fn = vm.runInNewContext(
-    `(function (__ctx) {\n${contextBindings({ who: '' })}\n${src}\nreturn __out;\n})`,
-    {}
-  );
-  assert.equal(fn({ who: 'sandbox' }), 'Hello sandbox, 5');
+  const src = compileTemplateSource('Hello {{ arg.who }}, {{ 2 + 3 }}');
+  const fn = vm.runInNewContext(`(function (self, arg) {\n${src}\nreturn __out;\n})`, {});
+  assert.equal(fn({}, { who: 'sandbox' }), 'Hello sandbox, 5');
 });
 
 // --- parseDocuments -------------------------------------------------------
 
 test('front matter before +++ is parsed as YAML and stripped from the body', () => {
-  const src = 'title: Hi\nn: 2\n+++\n# {{ title }}';
+  const src = 'title: Hi\nn: 2\n+++\n# {{ self.title }}';
   const [doc] = parseDocuments(src);
   assert.deepEqual(doc.data, { title: 'Hi', n: 2 });
   assert.ok(!doc.content.includes('title: Hi'));
-  assert.ok(doc.content.includes('# {{ title }}'));
+  assert.ok(doc.content.includes('# {{ self.title }}'));
 });
 
 test('a document with no +++ is all body and has empty data', () => {
@@ -187,7 +205,7 @@ test('an empty source is one empty document, and renders to nothing', async () =
 // --- data fences ----------------------------------------------------------
 
 test('```data fences are parsed as YAML, merged into data, and stripped', async () => {
-  const src = 'x is {{ x }}\n\n```data\nx: 1\n```\n';
+  const src = 'x is {{ self.x }}\n\n```data\nx: 1\n```\n';
   const [doc] = parseDocuments(src);
   assert.equal(doc.data.x, 1);
   assert.ok(!doc.content.includes('```data'));
@@ -201,7 +219,7 @@ test('later data fences win over earlier ones and over front matter', () => {
 });
 
 test('data fences are order-independent: a template above may use them', async () => {
-  const out = await renderToMarkdown('total: {{ n * 2 }}\n\n```data\nn: 21\n```\n');
+  const out = await renderToMarkdown('total: {{ self.n * 2 }}\n\n```data\nn: 21\n```\n');
   assert.equal(out.trim(), 'total: 42');
 });
 
@@ -288,7 +306,7 @@ test('an untagged document gets no tags key', () => {
 });
 
 test('tags are available in the template context', async () => {
-  const out = await renderToMarkdown('about #fred and #wilma\n\ntags: {{ tags.join(", ") }}');
+  const out = await renderToMarkdown('about #fred and #wilma\n\ntags: {{ self.tags.join(", ") }}');
   assert.match(out, /tags: fred, wilma/);
 });
 
@@ -365,10 +383,19 @@ test('createProcessor accepts custom rehype plugins (highlight hook)', async () 
   assert.match(html, /<code class="language-yaml"><mark>k: v\s*<\/mark>/);
 });
 
-test('extraContext is available to the template and overrides data', async () => {
-  const src = 'who: world\n+++\nHello {{ who }} from {{ where }}';
+test('extraContext arrives on arg; the document\'s own data stays on self, never merged', async () => {
+  // Both carry `who` with different values: the bindings stay separate, and
+  // "extraContext wins" is the template's own explicit `arg.x ?? self.x`.
+  const src = 'who: world\n+++\n{{ self.who }}/{{ arg.who }}/{{ arg.who ?? self.who }}/{{ arg.where }}';
   const out = await renderToMarkdown(src, { where: 'mdy', who: 'everyone' });
-  assert.equal(out.trim(), 'Hello everyone from mdy');
+  assert.equal(out.trim(), 'world/everyone/everyone/mdy');
+});
+
+test('an entry document\'s own front matter is self, not arg', async () => {
+  // The contradiction the split resolves: with nothing passed in, arg is {}
+  // — the document's front matter never leaks onto it.
+  const out = await renderToMarkdown('title: Hi\n+++\narg={{ arg.title }} self={{ self.title }}');
+  assert.equal(out.trim(), 'arg=undefined self=Hi');
 });
 
 test('templates run sandboxed in the VM: no process, no Function', async () => {
@@ -425,7 +452,7 @@ test('$.render selects its template document by query', async () => {
     '---',
     'template: card',
     '+++',
-    '- {{ name }} is {{ age }}',
+    '- {{ arg.name }} is {{ arg.age }}',
     '---',
     'role: member',
     'name: Alice',
@@ -440,13 +467,55 @@ test('$.render selects its template document by query', async () => {
   assert.equal((await renderDocumentSet(src)).trim(), '- Alice is 30\n- Bob is 41');
 });
 
+test('$.render renders a $.find/$.findOne result directly — a document reference, not a query', async () => {
+  const src = [
+    '{% const card = $.findOne({ template: "card" }) %}',
+    '{% for (const m of $.find({ role: "member" })) { %}',
+    '{{ $.render(card, m) }}',
+    '{% } %}',
+    '---',
+    'template: card',
+    '+++',
+    '- {{ arg.name }}',
+    '---',
+    'role: member',
+    'name: Alice',
+    '+++',
+  ].join('\n');
+  assert.equal((await renderDocumentSet(src)).trim(), '- Alice');
+});
+
+test('$.render of a reference resolves by identity: no query fires for the render itself', async () => {
+  const seen = [];
+  const set = await openDocumentSet(
+    '{% const card = $.findOne({ t: "card" }) %}{{ $.render(card) }}\n---\nt: card\n+++\nhi',
+    { onQuery: (info) => seen.push(info.query) }
+  );
+  assert.equal((await set.render(0)).trim(), 'hi');
+  assert.deepEqual(seen, [{ t: 'card' }]); // just the findOne — the render added none
+});
+
+test('$.render(null) — a missed $.findOne — is a clear template error', async () => {
+  await assert.rejects(
+    renderToMarkdown('{{ $.render($.findOne({ t: "nope" })) }}\n---\nt: card\n+++\nhi'),
+    /target is null\/undefined/
+  );
+});
+
+test('$.render of a reference from another set (unknown _id) is a clear error', async () => {
+  await assert.rejects(
+    renderToMarkdown('{{ $.render({ _id: "deadbeef" }) }}\n---\nt: card\n+++\nhi'),
+    /not a document of this set/
+  );
+});
+
 test('$.render by index still works (positional)', async () => {
   const src = [
     '{% for (const m of $.documents.slice(2)) { %}',
     '{{ $.render(1, m.data) }}',
     '{% } %}',
     '---',
-    '- {{ name }} is {{ age }}',
+    '- {{ arg.name }} is {{ arg.age }}',
     '---',
     'name: Alice',
     'age: 30',
@@ -482,7 +551,7 @@ test('cyclic $.render is caught by the depth guard', async () => {
 });
 
 test('entry index selects which document renders', async () => {
-  const src = 'doc zero\n---\nx: 7\n+++\nsecond doc x={{ x }}';
+  const src = 'doc zero\n---\nx: 7\n+++\nsecond doc x={{ self.x }}';
   assert.equal((await renderToMarkdown(src, {}, 0)).trim(), 'doc zero');
   assert.equal((await renderToMarkdown(src, {}, 1)).trim(), 'second doc x=7');
 });
@@ -509,22 +578,28 @@ test('$ addresses documents across sources', async () => {
 });
 
 test('renderEach applies the entry template to each other document', async () => {
-  const out = await renderEach(['Hi {{ name }}!', 'name: Ada\n+++\n---\nname: Bob\n+++\n']);
+  const out = await renderEach(['Hi {{ arg.name }}!', 'name: Ada\n+++\n---\nname: Bob\n+++\n']);
   assert.deepEqual(out.map((s) => s.trim()), ['Hi Ada!', 'Hi Bob!']);
 });
 
-test('renderEach: entry data is defaults, doc data overrides, extraContext wins', async () => {
-  const template = 'greeting: Hello\nname: nobody\n+++\n{{ greeting }} {{ name }}';
+test('renderEach: the record is arg, template front matter is self; defaults are explicit arg.x ?? self.x', async () => {
+  // The record never merges with the template's own data: self.name stays
+  // "nobody" even while arg.name is "Ada". extraContext merges into the
+  // record (and wins) before arriving as arg.
+  const template =
+    'greeting: Hello\nname: nobody\n+++\n{{ arg.greeting ?? self.greeting }} {{ arg.name ?? self.name }}/{{ self.name }}';
   const data = 'name: Ada\n+++\n';
-  assert.deepEqual((await renderEach([template, data])).map((s) => s.trim()), ['Hello Ada']);
+  assert.deepEqual((await renderEach([template, data])).map((s) => s.trim()), ['Hello Ada/nobody']);
   assert.deepEqual(
     (await renderEach([template, data], { greeting: 'Yo' })).map((s) => s.trim()),
-    ['Yo Ada']
+    ['Yo Ada/nobody']
   );
 });
 
-test('renderEach with no sibling documents renders the entry once with its own data', async () => {
-  const out = await renderEach('who: world\n+++\nhi {{ who }}');
+test('renderEach with no sibling documents renders the entry once with arg = {}', async () => {
+  // The same explicit fallback keeps a template file working standalone:
+  // its own front matter is on self, and there is no record to be arg.
+  const out = await renderEach('who: world\n+++\nhi {{ arg.who ?? self.who }}');
   assert.deepEqual(out.map((s) => s.trim()), ['hi world']);
 });
 
@@ -587,7 +662,7 @@ test('meta fields are queryable and visible in templates', async () => {
 
 test('openDocumentSet: one set, many host-side queries and renders', async () => {
   const set = await openDocumentSet([
-    { text: 'layout: post\n+++\n# {{ title }}', meta: { kind: 'layout' } },
+    { text: 'layout: post\n+++\n# {{ arg.title }}', meta: { kind: 'layout' } },
     { text: 'title: A\n+++\n---\ntitle: B\n+++\n', meta: { kind: 'page' } },
   ]);
 
@@ -614,8 +689,8 @@ test('openDocumentSet: findOne returns first match or null', async () => {
   assert.equal(await set.findOne({ x: 99 }), null);
 });
 
-test('openDocumentSet: render by index, ctx overrides document data', async () => {
-  const set = await openDocumentSet('name: default\n+++\nHi {{ name }}');
+test('openDocumentSet: render by index — ctx is arg, document data is self', async () => {
+  const set = await openDocumentSet('name: default\n+++\nHi {{ arg.name ?? self.name }}');
   assert.equal((await set.render(0)).trim(), 'Hi default');
   assert.equal((await set.render(0, { name: 'Ada' })).trim(), 'Hi Ada');
 });
@@ -628,7 +703,7 @@ test('openDocumentSet: render on an unmatched query rejects', async () => {
 test('openDocumentSet: templates can still $.find and $.render inside the VM', async () => {
   const set = await openDocumentSet([
     '{% for (const d of $.find({ n: { $gte: 1 } })) { %}{{ $.render({ card: true }, d) }}{% } %}',
-    'card: true\n+++\n[{{ n }}]',
+    'card: true\n+++\n[{{ arg.n }}]',
     'n: 1\n+++\n---\nn: 2\n+++\n',
   ]);
   assert.equal((await set.render(0)).replace(/\s+/g, ''), '\\[1]\\[2]'); // normalized markdown escapes reference-link lookalikes
@@ -712,18 +787,19 @@ test('a template can build a TOC from another document\'s rendered headings', as
 
 // --- graceful missing data --------------------------------------------------
 
-test('a missing identifier reads as undefined instead of erroring', async () => {
-  // The document-set case: a shared template references properties a data
-  // record may not carry. The executor binds identifiers the VM reports as
-  // undefined ("ReferenceError: x is not defined" → re-run with x bound
-  // from the context, where a missing key reads undefined), so ?? and
-  // ternary fallbacks work.
-  assert.equal(await renderToMarkdown('x: 1\n+++\nv={{ missing }}'), 'v=undefined\n');
-  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ age ?? "n/a" }}'), 'n/a\n');
-  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ age ? age : "none" }}'), 'none\n');
-  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ (skills ?? []).join(", ") }}'), '');
-  // several distinct missing identifiers in one document
-  assert.equal(await renderToMarkdown('+++\n{{ a ?? 1 }}/{{ b ?? 2 }}/{{ c ?? 3 }}'), '1/2/3\n');
+test('a missing data key reads as undefined instead of erroring', async () => {
+  // Both bindings are plain objects, so a missing key is ordinary property
+  // access reading undefined — ?? and ternary fallbacks work, on self
+  // (a document's own optional data) and arg (a record a shared template
+  // references but the caller may not carry) alike.
+  assert.equal(await renderToMarkdown('x: 1\n+++\nv={{ self.missing }}'), 'v=undefined\n');
+  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ self.age ?? "n/a" }}'), 'n/a\n');
+  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ self.age ? self.age : "none" }}'), 'none\n');
+  assert.equal(await renderToMarkdown('x: 1\n+++\n{{ (self.skills ?? []).join(", ") }}'), '');
+  // and on arg, which is {} here because nothing was passed in
+  assert.equal(await renderToMarkdown('x: 1\n+++\nv={{ arg.missing }}'), 'v=undefined\n');
+  // several distinct missing keys in one document
+  assert.equal(await renderToMarkdown('+++\n{{ arg.a ?? 1 }}/{{ self.b ?? 2 }}/{{ arg.c ?? self.c ?? 3 }}'), '1/2/3\n');
 });
 
 test('a shared template renders records that lack referenced properties', async () => {
@@ -736,7 +812,7 @@ test('a shared template renders records that lack referenced properties', async 
     '---',
     'template: card',
     '+++',
-    '### {{ name ?? "(unnamed)" }} — {{ age ?? "?" }} — {{ (skills ?? []).join("/") }}',
+    '### {{ arg.name ?? "(unnamed)" }} — {{ arg.age ?? "?" }} — {{ (arg.skills ?? []).join("/") }}',
     '---',
     'role: member',
     'name: Alice',
@@ -751,14 +827,15 @@ test('a shared template renders records that lack referenced properties', async 
   assert.equal(await renderToMarkdown(src), '### Alice — 30 — js\n\n### Bob — ? —\n');
 });
 
-test('only identifier resolution is graceful — other errors still throw', async () => {
-  // property access on the resulting undefined is a real TypeError
-  await assert.rejects(renderToMarkdown('+++\n{{ missing.prop }}'), /template error/);
-  // and a thrown ReferenceError-shaped string is not retried (whole-message match only)
+test('an undeclared bare identifier is a genuine template error', async () => {
+  // only self.*/arg.* property access is graceful — a bare identifier the
+  // template never declared is a real ReferenceError
   await assert.rejects(
-    renderToMarkdown('+++\n{% throw "boom: ReferenceError: x is not defined (fake)" %}'),
-    /boom/
+    renderToMarkdown('+++\n{{ nope }}'),
+    /template error.*nope is not defined/
   );
+  // and property access on a missing key's undefined is a real TypeError
+  await assert.rejects(renderToMarkdown('+++\n{{ arg.missing.prop }}'), /template error/);
 });
 
 test('$.stringify on a non-node is a template error, not an engine crash', async () => {

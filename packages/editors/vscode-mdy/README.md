@@ -104,7 +104,7 @@ is `(?=[^\n])` and not the more obvious `(?=[\s\S])`.
 **The injection is load-bearing.** The markdown grammar claims headings,
 list items, emphasis, tables, quotes… as its own begin/end contexts, and
 inside those contexts the mdy grammar's top-level patterns are never
-consulted — `# {{ title }}` would lose its tag delimiters entirely. The
+consulted — `# {{ self.title }}` would lose its tag delimiters entirely. The
 grammar's `injections` entry re-injects the escape/tag/separator rules
 with `L:` priority into every markdown context (excluding open tags and
 front matter, where `{{ }}` is literal YAML).
@@ -141,7 +141,7 @@ No VSCode install required — `npm test` runs everything headless:
   `vscode-textmate`/`vscode-oniguruma` (the same engine VSCode uses)
   against VSCode's REAL bundled markdown grammar, vendored into
   `test/fixtures/` — an empty markdown stub passes trivially (nothing
-  competes for `# {{ title }}`) and is exactly the false confidence that
+  competes for `# {{ self.title }}`) and is exactly the false confidence that
   shipped 0.0.1's missing-delimiter bugs. Unrelated embedded scopes
   (`source.js`, `source.yaml`, fence languages…) stay stubbed empty: an
   unresolved `include` poisons its entire containing rule, and where

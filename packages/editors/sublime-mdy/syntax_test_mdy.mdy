@@ -1,14 +1,14 @@
 # SYNTAX TEST "Packages/sublime-mdy/mdy.sublime-syntax"
 
-# {{ title }}
+# {{ self.title }}
 # ^^ punctuation.section.embedded.begin.expression.mdy
-#    ^^^^^ meta.embedded.line.mdy
-#          ^^ punctuation.section.embedded.end.expression.mdy
+#    ^^^^^^^^^^ meta.embedded.line.mdy
+#               ^^ punctuation.section.embedded.end.expression.mdy
 
-A paragraph with {{ count + 1 }} inline.
+A paragraph with {{ self.count + 1 }} inline.
 #                ^^ punctuation.section.embedded.begin.expression.mdy
-#                         ^ keyword.operator.js.mdy
-#                             ^^ punctuation.section.embedded.end.expression.mdy
+#                              ^ keyword.operator.js.mdy
+#                                  ^^ punctuation.section.embedded.end.expression.mdy
 
 {% for (const m of $.find({ role: 'member' })) { %}
 # <- punctuation.section.embedded.begin.statement.mdy
@@ -28,5 +28,5 @@ name: Alice
 # <- meta.frontmatter.mdy
 +++
 # <- punctuation.definition.frontmatter.mdy
-body of the second document with {{ name }}
+body of the second document with {{ self.name }}
 #                                ^^ punctuation.section.embedded.begin.expression.mdy

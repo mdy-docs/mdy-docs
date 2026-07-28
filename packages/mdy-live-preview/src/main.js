@@ -47,7 +47,7 @@ const init = async () => {
     // file: the entry composes its member documents entirely by query.
     const defaultInput = `title: Team Roster
 +++
-# {{ title }}
+# {{ self.title }}
 
 {% for (const m of $.find({ role: 'member' })) { %}
 {{ $.render({ template: 'member-card' }, m) }}
@@ -55,10 +55,10 @@ const init = async () => {
 ---
 template: member-card
 +++
-### {{ name }}
+### {{ arg.name }}
 
-- Age: {{ age }}
-- Skills: {{ skills.join(', ') }}
+- Age: {{ arg.age }}
+- Skills: {{ arg.skills.join(', ') }}
 ---
 role: member
 name: Alice

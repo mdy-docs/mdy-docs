@@ -1,11 +1,11 @@
-# {{ title }}
+# {{ arg.title }}
 
-*{{ date }}*
+*{{ arg.date }}*
 
-{{ content }}
+{{ arg.content }}
 
 {%
-  const myRelated = typeof related !== "undefined" ? related : [];
+  const myRelated = arg.related ?? [];
   if (myRelated.length > 0) {
 %}
 **More like this:** {% for (const p of myRelated) { %}[{{ p.title }}]({{ p.url }}) {% } %}

@@ -1,6 +1,6 @@
 title: Notes about fred
 +++
-# {{ title }}
+# {{ self.title }}
 
 {% for (const d of $.withTag('fred')) { %}
 - **{{ d.title }}** — tags: {{ d.tags.join(', ') }}

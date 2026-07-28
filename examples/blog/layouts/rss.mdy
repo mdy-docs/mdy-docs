@@ -1,15 +1,15 @@
 {%
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const base = String(site.baseURL == null ? "" : site.baseURL).replace(/\/+$/, "");
+  const base = String(arg.site.baseURL == null ? "" : arg.site.baseURL).replace(/\/+$/, "");
 %}
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0">
 <channel>
-<title>{{ esc(site.title) }}</title>
+<title>{{ esc(arg.site.title) }}</title>
 <link>{{ esc(base + "/") }}</link>
-<description>{{ esc(site.description) }}</description>
+<description>{{ esc(arg.site.description) }}</description>
 {%
-  for (const p of posts.slice(0, 20)) {
+  for (const p of arg.posts.slice(0, 20)) {
     const pubDate = $.rfc822(p.date);
 %}
 <item>

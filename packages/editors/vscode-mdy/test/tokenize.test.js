@@ -25,7 +25,7 @@ import tm from 'vscode-textmate';
  * top-level tag patterns are never consulted — only the `injections`
  * entry reaches in there. Against an empty markdown stub every tag
  * highlights trivially and none of that is exercised (the shipped 0.0.1
- * passed its tests while dropping `# {{ title }}`'s delimiters in real
+ * passed its tests while dropping `# {{ self.title }}`'s delimiters in real
  * VSCode — exactly this gap).
  *
  * source.js / source.yaml (and everything ELSE the markdown grammar
@@ -85,14 +85,14 @@ function tokenize(text) {
 }
 
 test('front matter at the start of a file is scoped meta.frontmatter.mdy, ending at the bare +++ line', () => {
-  const lines = tokenize('title: Team Roster\n+++\n# {{ title }}');
+  const lines = tokenize('title: Team Roster\n+++\n# {{ self.title }}');
   assert.equal(lines[0][0].scope, 'meta.frontmatter.mdy');
   assert.equal(lines[1][0].scope, 'markup.heading.frontmatter.mdy') // top-of-stack; punctuation.definition.frontmatter.mdy sits beneath it;
   assert.ok(!lines[2].some((t) => t.scope.includes('frontmatter')));
 });
 
 test('a document with no +++ has no front matter at all — body starting with markdown/HTML is never mistaken for YAML', () => {
-  const lines = tokenize('<!doctype html>\n<html lang="en">\n{{ content }}');
+  const lines = tokenize('<!doctype html>\n<html lang="en">\n{{ arg.content }}');
   for (const line of lines) {
     assert.ok(!line.some((t) => t.scope.includes('frontmatter')));
   }
@@ -100,13 +100,13 @@ test('a document with no +++ has no front matter at all — body starting with m
 
 test('a bare --- line is a document separator, and the next document gets its own front matter through to its own +++', () => {
   const lines = tokenize(
-    ['title: Team Roster', '+++', '{% for (const m of $.find({})) { %}', '{% } %}', '---', 'role: member', 'name: Alice', '+++', '### {{ name }}'].join('\n')
+    ['title: Team Roster', '+++', '{% for (const m of $.find({})) { %}', '{% } %}', '---', 'role: member', 'name: Alice', '+++', '### {{ self.name }}'].join('\n')
   );
   assert.equal(lines[4][0].scope, 'markup.heading.separator.mdy') // top-of-stack; punctuation.definition.separator.mdy sits beneath it (space-separated scopes); // ---
   assert.equal(lines[5][0].scope, 'meta.frontmatter.mdy'); // role: member
   assert.equal(lines[6][0].scope, 'meta.frontmatter.mdy'); // name: Alice
   assert.equal(lines[7][0].scope, 'markup.heading.frontmatter.mdy') // top-of-stack; punctuation.definition.frontmatter.mdy sits beneath it; // +++
-  assert.ok(!lines[8].some((t) => t.scope.includes('frontmatter'))); // ### {{ name }}
+  assert.ok(!lines[8].some((t) => t.scope.includes('frontmatter'))); // ### {{ self.name }}
 });
 
 test('--- with no front matter following (next line is body, not key: value) is just a separator', () => {
@@ -116,7 +116,7 @@ test('--- with no front matter following (next line is body, not key: value) is 
 });
 
 test('{{ }} output tags and {% %} code tags get distinct begin/end punctuation scopes', () => {
-  const [line] = tokenize('{{ title }} and {% const x = 1 %}');
+  const [line] = tokenize('{{ self.title }} and {% const x = 1 %}');
   const scopes = line.map((t) => t.scope);
   assert.ok(scopes.includes('punctuation.section.embedded.begin.expression.mdy'));
   assert.ok(scopes.includes('punctuation.section.embedded.end.expression.mdy'));
@@ -169,10 +169,10 @@ function delimiterTokens(text) {
 }
 
 test('a tag inside a markdown heading keeps its delimiters (injection, not top-level patterns)', () => {
-  const found = delimiterTokens('# {{ title }}');
+  const found = delimiterTokens('# {{ self.title }}');
   assert.deepEqual(found, [
     { line: 0, col: 2, kind: 'begin.expression' },
-    { line: 0, col: 11, kind: 'end.expression' },
+    { line: 0, col: 16, kind: 'end.expression' },
   ]);
 });
 
@@ -282,7 +282,7 @@ test('tag delimiters are NOT inside the JavaScript-mapped scope — only tag con
   // (not name) on the tag regions keeps the delimiters mdy-language, where
   // language-configuration.json's "colorizedBracketPairs": [] applies.
   let state = INITIAL;
-  const r = grammar.tokenizeLine('{{ title }} and {% const x = 1 %}', state);
+  const r = grammar.tokenizeLine('{{ self.title }} and {% const x = 1 %}', state);
   for (const t of r.tokens) {
     const isDelimiter = t.scopes.some((s) => s.startsWith('punctuation.section.embedded.'));
     const isJsMapped = t.scopes.includes('meta.embedded.line.mdy');

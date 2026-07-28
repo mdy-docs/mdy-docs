@@ -26,13 +26,16 @@ import { runProgram } from './vm.js';
  *   2. compileTemplate() — the body is compiled into ONE JavaScript function
  *                          that appends to an output buffer. Because the whole
  *                          document becomes one function body, every `{{ … }}`
- *                          shares a single scope. The function is run with the
- *                          front matter data as its context, producing a
- *                          markdown string that is finally rendered to HTML.
+ *                          shares a single scope. The function receives the
+ *                          front matter data as `self` ({{ self.title }})
+ *                          and caller-passed data as `arg` ({{ arg.name }}),
+ *                          producing a markdown string that is finally
+ *                          rendered to HTML.
  *
  * Template syntax:
  *   {{ expr }}    append the expression's value to the output
  *   {% code %}    run statements, append nothing (loops, if, let, …)
+ *                 (append explicitly from code with write(value, …))
  *   \{{  \{%      a literal "{{" / "{%"
  *
  * SECURITY: template code runs via `new Function` with full runtime access.
@@ -46,15 +49,27 @@ import { runProgram } from './vm.js';
  * run — the lamassu VM (the real, sandboxed path used by render*) and
  * compileTemplate()'s host-side debug path.
  *
- * The statements reference the document's data as bare identifiers; the
- * embedder binds them first (see contextBindings) — there is no `with`, so
- * only data keys that are valid identifiers become bindings.
+ * The prologue also declares `write(...values)` — the DOCUMENTED way for
+ * `{% %}` code to append to the output ({% write($.render(card, m)) %} is
+ * the code-tag equivalent of {{ $.render(card, m) }}), with the same string
+ * coercion as `{{ }}`. It lives here, next to `__out`, so it exists by
+ * construction in every context the statements run in (VM, host debug,
+ * --emit-js); `__out` itself stays an internal. `write`, `self`, `arg`, and
+ * `$` are the template layer's reserved names.
+ *
+ * The statements reference data through two bindings the embedder declares
+ * first: `self` — the document's own parsed data (`{{ self.title }}`) — and
+ * `arg` — whatever the caller passed in (`{{ arg.name }}`), never merged.
+ * Property access on an object never throws for a missing key, so optional
+ * data reads as `undefined` (`{{ arg.age ?? self.age ?? 'n/a' }}`) with no
+ * machinery behind it — and a key that isn't a valid identifier is just
+ * `arg["the key"]`.
  *
  * @param {string} template
  * @returns {string} JavaScript statements
  */
 export function compileTemplateSource(template) {
-  let code = 'let __out = "";\n';
+  let code = 'let __out = "";\nconst write = (...values) => { for (const v of values) __out += v; };\n';
   let pos = 0;
 
   const emitLiteral = (text) => {
@@ -125,64 +140,23 @@ function jsonForEval(value) {
   return JSON.stringify(value).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 
-// Names that must not become context bindings: JS reserved words, globals the
-// generated program itself relies on (shadowing JSON/String would break the
-// protocol tail and the $ helpers), and the program's own internals.
-const NO_BIND = new Set([
-  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default',
-  'delete', 'do', 'else', 'enum', 'export', 'extends', 'finally', 'for',
-  'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'return',
-  'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while',
-  'with', 'yield', 'await', 'static', 'implements', 'interface', 'package',
-  'private', 'protected', 'public', 'null', 'true', 'false', 'undefined',
-  'arguments', 'eval', 'NaN', 'Infinity',
-  'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Math', 'Date',
-  'RegExp', 'print',
-  '$', '__ctx', '__out', '__call', '__hostcall', '__err', '__done', '__tree',
-]);
-
-const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-
 /**
- * `let` bindings exposing a context object's keys as bare identifiers, for
- * prepending to compiled template statements. Keys that aren't valid
- * identifiers (or would shadow the program's own names) are skipped — they
- * stay reachable as `__ctx["the key"]`.
- *
- * `extraNames` binds additional identifiers the same way even though the
- * context lacks them (so they read as `undefined`) — the mechanism behind
- * graceful missing-data handling: the executor re-runs a template that hit
- * `ReferenceError: x is not defined` with x added here (see runDoc), so a
- * template can reference optional properties and fall back with `??` or a
- * ternary instead of erroring.
- * @param {object} context
- * @param {Iterable<string>} [extraNames]
- * @returns {string} JavaScript statements
- */
-export function contextBindings(context, extraNames = []) {
-  const names = new Set(Object.keys(context));
-  for (const n of extraNames) names.add(n);
-  return [...names]
-    .filter((k) => IDENTIFIER.test(k) && !NO_BIND.has(k))
-    .map((k) => `let ${k} = __ctx[${jsonForEval(k)}];`)
-    .join('\n');
-}
-
-/**
- * Compile a template string into `(context) => markdownString`, executed in
- * the HOST runtime via `new Function`. This is a debug/inspection path — it
- * is NOT sandboxed. Rendering documents through render / renderToMarkdown /
- * renderDocumentSet runs the same compiled statements inside the lamassu VM.
- * The generated statements are available as `.source`.
+ * Compile a template string into `(self, arg) => markdownString`, executed
+ * in the HOST runtime via `new Function`. This is a debug/inspection path —
+ * it is NOT sandboxed. Rendering documents through render / renderToMarkdown
+ * / renderDocumentSet runs the same compiled statements inside the lamassu
+ * VM. The two parameters mirror the real pipeline's bindings: `self` is the
+ * document's own data ({{ self.title }}), `arg` is caller-passed data
+ * ({{ arg.name }}). The generated statements are available as `.source`.
  * @param {string} template
- * @returns {(context?: object) => string}
+ * @returns {(self?: object, arg?: object) => string}
  */
 export function compileTemplate(template) {
   const body = compileTemplateSource(template);
-  const generate = (context = {}) => {
+  const generate = (self = {}, arg = {}) => {
     // eslint-disable-next-line no-new-func
-    const fn = new Function('__ctx', `${contextBindings(context)}\n${body}\nreturn __out;`);
-    return fn(context);
+    const fn = new Function('self', 'arg', `${body}\nreturn __out;`);
+    return fn(self, arg);
   };
   generate.source = body;
   return generate;
@@ -282,11 +256,6 @@ const tocEntries = (tree) => {
 // Each nesting level holds a live VM instance while suspended (Asyncify is
 // not reentrant), so this is deliberately modest.
 const MAX_RENDER_DEPTH = 16;
-
-// Cap on distinct missing identifiers a single document render will bind as
-// undefined before giving up (see runDoc's retry loop) — a runaway backstop,
-// far above what a real template references.
-const MAX_MISSING_BINDINGS = 100;
 
 /**
  * Extract inline hashtags from a document body.
@@ -593,7 +562,7 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * entirely the embedder-supplied native function's business), it only
  * wires the guest-side call shape.
  */
-function buildProgram({ body, ctx, documents, extraNativeNames = [], extraBindings = [] }) {
+function buildProgram({ body, selfData, ctx, documents, extraNativeNames = [] }) {
   for (const name of extraNativeNames) {
     if (!VALID_NATIVE_NAME.test(name)) {
       throw new Error(`mdy: invalid native name ${JSON.stringify(name)} (must be a valid identifier)`);
@@ -603,7 +572,8 @@ function buildProgram({ body, ctx, documents, extraNativeNames = [], extraBindin
     .map((name) => `  ${name}: (...args) => __call(${JSON.stringify(name)}, args),`)
     .join('\n');
   return `await (async () => {
-const __ctx = ${jsonForEval(ctx)};
+const self = ${jsonForEval(selfData)};
+const arg = ${jsonForEval(ctx)};
 const __call = (method, args) => JSON.parse(__hostcall(method, JSON.stringify(args)));
 const $ = {
   documents: ${jsonForEval(documents)},
@@ -620,7 +590,6 @@ const $ = {
   toc: (target) => target === undefined ? ${jsonForEval(TOC_MARKER)} : __call("toc", [target]),
 ${extraNativeLines}
 };
-${contextBindings(ctx, extraBindings)}
 let __done = null;
 let __tree = null;
 let __err = null;
@@ -778,10 +747,26 @@ async function buildDocumentSet(source, options = {}) {
     return hostFind(query);
   };
 
-  // A render target is a document index, or a query whose first hit (in
-  // document order) is the target.
+  // A render target is a document index; a document REFERENCE — a
+  // $.find/$.findOne result, carrying the store's _id, resolved by identity
+  // with no re-query (so `$.render($.findOne({...}), data)` renders exactly
+  // the document the template already holds); or a query whose first hit
+  // (in document order) is the target. A string _id the set doesn't know is
+  // an error rather than a query fallback — the caller clearly held a
+  // reference, just not to a document of this set. `null` gets its own
+  // message because a missed $.findOne is the obvious way to produce it.
   const resolveIndex = async (target, docIndex) => {
     if (typeof target === 'number') return target;
+    if (target === null || target === undefined) {
+      throw new Error('mdy: render: target is null/undefined (a $.findOne with no match?)');
+    }
+    if (typeof target._id === 'string') {
+      const index = idToIndex.get(target._id);
+      if (index === undefined) {
+        throw new Error(`mdy: render: _id ${JSON.stringify(target._id)} is not a document of this set`);
+      }
+      return index;
+    }
     const hit = (await trackedFind(target, docIndex))[0];
     if (!hit) {
       throw new Error(`mdy: render: no document matches ${JSON.stringify(target)}`);
@@ -795,7 +780,6 @@ async function buildDocumentSet(source, options = {}) {
     }
     const doc = docs[i];
     if (!doc) throw new Error(`mdy: no document at index ${i}`);
-    const fullCtx = { ...doc.data, ...ctx };
 
     // The `$` host natives for this render. Each may be async — the VM
     // suspends at the guest's __hostcall until it settles. A nested $.render
@@ -865,56 +849,38 @@ async function buildDocumentSet(source, options = {}) {
         }
       : undefined;
 
-    // Missing data is graceful: a template referencing a property its data
-    // doesn't carry ({{ age }} on an age-less record) reads `undefined`,
-    // so `{{ age ?? 'n/a' }}` and ternaries work — instead of the whole
-    // render dying on `ReferenceError: age is not defined`. There is no JS
-    // parser here to find free identifiers up front; the VM's own error IS
-    // the parser: on that exact error, re-run with the named identifier
-    // added to the bindings (bound from __ctx, whose missing key reads as
-    // undefined). Templates are deterministic (the VM has no Date/random),
-    // so a re-run's side effects ($.emit, nested $.render) replay
-    // identically — emits are path-keyed Map writes downstream, so the
-    // replay collapses. Bounded, and only the exact whole-message shape is
-    // retried — a ReferenceError inside a longer message, or any other
-    // error, still throws.
-    const missingBindings = new Set();
-    for (;;) {
-      const program = buildProgram({
-        body: doc.body,
-        ctx: fullCtx,
-        documents,
-        extraNativeNames,
-        extraBindings: missingBindings,
-      });
-      const reply = await runProgram(program, natives, moduleOptions);
-      let envelope;
-      try {
-        envelope = JSON.parse(reply);
-      } catch {
-        throw new Error(`mdy: unexpected engine reply: ${reply}`);
-      }
-      if (envelope.error !== undefined) {
-        const missing = /^ReferenceError: ([A-Za-z_$][A-Za-z0-9_$]*) is not defined$/.exec(envelope.error);
-        if (
-          missing &&
-          !missingBindings.has(missing[1]) &&
-          !NO_BIND.has(missing[1]) &&
-          missingBindings.size < MAX_MISSING_BINDINGS
-        ) {
-          missingBindings.add(missing[1]);
-          continue;
-        }
-        throw new Error(`mdy: template error in document ${i}: ${envelope.error}`);
-      }
-      // Two completion shapes (see buildProgram): plain markdown, or — when
-      // the document installed a $.transform or used a no-arg $.toc() — the
-      // final mdast tree, kept AS a tree so the HTML path never
-      // re-stringifies it.
-      return envelope.tree !== undefined
-        ? { markdown: null, tree: envelope.tree }
-        : { markdown: envelope.out, tree: null };
+    // Two data bindings, never merged: `self` is the document's OWN parsed
+    // data (front matter + data fences), `arg` is exactly what the caller
+    // passed ({} when nothing was) — so a template can tell its declared
+    // data from its input, and defaulting is the template's own explicit
+    // `arg.x ?? self.x`. Missing keys are graceful by construction:
+    // property access never throws for an absent key. A bare identifier the
+    // template never declared is a genuine template error and surfaces as
+    // one.
+    const program = buildProgram({
+      body: doc.body,
+      selfData: doc.data,
+      ctx,
+      documents,
+      extraNativeNames,
+    });
+    const reply = await runProgram(program, natives, moduleOptions);
+    let envelope;
+    try {
+      envelope = JSON.parse(reply);
+    } catch {
+      throw new Error(`mdy: unexpected engine reply: ${reply}`);
     }
+    if (envelope.error !== undefined) {
+      throw new Error(`mdy: template error in document ${i}: ${envelope.error}`);
+    }
+    // Two completion shapes (see buildProgram): plain markdown, or — when
+    // the document installed a $.transform or used a no-arg $.toc() — the
+    // final mdast tree, kept AS a tree so the HTML path never
+    // re-stringifies it.
+    return envelope.tree !== undefined
+      ? { markdown: null, tree: envelope.tree }
+      : { markdown: envelope.out, tree: null };
   };
 
   // Text of a render result for EMBEDDING into another template's output (a
@@ -951,9 +917,12 @@ async function buildDocumentSet(source, options = {}) {
  *   find(query)          matching documents' data, in document order —
  *                        host-side, same semantics as the in-template $.find
  *   findOne(query)       first match or null
- *   render(target, ctx)  render the document at index `target`, or the first
- *                        one matching query `target`, with `ctx` overriding
- *                        its own data → generated markdown. ALWAYS emitted
+ *   render(target, ctx)  render the document at index `target`, the exact
+ *                        document of a find/findOne result `target`
+ *                        (resolved by its _id, no re-query), or the first
+ *                        one matching query `target`, with `ctx` as the
+ *                        template's `arg` (its own data stays separate, as
+ *                        `self`) → generated markdown. ALWAYS emitted
  *                        through remark-stringify (the template's output is
  *                        parsed and re-serialized), so formatting is one
  *                        consistent dialect whether the document ended as a
@@ -1061,10 +1030,12 @@ export async function renderDocumentSet(source, extraContext = {}, entry = 0) {
 
 /**
  * Apply the entry document's template to every OTHER document in the set,
- * one render per data document. The entry's own front matter acts as
- * defaults; each data document's front matter overrides it, and
- * `extraContext` overrides both. With no other documents the entry renders
- * once with just its own data, so a template file still works standalone.
+ * one render per data document. Each data document's front matter (merged
+ * with `extraContext`, which wins) arrives as the template's `arg`; the
+ * entry's own front matter is its `self`, so sample-data defaults are the
+ * template's explicit `arg.x ?? self.x`. With no other documents the entry
+ * renders once with an empty `arg`, so a template file written that way
+ * still works standalone.
  *
  * This is the mail-merge companion to renderDocumentSet: keep a display
  * template in one file, data records in others, and pass them together:

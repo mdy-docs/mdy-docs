@@ -1,11 +1,11 @@
-# {{ report.title }}
+# {{ self.report.title }}
 
-Generated for **{{ report.owner }}**.
+Generated for **{{ self.report.owner }}**.
 
-{% const total = items.reduce((s, i) => s + i.qty * i.price, 0) %}
+{% const total = self.items.reduce((s, i) => s + i.qty * i.price, 0) %}
 | Item | Qty | Price | Line total |
 | :--- | --: | --: | --: |
-{% for (const i of items) { %}
+{% for (const i of self.items) { %}
 | {{ i.name }} | {{ i.qty }} | ${{ i.price.toFixed(2) }} | ${{ (i.qty * i.price).toFixed(2) }} |
 {% } %}
 

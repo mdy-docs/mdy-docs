@@ -395,7 +395,7 @@ Examples:
         const sources = await walkRawSources(inputAbs, { fs });
         const docs = parseDocuments(sources);
         const i = findEntryIndex(docs, entryPath, inputAbs);
-        output = `// document ${i}\nfunction __doc${i}(__ctx) {\n${compileTemplateSource(docs[i].content)}\nreturn __out;\n}`;
+        output = `// document ${i}\nfunction __doc${i}(self, arg) {\n${compileTemplateSource(docs[i].content)}\nreturn __out;\n}`;
       } else {
         const { output: md, outputs, binaryOutputs } = await renderScriptSite(inputAbs, {
           entry: entryPath,
@@ -420,7 +420,7 @@ Examples:
         output = docs
           .map(
             (doc, i) =>
-              `// document ${i}\nfunction __doc${i}(__ctx) {\n${compileTemplateSource(doc.content)}\nreturn __out;\n}`
+              `// document ${i}\nfunction __doc${i}(self, arg) {\n${compileTemplateSource(doc.content)}\nreturn __out;\n}`
           )
           .join('\n\n');
       } else {

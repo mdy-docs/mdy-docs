@@ -94,7 +94,7 @@ A list layout (layouts are just documents in the same set):
 ```
 layout: list
 +++
-# {{ site.title }}
+# {{ arg.site.title }}
 {% for (const p of $.find({ section: 'posts', draft: { $ne: true } })
          .sort((a, b) => (a.date < b.date ? 1 : -1))) { %}
 - [{{ p.title }}]({{ p.url }}) — {{ p.date }}
@@ -1147,7 +1147,7 @@ guest-side dynamic `import()`).
 
 ```
 {% const util = await import("./lib/util.js") %}
-{{ util.slugify(title) }}
+{{ util.slugify(self.title) }}
 ```
 
 How the pieces line up, host-side to guest-side:

@@ -98,7 +98,7 @@ test('a post renders through post layout and base shell', async () => {
   assert.match(html, /<!doctype html>/);
   assert.match(html, /<title>Hello world — Tablet House<\/title>/);
   assert.match(html, /<h1 id="[^"]*">Hello world<\/h1>/);
-  assert.match(html, /<em>2026-07-18<\/em>/); // post layout's *{{ date }}*, from front matter, not the filename
+  assert.match(html, /<em>2026-07-18<\/em>/); // post layout's *{{ arg.date }}*, from front matter, not the filename
   assert.match(html, /tablet house is open/);
 });
 
