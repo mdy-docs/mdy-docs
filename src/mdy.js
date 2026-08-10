@@ -1147,9 +1147,17 @@ const rehypeHeadingIds = () => (tree) => {
  *   `[plugin, options]` tuple
  * @param {Array} [options.rehypePlugins] plugins run on the HTML (hast) side,
  *   after raw HTML is reparsed — e.g. a syntax highlighter
+ * @param {Function} [options.compiler] the unified compiler that terminates
+ *   the chain, replacing rehype-stringify. The whole pipeline above it is
+ *   output-agnostic — hast is hast — so swapping only this last step retargets
+ *   mdy at another renderer without touching a single transform:
+ *   @mdy-docs/react passes a hast → React element compiler here. A custom
+ *   compiler's return value is passed through as-is (no String() coercion),
+ *   so renderMarkdown / renderTree / render resolve to whatever it produces.
  * @returns {{ processor: object, renderMarkdown: Function, renderTree: Function, renderToMarkdown: Function, render: Function }}
  */
 export function createProcessor(options = {}) {
+  const compiler = options.compiler ?? rehypeStringify;
   const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
@@ -1159,19 +1167,27 @@ export function createProcessor(options = {}) {
     .use(rehypeRaw)
     .use(rehypeHeadingIds)
     .use(options.rehypePlugins ?? [])
-    .use(rehypeStringify);
+    .use(compiler);
+
+  // Only the default HTML compiler produces a string. unified parks any other
+  // compiler's return value on file.result (file.value stays undefined), so
+  // the String() coercion that is right for HTML would stringify a React
+  // element to "[object Object]" — take .result instead, uncoerced.
+  const html = compiler === rehypeStringify;
+  const fromFile = (file) => (html ? String(file) : file.result);
+  const fromValue = (value) => (html ? String(value) : value);
 
   /** Markdown string → HTML string (no template layer — just the pipeline).
    * HTML containers expand first: the sugar is source syntax, so it is gone
    * by the time remark-parse (or any configured remark plugin) runs. */
   const renderMarkdown = async (markdown) =>
-    String(await processor.process(expandHtmlContainers(markdown)));
+    fromFile(await processor.process(expandHtmlContainers(markdown)));
 
   /** mdast tree → HTML string — the parse step skipped, the transformers and
    * compiler applied as usual. This is where a document that ended in tree
    * form ($.transform / no-arg $.toc()) becomes HTML with no intermediate
    * re-stringification to markdown. */
-  const renderTree = async (tree) => String(processor.stringify(await processor.run(tree)));
+  const renderTree = async (tree) => fromValue(processor.stringify(await processor.run(tree)));
 
   /** Document source(s) → generated markdown string (front matter extracted + templates run). */
   const renderToMarkdown = (source, extraContext = {}, entry = 0) =>

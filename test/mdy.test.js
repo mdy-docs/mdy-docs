@@ -383,6 +383,33 @@ test('createProcessor accepts custom rehype plugins (highlight hook)', async () 
   assert.match(html, /<code class="language-yaml"><mark>k: v\s*<\/mark>/);
 });
 
+test('createProcessor accepts a custom compiler, and passes its value through uncoerced', async () => {
+  // The extension point @mdy-docs/react is built on: everything up to the
+  // compiler is output-agnostic, so retargeting mdy at a renderer that is not
+  // a string means replacing the last step and nothing else. A compiler
+  // returning a non-string must survive intact — a String() on the way out
+  // would turn a React element into "[object Object]".
+  const countingCompiler = function () {
+    this.compiler = (tree) => {
+      let n = 0;
+      const visit = (node) => {
+        if (node.type === 'element') n++;
+        for (const child of node.children ?? []) visit(child);
+      };
+      visit(tree);
+      return { elements: n };
+    };
+  };
+
+  const { render: r, renderMarkdown, renderTree } = createProcessor({ compiler: countingCompiler });
+
+  // Both entry points — the string path and the tree path (a document that
+  // ended in tree form) — have to reach the same compiler.
+  assert.deepEqual(await renderMarkdown('# a\n\n- b\n- c\n'), { elements: 4 });
+  assert.deepEqual(await r('title: T\n+++\n# {{ self.title }}'), { elements: 1 });
+  assert.deepEqual(await renderTree({ type: 'root', children: [] }), { elements: 0 });
+});
+
 test('extraContext arrives on arg; the document\'s own data stays on self, never merged', async () => {
   // Both carry `who` with different values: the bindings stay separate, and
   // "extraContext wins" is the template's own explicit `arg.x ?? self.x`.

@@ -10,14 +10,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mdy-docs/react": "file:../mdy-react",
     "@shikijs/monaco": "^4.3.1",
-    "dompurify": "^3.4.0",
     "mdy-docs": "file:../..",
     "mermaid": "^11.15.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "shiki": "^4.3.1",
     "vscode-mdy": "file:../editors/vscode-mdy"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
     "vite": "^7.3.6"
   }
 }

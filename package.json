@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:react": "npm --prefix packages/mdy-react test",
     "mdy-web": "node packages/mdy-web/bin/mdy-web.js examples/blog",
     "live-preview": "npm --prefix packages/mdy-live-preview run dev"
   },

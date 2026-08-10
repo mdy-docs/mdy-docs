@@ -16,6 +16,15 @@ body {
   height:100vh;
 }
 
+/* The app mounts here, and is the whole page: it takes over the column layout
+   body used to give directly to <header> and #container. */
+#root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 h1, h2, h3, h4, h5, h6, p {
   font-size: 1em;
   margin: 0;
@@ -135,6 +144,42 @@ header input[type="checkbox"] {
 #preview.column {
   overflow-y: scroll;
   white-space: normal;
+}
+
+/* A template error while typing. The bar sits above the preview and the last
+   good render stays underneath it, dimmed — the document you are editing does
+   not disappear because you are halfway through typing a tag. */
+.mdy-error-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  color: #82071e;
+  background: #ffebe9;
+  border-bottom: 1px solid #ffcecb;
+}
+
+[data-theme="dark"] .mdy-error-bar {
+  color: #ffdcd7;
+  background: #3c1618;
+  border-bottom-color: #6a1f24;
+}
+
+.markdown-body.is-stale {
+  opacity: 0.55;
+}
+
+/* The first render failing is the one case with nothing to keep showing. */
+.markdown-body .mdy-error-block {
+  color: #cf222e;
+  white-space: pre-wrap;
+}
+
+[data-theme="dark"] .markdown-body .mdy-error-block {
+  color: #ff7b72;
 }
 
 .markdown-body .mermaid {

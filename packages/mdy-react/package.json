@@ -1,0 +1,32 @@
+{
+  "name": "@mdy-docs/react",
+  "version": "0.1.0",
+  "description": "Render mdy documents as React elements — the same unified pipeline, terminating in JSX instead of an HTML string",
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "hast-util-to-jsx-runtime": "^2.3.6",
+    "mdy-docs": "file:../..",
+    "rehype-sanitize": "^6.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "hast-util-from-html": "^2.0.3",
+    "jsdom": "^30.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

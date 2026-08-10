@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 // mdy-docs (and through it both wasm engines) is a file: link into this
 // repo, so the real .wasm paths live outside this package — outside the
@@ -18,6 +19,15 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 // - target esnext: the engine modules use top-level await.
 export default defineConfig({
   base: './',
+  plugins: [react()],
+  resolve: {
+    // @mdy-docs/react is a file: link and carries React in its own
+    // devDependencies, so it resolves to packages/mdy-react/node_modules/react
+    // — a second copy, and two copies of React means every hook it calls
+    // throws "invalid hook call". Deduping pins both sides to this package's
+    // copy. Any file: linked React library needs this.
+    dedupe: ['react', 'react-dom'],
+  },
   optimizeDeps: {
     exclude: ['@jsquash/png', '@jsquash/resize', '@jsquash/jpeg'],
   },

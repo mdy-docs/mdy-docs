@@ -198,8 +198,16 @@ import rehypeHighlight from 'rehype-highlight';
 const { render: r } = createProcessor({
   remarkPlugins: [],                    // run on the markdown (mdast) side
   rehypePlugins: [rehypeHighlight],     // run on the HTML (hast) side
+  compiler: undefined,                  // what turns the finished tree into output
 });
 ```
+
+Everything in that pipeline up to the last step is output-agnostic — it ends
+at a hast tree — so `compiler` is how mdy targets something other than an HTML
+string, without a second implementation of anything above it. A compiler's
+return value passes through uncoerced, so `render` resolves to whatever it
+produces; [`@mdy-docs/react`](packages/mdy-react/) is this option and little
+else.
 
 ## CLI
 
@@ -691,7 +699,21 @@ changes, upload assets, and rebuild on every web save. See its
 ([`packages/mdy-live-preview`](packages/mdy-live-preview/)): a two-pane
 Monaco editor + rendered preview, the whole engine running client-side as
 WebAssembly, seeded with `examples/document-set.mdy` — `npm run
-live-preview`.
+live-preview`. Its preview pane renders through `@mdy-docs/react`, which is
+what a document set looks like as a live React subtree: edits patch the tree
+instead of rebuilding it, mermaid fences are components, and a template error
+shows in a bar above the last good render rather than replacing it.
+
+**React** ([`packages/mdy-react`](packages/mdy-react/)): `<Mdy source={…} />`
+— documents as React elements rather than an HTML string. Not a second
+implementation: the pipeline above ends at hast either way, so React is the
+last step swapped (`rehype-stringify` out, `hast-util-to-jsx-runtime` in) and
+everything before it is shared verbatim — its tests assert byte-equivalence
+with the HTML target on the example documents. What that buys is
+reconciliation instead of `dangerouslySetInnerHTML`, and fenced blocks that
+*are* components (a highlighter, a diagram) instead of markup patched up
+afterwards. The static site generator stays on the string path, where it
+belongs. See its [README](packages/mdy-react/README.md).
 
 ## Development
 
