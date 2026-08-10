@@ -6,9 +6,11 @@ import { remarkAlert } from 'remark-github-blockquote-alert';
 import remarkStringify from 'remark-stringify';
 import rehypeRaw from 'rehype-raw';
 import rehypeStringify from 'rehype-stringify';
+
 import { load as loadYaml } from 'js-yaml';
 import { connect, MemoryStorageProvider } from '@mdy-docs/nisaba-db';
 import { runProgram } from './vm.js';
+import { expandHtmlContainers } from './html-containers.js';
 
 /**
  * mdy — markdown documents with front matter data + a JS template layer.
@@ -189,6 +191,15 @@ const mdastParser = unified().use(remarkParse).use(remarkGfm);
 // lists, so normalized output stays close to what templates typically emit.
 const mdastStringifier = unified().use(remarkStringify, { bullet: '-' }).use(remarkGfm);
 
+// Markdown TEXT → mdast, the whole dialect: remark's, plus mdy's own HTML
+// containers (see src/html-containers.js), which are a source-level sugar
+// expanded before remark ever sees the text. Every text→tree crossing goes
+// through here — $.parse, $.toc(markdown), the public markdown boundary — so
+// a template inspecting a tree and the HTML renderer agree on what a
+// container is. mdastParser.parse is used directly only for a $.table cell,
+// which is inline text with no lines to indent.
+const parseMarkdown = (text) => mdastParser.parse(expandHtmlContainers(text));
+
 // $.table cell → phrasing children. A cell is parsed as markdown so inline
 // syntax (**bold**, `code`, links) survives into the table; block content has
 // no place in a GFM cell, so anything that doesn't parse to a single
@@ -251,6 +262,29 @@ const tocEntries = (tree) => {
   };
   walk(tree);
   return entries;
+};
+
+/**
+ * Prefix every line of a block with `spaces` spaces — `$.render`'s optional
+ * indent. Whitespace-only lines are left alone (padding them would only add
+ * trailing whitespace, and a blank line is a blank line at any indent).
+ *
+ * This exists because indentation is structure: an HTML container's content
+ * is its two-space indent (see src/html-containers.js), and a nested
+ * `$.render` returns a multi-line block at column zero. `$.render(child, 2)`
+ * is what puts that block inside the container instead of ending it.
+ */
+const indentBlock = (text, spaces) => {
+  const n = spaces === undefined || spaces === null ? 0 : spaces;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) {
+    throw new Error('mdy: $.render indent must be a non-negative whole number of spaces');
+  }
+  if (n === 0) return text;
+  const pad = ' '.repeat(n);
+  return String(text)
+    .split('\n')
+    .map((line) => (line.trim() === '' ? line : pad + line))
+    .join('\n');
 };
 
 // Guard against a cycle of `$.render` calls rendering each other forever.
@@ -539,6 +573,13 @@ const VALID_NATIVE_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * synchronous-looking call from the template's point of view.
  * `$.documents` / `$.count` / `$.data` are preloaded — no host round-trip.
  *
+ * `$.render(target, data?, indent?)` takes an optional indent: the number of
+ * spaces to put on the front of every line of the returned block. Because
+ * `data` is always an object, a NUMBER in its place is unambiguous, so both
+ * `$.render(child, 2)` and `$.render(child, data, 2)` read as an indent.
+ * This is what lets a nested render land inside an HTML container (whose
+ * content is its two-space indent) instead of ending it — see indentBlock.
+ *
  * `$.emit(path, content)` is the generic "produce a named output" native —
  * see buildDocumentSet's `options.onEmit` doc comment for the whole
  * rationale. It's fixed/always-present, the same tier as find/findOne/
@@ -583,7 +624,11 @@ const $ = {
   find: (q) => __call("find", [q === undefined ? {} : q]),
   findOne: (q) => __call("findOne", [q === undefined ? {} : q]),
   withTag: (t) => __call("find", [{ tags: String(t).toLowerCase() }]),
-  render: (target, data) => __call("render", [target, data === undefined ? {} : data]),
+  render: (target, data, indent) => __call("render", [
+    target,
+    typeof data === "number" || data === undefined ? {} : data,
+    typeof data === "number" ? data : (indent === undefined ? 0 : indent),
+  ]),
   emit: (path, content) => __call("emit", [path, content]),
   parse: (markdown) => __call("parse", [markdown]),
   stringify: (tree) => __call("stringify", [tree]),
@@ -789,15 +834,18 @@ async function buildDocumentSet(source, options = {}) {
     const natives = {
       find: (query) => trackedFind(query, i),
       findOne: async (query) => (await trackedFind(query, i))[0] ?? null,
-      render: async (target, data) =>
-        embedMarkdown(await runDoc(await resolveIndex(target, i), data ?? {}, depth + 1)),
+      render: async (target, data, indent) =>
+        indentBlock(
+          embedMarkdown(await runDoc(await resolveIndex(target, i), data ?? {}, depth + 1)),
+          indent
+        ),
       emit: (path, content) => {
         onEmit?.({ path, content, docIndex: i });
         return null;
       },
       // markdown ⇄ mdast, the same dialect the render pipeline speaks. Pure
       // functions of their input — no document identity, no set state.
-      parse: (markdown) => mdastParser.parse(String(markdown ?? '')),
+      parse: (markdown) => parseMarkdown(String(markdown ?? '')),
       stringify: (tree) => {
         if (tree === null || typeof tree !== 'object' || typeof tree.type !== 'string') {
           throw new Error('mdy: $.stringify expects an mdast node ({ type, … })');
@@ -819,7 +867,7 @@ async function buildDocumentSet(source, options = {}) {
         });
       },
       toc: (target) => {
-        const tree = typeof target === 'string' ? mdastParser.parse(target) : target;
+        const tree = typeof target === 'string' ? parseMarkdown(target) : target;
         if (tree === null || typeof tree !== 'object' || typeof tree.type !== 'string') {
           throw new Error('mdy: $.toc expects markdown text or an mdast node');
         }
@@ -900,7 +948,7 @@ async function buildDocumentSet(source, options = {}) {
   // consistent dialect regardless of how any document produced its text. The
   // byte-exact template output stays reachable via renderResult().markdown.
   const resultMarkdown = (result) =>
-    mdastStringifier.stringify(result.tree !== null ? result.tree : mdastParser.parse(result.markdown));
+    mdastStringifier.stringify(result.tree !== null ? result.tree : parseMarkdown(result.markdown));
 
   return { docs: documents, runDoc, embedMarkdown, resultMarkdown, hostFind, resolveIndex, trackedFind };
 }
@@ -1082,8 +1130,10 @@ const rehypeHeadingIds = () => (tree) => {
 /**
  * Create a processor bound to a configured unified (remark → rehype) pipeline.
  *
- * The base chain is remark-parse → remark-gfm → github alerts →
- * remark-rehype → rehype-raw → heading ids → rehype-stringify: GFM covers
+ * The base chain is HTML containers → remark-parse → remark-gfm → github
+ * alerts → remark-rehype → rehype-raw → heading ids → rehype-stringify:
+ * indent-structured HTML containers (`<div` + a two-space indent, see
+ * src/html-containers.js) expand to raw tags around their content, GFM covers
  * the old `linkify` behavior (autolink literals, plus tables/strikethrough
  * templates commonly generate), `> [!NOTE]`-style blockquotes become
  * GitHub alert boxes (`.markdown-alert-*` markup, an HTML-side transform
@@ -1111,8 +1161,11 @@ export function createProcessor(options = {}) {
     .use(options.rehypePlugins ?? [])
     .use(rehypeStringify);
 
-  /** Markdown string → HTML string (no template layer — just the pipeline). */
-  const renderMarkdown = async (markdown) => String(await processor.process(markdown));
+  /** Markdown string → HTML string (no template layer — just the pipeline).
+   * HTML containers expand first: the sugar is source syntax, so it is gone
+   * by the time remark-parse (or any configured remark plugin) runs. */
+  const renderMarkdown = async (markdown) =>
+    String(await processor.process(expandHtmlContainers(markdown)));
 
   /** mdast tree → HTML string — the parse step skipped, the transformers and
    * compiler applied as usual. This is where a document that ended in tree

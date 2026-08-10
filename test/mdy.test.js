@@ -528,6 +528,38 @@ test('$.render by index still works (positional)', async () => {
   assert.equal((await renderDocumentSet(src)).trim(), '- Alice is 30\n- Bob is 41');
 });
 
+test('$.render takes an optional indent — spaces on the front of every line', async () => {
+  const src = '{{ $.render(1, {}, 2) }}\n---\nline one\n\nline two\n';
+  // renderDocumentSet is the byte-exact template output, before the markdown
+  // boundary normalizes leading whitespace away.
+  const { renderResult } = await openDocumentSet(src);
+  assert.equal((await renderResult(0)).markdown, '  line one\n\n  line two\n');
+});
+
+test('$.render indent: a number in the data slot is the indent (data is always an object)', async () => {
+  const { renderResult } = await openDocumentSet('{{ $.render(1, 3) }}\n---\nhi\n');
+  assert.equal((await renderResult(0)).markdown, '   hi\n');
+});
+
+test('$.render indent leaves blank lines blank rather than padding them', async () => {
+  const { renderResult } = await openDocumentSet('{{ $.render(1, 2) }}\n---\na\n\nb\n');
+  assert.equal((await renderResult(0)).markdown, '  a\n\n  b\n');
+});
+
+test('$.render with no indent is byte-for-byte what it always was', async () => {
+  const { renderResult } = await openDocumentSet('{{ $.render(1) }}\n---\nplain\n');
+  assert.equal((await renderResult(0)).markdown, 'plain\n');
+});
+
+test('$.render indent must be a non-negative whole number of spaces', async () => {
+  for (const bad of ['-1', '1.5', '"2"']) {
+    await assert.rejects(
+      renderToMarkdown(`{{ $.render(1, {}, ${bad}) }}\n---\nhi\n`),
+      /indent must be a non-negative whole number/
+    );
+  }
+});
+
 test('$.render on an unmatched query rejects', async () => {
   await assert.rejects(
     renderToMarkdown('{{ $.render({ nope: 1 }) }}'),

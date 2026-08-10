@@ -52,9 +52,11 @@ title: Appendix        ← the next document begins
    JavaScript-subset engine in WebAssembly — with the document's own data
    bound as `self` and caller-passed data as `arg`, producing markdown.
    Template code has no host access.
-5. **Render** the markdown to HTML with the unified pipeline
-   (remark-parse → remark-gfm → GitHub alerts → remark-rehype → rehype-raw →
-   rehype-stringify). GitHub alert blockquotes — `> [!NOTE]`, `[!TIP]`,
+5. **Render** the markdown to HTML with the unified pipeline (HTML containers
+   → remark-parse → remark-gfm → GitHub alerts → remark-rehype → rehype-raw →
+   rehype-stringify). [HTML containers](#html-containers) — a `<div` line
+   whose content is a two-space indent — expand to raw tags around their
+   content first, since they are source syntax. GitHub alert blockquotes — `> [!NOTE]`, `[!TIP]`,
    `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` — become `.markdown-alert-*`
    boxes, the exact markup github-markdown-css styles. This is an HTML-side
    transform only: `$.parse` (and any `$.transform`) still sees them as
@@ -95,6 +97,90 @@ title: Appendix        ← the next document begins
   `ReferenceError` that fails the render.
 - **Whitespace control**: a `{% %}` tag alone on its line leaves no blank
   line, so generated tables and lists stay contiguous.
+
+## HTML containers
+
+A line that is nothing but an opening tag **without its closing `>`** opens a
+container. Every following line indented two spaces past it is the
+container's content — ordinary markdown, with those two spaces removed. The
+first non-blank line that drops back out of the indent closes it. You never
+write the closing tag; the indent marks it.
+
+```
+<div class="callout"
+  # heading in the div
+# heading after div closed
+```
+
+```html
+<div class="callout">
+<h1 id="heading-in-the-div">heading in the div</h1>
+</div>
+<h1 id="heading-after-div-closed">heading after div closed</h1>
+```
+
+Attributes go on the opening line and carry onto the emitted tag. Containers
+nest — each level strips its own two spaces — and a container can sit at a
+list item's content column, keeping its content inside the item.
+
+- **The missing `>` is the sigil, and it is not optional.** A line ending in
+  `>` stays exactly what CommonMark already says it is: a raw HTML block. So
+  every hand-written `<div class="x">…</div>` keeps its current meaning, and
+  a `<pre>` block's leading whitespace still survives verbatim. Only the
+  line's *last* character decides, so `<div title="a > b"` is still an
+  opener. Nothing is reinterpreted: `<div` with no `>` used to parse as a
+  malformed HTML block that swallowed the rest of the paragraph and rendered
+  to nothing, so this syntax was previously dead.
+- **Exactly two spaces are removed**, not "however far the content is
+  indented" — so six spaces inside a container is still four relative, still
+  an indented code block, and nesting stays predictable.
+- **Blank lines do not close a container.** Its content is block content, and
+  blocks are separated by blank lines. Only a non-blank line back out of the
+  indent closes it (the same rule a list item follows).
+- **Void elements** (`<br`, `<img src="…"`, `<hr`, …) become standalone
+  self-closing tags. Indented content under one is an error, not a silent
+  mis-nesting; so is content under an opener written `<div /`.
+- **Raw-text elements** (`<pre`, `<script`, `<style`, `<textarea`) have their
+  body de-indented and emitted verbatim — never markdown, never expanded.
+- An opener inside a fenced code block is sample text, not a container.
+- **A container holds block content**, so give it a block element to be: a
+  `<div`/`<section` around markdown, not a `<ul` around list items (the items
+  become their own `<ul>` inside yours) and not a `<p` or `<span` (which
+  would nest a paragraph inside an inline or a paragraph).
+
+Containers are **source syntax**, expanded before remark parses anything, so
+they are structure everywhere and not just in the HTML: `$.parse` sees a real
+tree, `$.toc()` finds headings inside a container, and `renderToMarkdown`
+emits the expanded blank-line-separated form — portable CommonMark that any
+renderer turns into the same HTML.
+
+Because the content is just indented markdown, a template generates it by
+emitting the indent:
+
+```
+<div class="team"
+{% for (const m of self.members) { %}
+  - **{{ m.name }}** — {{ m.role }}
+{% } %}
+```
+
+A nested `$.render` returns a whole multi-line block, so it takes an optional
+indent — the number of spaces to put on the front of every line — which is
+what lands it *inside* the container instead of ending it:
+
+```
+<section class="team"
+{% for (const m of self.members) { %}
+  <article class="card"
+{{ $.render({ template: 'card' }, m, 4) }}
+{% } %}
+```
+
+That is still the one sharp edge: indentation is significant, so a generated
+line that loses its indent silently closes the container early rather than
+failing.
+
+See [`examples/html-containers.mdy`](examples/html-containers.mdy).
 
 ## Usage
 
@@ -339,7 +425,7 @@ attributes**, MongoDB-style:
 | --- | --- |
 | `$.find(query)` | data of the documents matching `query`, in document order (full Mongo operators: `{ age: { $gt: 35 } }`, array-contains, …) |
 | `$.findOne(query)` | first match, or `null` |
-| `$.render(target, data)` | run the document `target` with `data` as its `arg` (its own front matter stays separate, on its `self`); returns markdown. `target` is a `$.find`/`$.findOne` result (rendered by identity, no re-query — `$.render($.findOne({ template: 'card' }), m)`), an index, or a query object as shorthand for its first match |
+| `$.render(target, data?, indent?)` | run the document `target` with `data` as its `arg` (its own front matter stays separate, on its `self`); returns markdown. `target` is a `$.find`/`$.findOne` result (rendered by identity, no re-query — `$.render($.findOne({ template: 'card' }), m)`), an index, or a query object as shorthand for its first match. `indent` puts that many spaces on the front of every returned line (blank lines stay blank) — how a nested render lands inside an [HTML container](#html-containers). Since `data` is always an object, a number in its place *is* the indent: `$.render(child, 2)` and `$.render(child, data, 2)` both read |
 | `$.withTag(tag)` | shorthand for `$.find({ tags: tag })` (see Hashtags) |
 | `$.emit(path, content)` | produce a named output as a side effect of this render — see `openDocumentSet`'s `onEmit` below; a no-op if the embedder didn't ask for it |
 | `$.data(i)` | document `i`'s data (positional) |

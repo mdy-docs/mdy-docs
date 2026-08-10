@@ -12,6 +12,12 @@ export {
   renderToMarkdown,
 } from './src/mdy.js';
 
+// The HTML-container sugar (`<div` + a two-space indent), exposed as the pure
+// string → string rewrite it is: mdy applies it wherever markdown text is
+// parsed, and an embedder feeding markdown to its own pipeline can apply it
+// there too.
+export { expandHtmlContainers } from './src/html-containers.js';
+
 // "Getting files into the document set" — the filesystem/vault layer,
 // formerly the separate @mdy-docs/vault package (edubba's own experience:
 // mdy-docs' own bin/mdy.js had started hand-rolling a weaker duplicate of
