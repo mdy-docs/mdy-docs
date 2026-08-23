@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The MDY language — mdy-docs</title>
+    <meta
+      name="description"
+      content="A live tour of every rule in the MDY markup language, in an editor that runs the real parser."
+    />
+    <link rel="icon" href="data:," />
+    <meta name="color-scheme" content="light dark" />
+
+    <!--
+      The theme, applied before the first paint. `src/theme.js` owns this
+      choice and this key; the only reason it is read again here is that a
+      module runs too late to keep a page whose reader wants light from
+      starting out dark.
+    -->
+    <script>
+      try {
+        const theme = localStorage.getItem('mdy:theme')
+
+        if (theme === 'light' || theme === 'dark') {
+          document.documentElement.dataset.theme = theme
+        }
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <!--
+      The sample document, read by main.js and dropped into the editor. An
+      unknown `type` means the browser stores it and never runs it.
+
+      Indentation is structural in MDY, so every line has to start at column
+      zero: indenting this block to match the HTML around it would nest the
+      whole document in a stack of divs.
+    -->
+    <script type="text/mdy" id="sample">
++++
+title: MDY
+tagline: markup that compiles to hast
+fences: yaml
++++
+
+= {{ res.data.title }}
+
+MDY is a small markup language. It is //not// Markdown: the grammar is
+{{ rules.length }} rules long, indentation is structural, and every inline
+construct is a ??toggle??
+rather than a matched pair of delimiters. Everything below is live — edit it.
+
+The list below is not written anywhere in this document: it is built from the
+headings by a function the document registers on itself, in rule 12.
+
+<nav id=toc
+
+== Headings
+
+Lines opening with ``=`` are headings, and the run of ``=`` is the level, so
+``===`` gives you an h3. Trailing ``=`` are decoration and get dropped. Past
+``======`` the level is clamped, and the file is told about it.
+
+=== Three ===
+==== Four
+===== Five
+====== Six
+
+Or underline a paragraph instead, Setext style
+==============================================
+
+That was an h1. Four or more ``-`` gives an h2 instead:
+
+  Underlined with dashes
+  ----------------------
+
+Past four the length says nothing, and under four the line is something else
+entirely. A run of dashes means one of four things, by how many there are:
+
+| Dashes    | What it is                                       |
+| :-------- | :----------------------------------------------- |
+| ``-``     | a list item (rule 6)                             |
+| ``--``    | an em dash -- like this one                      |
+| ``---``   | a document separator (rule 11), else a break     |
+| ``----+`` | an h2 under a paragraph, a break on its own      |
+
+An underline beats the two things it would otherwise be: an empty heading, and
+a thematic break.
+
+Every heading on this page has an ``id`` slugified from its own text, written or
+underlined, at whatever level — which is what the contents list at the top links
+to, and what lets you write [[ back to the top | #mdy ]] by hand. Two headings
+reading the same thing are two places, so the second one is numbered.
+``headingId`` turns it off, or names them some other way.
+
+Click any heading in this pane and the address bar takes its link, ready to
+share. That part is the page rather than the language: the ``id`` comes from
+MDY, and a dozen lines of this site wrap each heading in a link to its own — the
+``§`` on hover is how it says so.
+
+== Thematic breaks
+
+Three or more ``-``, ``*`` or ``_`` alone on a line is a rule. All four of these
+are the same thing:
+
+---
+
+***
+
+___
+
+- - -
+
+Dashes are the ambiguous case, but only past three: four or more under a
+paragraph underline it, and everything else breaks. Stars and underscores
+always break.
+
+== Paragraphs
+
+Adjacent lines
+are joined
+into a single paragraph.
+
+A blank line starts a new one.
+
+== Code fences
+
+Three or more backticks or tildes fence a block of code. Everything inside is
+taken literally, and the first word after the opening fence names the language:
+
+```js
+const answer = 6 * 7
+
+if (answer === 42) {
+  console.log('as expected')
+}
+```
+
+Colouring is by lowlight, which builds hast directly rather than a string of
+HTML — the tokens are real nodes in the tree, so the transform in rule 12 could
+reach in and rewrite them. The classes are highlight.js's, so its stylesheets
+work here unchanged.
+
+A longer fence holds a shorter one, and a tilde fence holds backticks, which is
+how the block above was written into this document:
+
+~~~
+```js
+const answer = 6 * 7
+```
+~~~
+
+A language nothing knows is not an error — the class still says what was meant:
+
+```nosuchlanguage
+this is plain, but its code element still says language-nosuchlanguage
+```
+
+== Elements and indentation
+
+A line starting with ``<`` opens an HTML element, and nothing ever closes it:
+indentation does that. A bare ``<`` is a div, a name makes it that element, and
+attributes may follow — quoted, unquoted, or bare for booleans. The closing
+``>`` is optional, and anything after it is content. Space between the ``<`` and
+the name is yours to spend: ``< table`` opens what ``<table`` does.
+
+<details open
+  <summary>An element with a boolean attribute
+  This ``<details`` element was opened with a bare ``open``, and holds a
+  ``<summary`` plus this paragraph.
+
+<table style="border: 1px solid var(--accent); border-collapse: collapse"
+  <tr
+    <th>Written
+    <th>Meaning
+  <tr
+    <td>``<``
+    <td>a div
+  <tr
+    <td>``<table id=x``
+    <td>that element, with an unquoted attribute
+  <tr
+    <td>``<  table``
+    <td>the same again — the space is not read
+
+Void elements hold nothing, and say so if you give them anything:
+
+<section id=demo class="callout"
+  <hr
+
+Indentation is structural everywhere: every two columns is one level, and an
+indented run with nothing to name it gets a div of its own.
+
+  This paragraph is indented, so it lives in a div.
+
+    And this one is indented twice, so it lives in two.
+
+Openers are sanitised as they are parsed: elements and attributes are checked
+against an allowlist, event handlers and ``javascript:`` URLs never survive, and
+anything dropped is reported under the output. Try typing ``<script`` below.
+
+== Lists
+
+Bullets take ``-``, ``*`` or ``+``:
+
+- a dash
+* a star
++ a plus
+
+Numbers take ``1.`` or ``1)``, only the first one counts, and it sets the start:
+
+7. seven, because the first number is kept
+1) eight, because the rest are not
+
+Indentation nests, and a line under an item joins onto it:
+
+- an item
+  with a second line
+  - nested by two columns
+    1. and nested again
+- back out here
+
+A blank line inside a list makes it loose, so every item gets a paragraph:
+
+- loose one
+
+- loose two
+
+Put ``[ ]`` or ``[x]`` after the marker for a task:
+
+- [x] headings, breaks, paragraphs
+- [x] elements, lists, tables
+- [ ] whatever you add next
+
+Those boxes are live, and clicking one submits. Each is wrapped in a real form
+that posts to the page it sits on, carrying the line and column of the character
+between its brackets, what that character is now, and what it should become —
+everything a handler needs to write the ``x``, and to notice if the file moved
+on first.
+
+The box //is// the submit button: an ``<input type=\"checkbox\">`` cannot send a
+form on its own without script, so the control is a button wearing a checkbox's
+role, state and shape. That way one click does it with no JavaScript anywhere.
+
+On top of that, ``mdy/tasks`` takes the forms over and sends them in the
+background, saying whether each one worked. This page has no server, so it hands
+the job to the editor instead: tick a box and watch the ``[ ]`` on the left turn
+into an ``[x]``. That is a handler doing precisely what a server would do to the
+file, which is also the proof that the line and column are right. Edit the
+source out from under a box and tick it, and it will tell you it could not.
+
+== Tables
+
+Tables are GitHub's, colons and all. The delimiter row sets the alignment and
+has to agree with the header on how many columns there are.
+
+A line of a single cell above a table captions it. HTML keeps a ``<caption>``
+inside the table, as its accessible name, and which side it shows on is
+``caption-side`` in CSS — so above is where it is written and where it lands.
+What tells it from a one-column header is the line under it: a header has a
+delimiter row, a caption has a whole table.
+
+| What each marker gives.
+| Sequence   | Element  |    Style |
+| :--------- | :------: | -------: |
+| ``!!``     | strong   |     bold |
+| ``//``     | em       |   italic |
+| ``\|``     | a pipe   |  escaped |
+
+The framing pipes are optional, and rows may be ragged — short ones are padded
+and long ones are trimmed:
+
+Left | Right
+--- | ---
+only one cell
+one | two | three is dropped
+
+== Inline markers
+
+Every marker toggles: the first one opens, the next one closes. Two
+spellings may share an element, as ``!!`` and ``**`` both do.
+
+| Written    | Gives         |
+| :--------- | :------------ |
+| ``!!``     | !!strong!!    |
+| ``**``     | **also strong** |
+| ``//``     | //emphasis//  |
+| ``__``     | __underline__ |
+| ``~~``     | ~~deleted~~   |
+| ``??``     | ??highlight?? |
+| ``^^``     | x^^2^^        |
+| ``,,``     | H,,2,,O       |
+| \`\`       | ``code``      |
+
+Because they toggle, !!bold //and italic!! closes both at once — the inner //em//
+is closed automatically when the outer !!strong!! closes. Anything still open at
+the end of a paragraph is closed for you, so this ~~never leaks
+
+Escape a marker with a backslash: \!!literal\!!. Inside ``a ~~raw~~ span``
+nothing is markup at all — which is why the last row above escapes its backticks
+rather than wrapping them: a raw span cannot contain the marker that closes it.
+
+== Links
+
+URLs are found before anything else looks at the text, so the ``//`` in a URL
+stays part of the address: https://github.com/syntax-tree/hast is a link, so is
+hello@example.com, and so is a protocol-relative //unpkg.com/mdy address. Bare
+domains like README.md are left alone on purpose.
+
+Write a link anywhere with double brackets: [[ the hast spec |
+https://github.com/syntax-tree/hast ]] points where it says, and [[ Getting
+Started ]] on its own slugifies its label into a URL. A bare fragment points at
+a heading on this page — [[ the first rule | #headings ]] — and since the same
+slugifier gives headings their ids, [[ #Script ]] finds its own way there.
+
+Two more shorthands: #tags and @mentions become links to wherever the host says
+— #syntax-trees points at ``/tags/`` here and @wooorm at ``/users/``. Both have
+to start a word, so a#b is left alone, and by the time they are looked for a URL
+or an address has already been taken whole, which is why hello@example.com above
+is an email rather than a mention of #example.
+
+A label opening with ``^`` is a footnote instead[[ ^order ]], collected into a
+section at the end of the document[[ ^twice ]] — and a note may be pointed at
+more than once[[ ^twice ]].
+
+== Emoji
+
+Emoticons and GitHub shortcode names turn into emoji as they are parsed :) So
+``:rocket:`` gives :rocket: and ``<3`` gives <3, while a path like a:/b is left
+alone. Raw spans and \:) escapes opt out.
+
+== Documents and front matter
+
+A line of exactly ``---`` can start a new document, YAML style, so one file
+holds a stream of them. It is off by default, and this page leaves it off: with
+it off ``---`` is a thematic break, and this page has one just above.
+
+Three dashes is the only spelling it takes, which is why the dash rules in rule
+1 give it a length of its own. ``----``, ``- - -``, ``***`` and ``___`` are all
+still breaks, ``----`` still underlines, and ``--`` is still an em dash, so
+nothing becomes unsayable and no line changes meaning when you turn this on.
+Each document is parsed on its own: a script and its footnotes belong to one of
+them and cannot reach the next, and footnote ids after the first take a prefix
+so that one page can hold them all.
+
+=== Front matter
+
+A ``+++`` fenced block at the top of a document is YAML. That one //is// on by
+default, because ``+++`` means nothing else here: it is not a bullet, which
+needs whitespace after it, and not a break, which takes only dashes, stars or
+underscores.
+
+This page opens with such a block, which is where its heading comes from: the
+first line of the document is ``\{{ res.data.title }}``, and it reads
+{{ res.data.title }} — described there as {{ res.data.tagline }}.
+
+The data lands on the tree as ``data.matter``, on the file as
+``file.data.matter``, and in scope for code as ``res.data``, which is the one
+that earns its keep. The fence has to open the document and it has to close: an
+unclosed one is left as the prose it probably is. YAML that does not parse is
+reported under the output, and the content is kept.
+
+=== What a document is called with
+
+A document is compiled into a function, and the function is called with two
+arguments: ``req``, what it is answering, and ``res``, what it is answering
+with. This page hands it a ``req`` describing the pane you are reading in —
+{{ req.pane }}, redrawn {{ req.renders }} times since you loaded it — and reads
+``res`` back afterwards.
+
+``res.data`` is the front matter above, ready before a line has run. ``res.doc``
+is the finished tree, which cannot be ready before a line has run, because
+making it is what the code is for: it turns up the moment there is one, and a
+``transform`` is where a document meets its own tree. That is also why the count
+below is written by the transform rather than interpolated here — at the point
+``\{{ }}`` is read there is nothing yet to count.
+
+``res.data`` carries three lists that the block at the top need not name, and
+they fill as the text is read: ``tags`` and ``users`` take every #tag and
+@mention, and ``links`` takes every link that goes to another page of this same
+site — not down this page, and not out to the internet. Open the JSON tab to see
+all three. They fill on the same clock as ``res.doc``, for the same reason:
+reading the text is what finds them.
+
+A link to a page of your own is tidied on the way through, too: lower cased,
+with spaces written as the dashes a path would have, so [[ Getting Started ]]
+and [[ getting started ]] are one page rather than two. A URL belongs to whoever
+it points at and a fragment belongs to the id it names, so neither is touched.
+
+<p id=blocks
+
+%% transform(() => {
+     res.blocks = res.doc.children.length
+     visit(res.doc, 'element', (node) => {
+       if (node.properties.id !== 'blocks') return
+       node.children = [h('em', 'This document holds ' + res.blocks + ' blocks.')]
+     })
+   })
+
+Everything else on ``res`` is the document's to put there and the host's to read
+back: the count above is on ``file.data.response.blocks`` as well.
+
+== Script
+
+Lines opening with ``%`` are JavaScript. It is off by default, and this page
+turns it on, so the editor runs what you type. Code runs before anything else
+looks at the document, so whatever it prints goes through every rule above.
+
+A ``%`` line that opens a block encloses the content lines under it:
+
+% for (let i = 1; i <= 3; i++) {
+- item {{ i }}
+% }
+
+A code line is taken out before a single column is counted, so what it is
+indented by is yours: put it against the margin, level with the markup it
+encloses, or stepped in with the JavaScript block it opens. Nothing moves. Try
+it — drag the ``%`` lines above in or out and watch the list stay as it is.
+
+=== Interpolation
+
+Content lines interpolate ``\{{ }}``, which takes any expression and needs no
+code line of its own. This page has {{ rules.length }} rules and
+{{ markers.length }} inline markers, and {{ 6 * 7 }} is still the answer.
+
+A backslash opts out, which is how the paragraph above prints the brackets
+rather than using them. Note that it is read by the code stage, which runs
+before code spans exist.
+
+=== Nothing is raw to code
+
+Not a code span, and not a fenced block either: the fence has not been found
+when the code runs, so a ``%`` line inside one is JavaScript and the block is
+generated a line at a time. The editor paints it as what it is.
+
+```js
+% for (const rule of rules.slice(0, 3)) {
+export const rule{{ rule.number }} = '{{ rule.name }}'
+% }
+```
+
+A block that has to //show// a ``%`` line writes ``\%``, the escape prose uses.
+
+=== Values from the host
+
+A host hands the document whatever it should work with. The two names above
+came from this page, and so did the rows below — the header is written, the
+rows are generated:
+
+|    # | Rule                     | Added         |
+| ---: | :----------------------- | :------------ |
+% for (const rule of rules) {
+| {{ rule.number }} | {{ rule.name }} | {{ rule.added }} |
+% }
+
+=== Anything else JavaScript can do
+
+% if (rules.length === 13) {
+This line was printed because there are thirteen rules. Change the number in the
+condition and it disappears.
+% } else {
+This line only appears when the count changes.
+% }
+
+Elements can be generated too, indentation and all:
+
+% const literal = (value) => value.replace(/./g, '\\$&')
+% for (const marker of markers.slice(0, 4)) {
+<span class="chip">{{ literal(marker.sequence) }} makes {{ marker.tagName }}
+% }
+
+What a value interpolates into is markup, not text — it is written into the
+document before any rule above has run. That is exactly what lets code generate
+tables and elements, and it means a value holding ``!!`` or ``<`` becomes markup
+too. Hence the ``literal`` helper on the line above, which escapes each
+character so the markers print as themselves.
+
+=== Transforming the tree
+
+Printing markup is only half of it. A document can register a function to run on
+the finished hast tree, before it becomes HTML — so a document can be its own
+unified plugin. This is the one that fills in the contents list at the top of
+the page:
+
+%% transform((tree) => {
+     const items = []
+     for (const node of tree.children) {
+       if (node.tagName !== 'h2') continue
+       items.push(h('li', h('a', {href: '#' + node.properties.id}, toText(node))))
+     }
+     visit(tree, 'element', (node) => {
+       if (node.properties.id === 'toc') node.children = [h('ol', items)]
+     })
+   })
+
+That was written with ``%%`` rather than ``%``. A ``%`` line is one line of
+JavaScript and what it leaves open encloses the markup under it, which is how
+every loop on this page works. ``%%`` says there is no markup to enclose: it
+runs on into the lines under it until its brackets come back to even, so a
+function can be written as itself. An unclosed bracket takes nothing at all.
+
+The editor shows both halves of that. The run a ``%%`` took is banded down its
+left edge, so you can watch it collapse the moment the brackets stop balancing;
+and putting the caret beside a bracket outlines it and the one it pairs with,
+wherever that turns out to be. A bracket with no partner is outlined on its own,
+in the colour that says so.
+
+The document says where the list goes by leaving a ``<nav id=toc`` for it, and
+the function fills it once every heading exists. It walks ``tree.children``
+rather than the whole tree, so the list holds the sections and only those: a
+heading written as an example sits inside something and is passed over, and so
+is the one the footnotes give themselves. The ``id`` each link points at is not
+the function's doing either — every heading has one already, which is the
+headings rule's business rather than this one's. Code has ``transform``,
+``visit``, ``h``, ``toText`` and ``slug`` to hand, alongside whatever the host
+passed in.
+
+Registered functions run last, after everything else including the footnotes,
+which is why the one above skips the notes heading. Mutate the tree or return a
+new one; a function that throws is reported and skipped.
+
+There is no sandbox and no timeout, so leave ``script`` off for anything you did
+not write yourself.
+
+== Comments
+
+# This line is a comment, and so are the three under the heading below.
+A line opening with ``#`` and a space, or holding nothing but the ``#``, is a
+comment. It is taken out and leaves nothing itself — no node, no blank line, no
+gap the markup can feel. There is one on the line above this paragraph, and the
+paragraph is still the first thing under the heading.
+
+    # Indented as far as you like: a comment is lifted out before a column is
+    # counted, so it opens no div and closes no element, exactly as a ``%``
+    # line does.
+
+#
+What follows the ``#`` is the whole of what says a comment was meant: a space,
+or the end of the line — the line above this paragraph is a lone ``#``, and it
+is a comment. A word against it makes a tag instead, so ``#tag`` opens an
+ordinary paragraph holding a #tag. And since MDY writes headings with ``=``, a
+Markdown heading — ``# Title`` — is a comment here too. A backslash writes the
+line instead: \# like this.
+
+A fenced block keeps its comments, because ``#`` opens one in half the languages
+a block might hold:
+
+```py
+# this comment survives, being a line of the block
+rules = 13
+```
+
+[[ ^order ]]: Numbered by the order they are referenced rather than written, and
+  linked in both directions.
+[[ ^twice ]]: Referenced twice, so this note has an arrow back to each place.
+    </script>
+
+    <script type="module" src="/src/language.js"></script>
+  </body>
+</html>

@@ -1,18 +1,16 @@
 title: About
 +++
-{% import style from "../blog-style-x" %}
-This site is built with **mdy-docs**, on documents about #writing and #tools.
+% import style from "../blog-style-x"
+This site is built with !!mdy-docs!!, on documents about #writing and #tools.
 
-{%
-  const logo = style.findOne({ path: "static/logo.png" });
-  const thumb = style.resize(logo, { width: 120 });
-%}
-![A stylized clay tablet]({{ thumb.url }})
+% const logo = style.findOne({ path: "static/logo.png" })
+% const thumb = style.resize(logo, { width: 120 })
+<img src="{{ thumb.url }}" alt="A stylized clay tablet"
 
-{% const sidecar = style.findOne({ path: "static/logo.png.mdy" }) %}
+% const sidecar = style.findOne({ path: "static/logo.png.mdy" })
 {{ style.render({ path: "static/logo.png.mdy" }, {}) }}
 
-*{{ sidecar.license }} — {{ sidecar.source }}*
+<em>{{ sidecar.license }} — {{ sidecar.source }}
 
-{% const guest = $.findOne({ path: "author.yaml" }) %}
-This week's {{ guest.role }} is **{{ guest.name }}**.
+% const guest = $.findOne({ path: "author.yaml" })
+This week's {{ guest.role }} is !!{{ guest.name }}!!.

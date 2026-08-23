@@ -1,4 +1,4 @@
-import { nodeFsProvider } from '../fs-provider.js';
+import { nodeFsProvider } from './fs-provider.js';
 import { renderScriptSite } from './script-site.js';
 
 /*
@@ -89,7 +89,7 @@ export async function buildSite(root, options = {}) {
   const { dirname, join, resolve } = await import('node:path');
   const { existsSync } = await import('node:fs');
   const { cp, mkdir, writeFile } = await import('node:fs/promises');
-  const { walkFiles } = await import('../vault.js');
+  const { walkFiles } = await import('./vault.js');
 
   root = resolve(root);
   const outDir = resolve(options.outDir ?? join(root, 'dist'));

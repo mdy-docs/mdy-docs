@@ -1,25 +1,21 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ arg.page.title && arg.page.title !== arg.site.title ? arg.page.title + " — " + arg.site.title : arg.site.title }}</title>
-<link rel="stylesheet" href="/style.css">
-<link rel="alternate" type="application/rss+xml" title="{{ arg.site.title }}" href="/feed.xml">
-</head>
-<body>
-<header>
-<a href="/">{{ arg.site.title }}</a>
-<nav><a href="/about/">About</a> · <a href="/tags/">Tags</a></nav>
-<search><input id="search-input" type="search" placeholder="Search…" aria-label="Search"><ul id="search-results"></ul></search>
-</header>
-<main>
-{{ arg.content }}
-</main>
-<footer>
-© {{ arg.site.author }}
-<p><a href="/404.html">404</a></p>
-</footer>
-<script src="/search.js"></script>
-</body>
-</html>
+< html lang="en"
+  < head
+    <meta charset="utf-8"
+    <meta name="viewport" content="width=device-width, initial-scale=1"
+    <title>{{ req.page.title && req.page.title !== req.site.title ? req.page.title + " — " + req.site.title : req.site.title }}
+    <link rel="stylesheet" href="/style.css"
+    <link rel="alternate" type="application/rss+xml" title="{{ req.site.title }}" href="/feed.xml"
+  < body
+    < header
+      <a href="/">{{ req.site.title }}
+      <nav>[[ About | /about/ ]] · [[ Tags | /tags/ ]]
+      < search
+        <input id="search-input" type="search" placeholder="Search…" aria-label="Search"
+        <ul id="search-results"
+    < main
+      {{ req.content }}
+    < footer
+      © {{ req.site.author }}
+      <p>[[ 404 | /404.html ]]
+    <script src="/search.js"

@@ -1,13 +1,13 @@
 start: 1
 count: 5
 +++
-# Fibonacci
+= Fibonacci
 
-{% let a = 0, b = self.start %}
-{% const out = [] %}
-{% for (let i = 0; i < self.count; i++) { out.push(b); [a, b] = [b, a + b] } %}
+% let a = 0, b = res.data.start
+% const out = []
+% for (let i = 0; i < res.data.count; i++) { out.push(b); [a, b] = [b, a + b] }
 
-The first {{ self.count }} numbers (starting at {{ self.start }}): **{{ out.join(', ') }}**.
+The first {{ res.data.count }} numbers (starting at {{ res.data.start }}): !!{{ out.join(', ') }}!!.
 
-{% let sum = out.reduce((s, n) => s + n, 0) %}
+% const sum = out.reduce((s, n) => s + n, 0)
 Their sum is {{ sum }}.

@@ -1,24 +1,19 @@
-{% const acts = arg.hero.actions || []; %}
-<div class="home">
-<section class="hero">
-<div class="hero-text">
-<h1 class="hero-name">{{ arg.hero.name }}</h1>
-<p class="hero-heading">{{ arg.hero.text }}</p>
-<p class="hero-tagline">{{ arg.hero.tagline }}</p>
-<div class="hero-actions">
-{% for (const a of acts) { %}
-<a class="hero-action {{ a.theme }}" href="{{ a.link }}"{{ a.link.indexOf("http") === 0 ? ' target="_blank" rel="noreferrer"' : "" }}>{{ a.text }}</a>
-{% } %}
-</div>
-</div>
-<div class="hero-image"><img src="/favicon.svg" alt=""></div>
-</section>
-<section class="features">
-{% for (const f of arg.features) { %}
-<div class="feature">
-<h2 class="feature-title">{{ f.title }}</h2>
-<p class="feature-details">{{ f.details }}</p>
-</div>
-{% } %}
-</section>
-</div>
+< div class="home"
+  < section class="hero"
+    < div class="hero-text"
+      <h1 class="hero-name">{{ req.hero.name }}
+      <p class="hero-heading">{{ req.hero.text }}
+      <p class="hero-tagline">{{ req.hero.tagline }}
+      < div class="hero-actions"
+        % for (const a of req.hero.actions ?? []) {
+        %   const away = a.link.indexOf("http") === 0 ? ' target="_blank" rel="noreferrer"' : ""
+        <a class="hero-action {{ a.theme }}" href="{{ a.link }}"{{ away }}>{{ a.text }}
+        % }
+    < div class="hero-image"
+      <img src="/favicon.svg" alt=""
+  < section class="features"
+    % for (const f of req.features) {
+    < div class="feature"
+      <h2 class="feature-title">{{ f.title }}
+      <p class="feature-details">{{ f.details }}
+    % }

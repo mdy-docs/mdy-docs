@@ -3,130 +3,117 @@ baseURL: https://example.com
 author: Daniel Walton
 description: Notes from the scribal school.
 +++
-{% import style from "../blog-style-x" %}
-{%
-  // "an easy way to change styles": swap the path above (or the whole
-  // blog-style-x directory) for a different look — nothing else in this
-  // file's own content/URL/layout logic below depends on where base.mdy
-  // (or static/style.css, search.js, logo.png) actually live.
-  // This file's own front matter is `self`; the build's context (drafts /
-  // future / today, see src/site/script-site.js) arrives as `arg`.
-  const site = { title: self.title, baseURL: self.baseURL, author: self.author, description: self.description };
-  const draftsOn = arg.drafts ?? false;
-  const futureOn = arg.future ?? false;
-
-  const humanize = (s) => s.replace(/-+/g, " ").trim().replace(/^./, (c) => c.toUpperCase());
-  const summarize = (text) => text.replace(/^#.*$/m, "").replace(/[#*_>]/g, "").replace(/\s+/g, " ").trim().slice(0, 200);
-
-  // Every posts/*.mdy or posts/*.md file is a raw document — no
-  // host-computed date/slug/url; this script derives all of that itself,
-  // from the filename, right here. A .md file has no front matter (it's
-  // never compiled as a template — walkRawSources gives it real text as
-  // meta.body, never as `text`), so its date/title always fall back to
-  // the filename; its #hashtags are still extracted into meta.tags.
-  const rawPosts = $.find({}).filter((d) => d.path && d.path.indexOf("posts/") === 0 && (d.ext === ".mdy" || d.ext === ".md"));
-  const posts = [];
-  for (const raw of rawPosts) {
-    const stem = raw.path.slice("posts/".length, -raw.ext.length);
-    const m = /^(\d{4}-\d{2}(?:-\d{2})?)-/.exec(stem);
-    const fromFilename = m ? (m[1].length === 7 ? m[1] + "-01" : m[1]) : "1970-01-01";
-    const date = raw.date ? String(raw.date).slice(0, 10) : fromFilename;
-    const slug = m ? stem.slice(m[1].length + 1) : stem;
-    const postTitle = raw.title || humanize(slug);
-    const isDraft = raw.draft === true;
-    const isFuture = date > arg.today;
-    if ((!isDraft || draftsOn) && (!isFuture || futureOn)) {
-      const bodyMd = raw.ext === ".md" ? raw.body : $.render({ path: raw.path }, {});
-      posts.push({ path: raw.path, date: date, slug: slug, url: "/posts/" + slug + "/", title: postTitle, tags: raw.tags || [], summary: summarize(bodyMd), body: bodyMd });
-    }
-  }
-  posts.sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  const sitemapUrls = [];
-
-  // each post: its own page, wrapped in layouts/post.mdy then layouts/base.mdy
-  for (const p of posts) {
-    const related = posts.filter((o) => o.slug !== p.slug && o.tags.some((t) => p.tags.indexOf(t) !== -1)).map((o) => ({ title: o.title, url: o.url }));
-    const postMd = $.render({ path: "layouts/post.mdy" }, { title: p.title, date: p.date, content: p.body, related: related });
-    const postHtml = $.markdown(postMd);
-    const postPage = style.render({ path: "layouts/base.mdy" }, { content: postHtml, page: { title: p.title, url: p.url }, site: site });
-    $.emit("posts/" + p.slug + "/index.html", postPage);
-    sitemapUrls.push(p.url);
-  }
-
-  // homepage: layouts/list.mdy, newest post first, single page (no pagination)
-  const pagination = { page: 1, totalPages: 1, prevUrl: null, nextUrl: null };
-  const listMd = $.render({ path: "layouts/list.mdy" }, { posts: posts, pagination: pagination, site: site });
-  const listHtml = $.markdown(listMd);
-  const homePage = style.render({ path: "layouts/base.mdy" }, { content: listHtml, page: { title: site.title, url: "/" }, site: site });
-  $.emit("index.html", homePage);
-  sitemapUrls.push("/");
-
-  // about: layouts/page.mdy (root-level page, no section) then layouts/base.mdy
-  const aboutRaw = $.findOne({ path: "about.mdy" });
-  const aboutBody = $.render({ path: "about.mdy" }, {});
-  const aboutTitle = aboutRaw.title || "About";
-  const aboutMd = $.render({ path: "layouts/page.mdy" }, { title: aboutTitle, content: aboutBody });
-  const aboutHtml = $.markdown(aboutMd);
-  const aboutPage = style.render({ path: "layouts/base.mdy" }, { content: aboutHtml, page: { title: aboutTitle, url: "/about/" }, site: site });
-  $.emit("about/index.html", aboutPage);
-  sitemapUrls.push("/about/");
-
-  // tags: every taggable page (posts + about), grouped; /tags/<tag>/ + /tags/
-  const taggable = posts.concat([{ title: aboutTitle, url: "/about/", date: arg.today, tags: aboutRaw.tags || [] }]);
-  const tagged = {};
-  for (const p of taggable) {
-    for (const t of p.tags) {
-      if (!tagged[t]) { tagged[t] = []; }
-      tagged[t].push(p);
-    }
-  }
-  const tagNames = Object.keys(tagged).sort();
-  for (const t of tagNames) {
-    const list = tagged[t];
-    list.sort((a, b) => (a.date < b.date ? 1 : -1));
-    const tagMd = $.render({ path: "layouts/tag.mdy" }, { tag: t, posts: list, url: "/tags/" + t + "/" });
-    const tagHtml = $.markdown(tagMd);
-    const tagPage = style.render({ path: "layouts/base.mdy" }, { content: tagHtml, page: { title: "#" + t, url: "/tags/" + t + "/" }, site: site });
-    $.emit("tags/" + t + "/index.html", tagPage);
-    sitemapUrls.push("/tags/" + t + "/");
-  }
-  const tagsList = tagNames.map((t) => ({ tag: t, url: "/tags/" + t + "/", count: tagged[t].length }));
-  const tagsMd = $.render({ path: "layouts/tags.mdy" }, { tags: tagsList });
-  const tagsHtml = $.markdown(tagsMd);
-  const tagsPage = style.render({ path: "layouts/base.mdy" }, { content: tagsHtml, page: { title: "Tags", url: "/tags/" }, site: site });
-  $.emit("tags/index.html", tagsPage);
-  sitemapUrls.push("/tags/");
-
-  // 404, RSS, sitemap, robots: no markdown pass for the latter three, raw text
-  const nfMd = $.render({ path: "layouts/404.mdy" }, {});
-  const nfHtml = $.markdown(nfMd);
-  const nfPage = style.render({ path: "layouts/base.mdy" }, { content: nfHtml, page: { title: "Not found", url: "/404.html" }, site: site });
-  $.emit("404.html", nfPage);
-
-  const feedXml = $.render({ path: "layouts/rss.mdy" }, { posts: posts, site: site });
-  $.emit("feed.xml", feedXml);
-
-  sitemapUrls.sort();
-  const sitemapXml = $.render({ path: "layouts/sitemap.mdy" }, { urls: sitemapUrls, site: site });
-  $.emit("sitemap.xml", sitemapXml);
-
-  const robotsTxt = $.render({ path: "layouts/robots.mdy" }, { site: site });
-  $.emit("robots.txt", robotsTxt);
-
-  // search-index.json: nisaba's real tokenizer via $.tokenize, no host batch step
-  const searchRecords = [];
-  for (const p of posts) {
-    const words = $.tokenize([p.title].concat(p.tags).concat([p.body]).join(" "));
-    if (words.length > 0) {
-      searchRecords.push({ url: p.url, title: p.title, excerpt: p.summary, tags: p.tags, words: words });
-    }
-  }
-  const aboutWords = $.tokenize([aboutTitle].concat(aboutRaw.tags || []).concat([aboutBody]).join(" "));
-  if (aboutWords.length > 0) {
-    searchRecords.push({ url: "/about/", title: aboutTitle, excerpt: summarize(aboutBody), tags: aboutRaw.tags || [], words: aboutWords });
-  }
-  $.emit("search-index.json", JSON.stringify(searchRecords));
-%}
+% import style from "../blog-style-x"
+% // "an easy way to change styles": swap the path above (or the whole
+% // blog-style-x directory) for a different look — nothing else in this
+% // file's own content/URL/layout logic below depends on where base.mdy
+% // (or static/style.css, search.js, logo.png) actually live.
+% // This file's own front matter is `res.data`; the build's context (drafts /
+% // future / today, see src/script-site.js) arrives as `req`.
+% const self = res.data
+% const site = { title: self.title, baseURL: self.baseURL, author: self.author, description: self.description }
+% const draftsOn = req.drafts ?? false
+% const futureOn = req.future ?? false
+%
+% const humanize = (s) => s.replace(/-+/g, " ").trim().replace(/^./, (c) => c.toUpperCase())
+% const summarize = (text) => text.replace(/^[=#].*$/m, "").replace(/[=#*_>!\/~]/g, "").replace(/\s+/g, " ").trim().slice(0, 200)
+%
+% // Every posts/*.mdy or posts/*.md file is a raw document — no
+% // host-computed date/slug/url; this script derives all of that itself,
+% // from the filename, right here. Both extensions render the same way:
+% // $.render gives back a TREE either way, one made by mdy's own parser and
+% // one by the markdown front end, and nothing downstream can tell which.
+% // Only the summary needs the text, and a .md file's text is its markdown.
+% const rawPosts = $.find({}).filter((d) => d.path && d.path.indexOf("posts/") === 0 && (d.ext === ".mdy" || d.ext === ".md"))
+% const posts = []
+% for (const raw of rawPosts) {
+%   const stem = raw.path.slice("posts/".length, -raw.ext.length)
+%   const m = /^(\d{4}-\d{2}(?:-\d{2})?)-/.exec(stem)
+%   const fromFilename = m ? (m[1].length === 7 ? m[1] + "-01" : m[1]) : "1970-01-01"
+%   const date = raw.date ? String(raw.date).slice(0, 10) : fromFilename
+%   const slug = m ? stem.slice(m[1].length + 1) : stem
+%   const postTitle = raw.title || humanize(slug)
+%   const isDraft = raw.draft === true
+%   const isFuture = date > req.today
+%   if ((!isDraft || draftsOn) && (!isFuture || futureOn)) {
+%     const plain = $.text({ path: raw.path })
+%     posts.push({ path: raw.path, date: date, slug: slug, url: "/posts/" + slug + "/", title: postTitle, tags: raw.tags || [], summary: summarize(plain), plain: plain })
+%   }
+% }
+% posts.sort((a, b) => (a.date < b.date ? 1 : -1))
+%
+% const sitemapUrls = []
+%
+% // each post: its own page, wrapped in layouts/post.mdy then layouts/base.mdy
+% for (const p of posts) {
+%   const related = posts.filter((o) => o.slug !== p.slug && o.tags.some((t) => p.tags.indexOf(t) !== -1)).map((o) => ({ title: o.title, url: o.url }))
+%   const body = $.render({ path: p.path })
+%   const article = $.render({ path: "layouts/post.mdy" }, { title: p.title, date: p.date, content: body, related: related })
+%   $.emit("posts/" + p.slug + "/index.html", style.render({ path: "layouts/base.mdy" }, { content: article, page: { title: p.title, url: p.url }, site: site }))
+%   sitemapUrls.push(p.url)
+% }
+%
+% // homepage: layouts/list.mdy, newest post first, single page (no pagination)
+% const pagination = { page: 1, totalPages: 1, prevUrl: null, nextUrl: null }
+% const listing = $.render({ path: "layouts/list.mdy" }, { posts: posts, pagination: pagination, site: site })
+% $.emit("index.html", style.render({ path: "layouts/base.mdy" }, { content: listing, page: { title: site.title, url: "/" }, site: site }))
+% sitemapUrls.push("/")
+%
+% // about: layouts/page.mdy (root-level page, no section) then layouts/base.mdy
+% const aboutRaw = $.findOne({ path: "about.mdy" })
+% const aboutTitle = aboutRaw.title || "About"
+% const aboutBody = $.render({ path: "about.mdy" })
+% const aboutPage = $.render({ path: "layouts/page.mdy" }, { title: aboutTitle, content: aboutBody })
+% $.emit("about/index.html", style.render({ path: "layouts/base.mdy" }, { content: aboutPage, page: { title: aboutTitle, url: "/about/" }, site: site }))
+% sitemapUrls.push("/about/")
+%
+% // tags: every taggable page (posts + about), grouped; /tags/<tag>/ + /tags/
+% const taggable = posts.concat([{ title: aboutTitle, url: "/about/", date: req.today, tags: aboutRaw.tags || [] }])
+% const tagged = {}
+% for (const p of taggable) {
+%   for (const t of p.tags) {
+%     if (!tagged[t]) { tagged[t] = [] }
+%     tagged[t].push(p)
+%   }
+% }
+% const tagNames = Object.keys(tagged).sort()
+% for (const t of tagNames) {
+%   const list = tagged[t]
+%   list.sort((a, b) => (a.date < b.date ? 1 : -1))
+%   const page = $.render({ path: "layouts/tag.mdy" }, { tag: t, posts: list, url: "/tags/" + t + "/" })
+%   $.emit("tags/" + t + "/index.html", style.render({ path: "layouts/base.mdy" }, { content: page, page: { title: "#" + t, url: "/tags/" + t + "/" }, site: site }))
+%   sitemapUrls.push("/tags/" + t + "/")
+% }
+% const tagsList = tagNames.map((t) => ({ tag: t, url: "/tags/" + t + "/", count: tagged[t].length }))
+% const tagsPage = $.render({ path: "layouts/tags.mdy" }, { tags: tagsList })
+% $.emit("tags/index.html", style.render({ path: "layouts/base.mdy" }, { content: tagsPage, page: { title: "Tags", url: "/tags/" }, site: site }))
+% sitemapUrls.push("/tags/")
+%
+% // 404 is a page like any other; RSS, sitemap and robots are not markup at
+% // all, so they come back as $.text — the document's own output, byte for
+% // byte, never read as MDY on the way past.
+% const notFound = $.render({ path: "layouts/404.mdy" })
+% $.emit("404.html", style.render({ path: "layouts/base.mdy" }, { content: notFound, page: { title: "Not found", url: "/404.html" }, site: site }))
+%
+% $.emit("feed.xml", $.text({ path: "layouts/rss.mdy" }, { posts: posts, site: site }))
+%
+% sitemapUrls.sort()
+% $.emit("sitemap.xml", $.text({ path: "layouts/sitemap.mdy" }, { urls: sitemapUrls, site: site }))
+% $.emit("robots.txt", $.text({ path: "layouts/robots.mdy" }, { site: site }))
+%
+% // search-index.json: nisaba's real tokenizer via $.tokenize, no host batch step
+% const searchRecords = []
+% for (const p of posts) {
+%   const words = $.tokenize([p.title].concat(p.tags).concat([p.plain]).join(" "))
+%   if (words.length > 0) {
+%     searchRecords.push({ url: p.url, title: p.title, excerpt: p.summary, tags: p.tags, words: words })
+%   }
+% }
+% const aboutText = $.text({ path: "about.mdy" })
+% const aboutWords = $.tokenize([aboutTitle].concat(aboutRaw.tags || []).concat([aboutText]).join(" "))
+% if (aboutWords.length > 0) {
+%   searchRecords.push({ url: "/about/", title: aboutTitle, excerpt: summarize(aboutText), tags: aboutRaw.tags || [], words: aboutWords })
+% }
+% $.emit("search-index.json", JSON.stringify(searchRecords))
 
 Tablet House — built entirely from this one script: {{ posts.length }} post(s), {{ tagNames.length }} tag(s).

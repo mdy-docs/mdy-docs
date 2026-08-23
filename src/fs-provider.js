@@ -151,7 +151,7 @@ export function nodeFsProvider() {
  * no change); any OTHER root is treated as a NAMESPACE PREFIX into the same
  * flat map (`root: "blog-style-x"` reads/writes keys under
  * `"blog-style-x/…"`) — this is what lets ONE memoryFsProvider instance back
- * more than one root, which importing another mdy project (src/site/
+ * more than one root, which importing another mdy project (src/
  * imports.js) needs: the importED package's files just live in the same Map
  * under their own prefix, and `walkRawSources(resolvedChildDir, {fs})`
  * resolving to a non-'/' root naturally finds only its own slice. `files` is

@@ -1,0 +1,1470 @@
+/* The palette is written once, light beside dark, and `color-scheme` picks a
+   side. That is the whole of the theme switch: `theme.js` puts `data-theme` on
+   the html element, and with no attribute there the system's own preference
+   decides. Every rule below this block names a token, never a colour. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#f6f7fc, #0a0b10);
+  --bg-raised: light-dark(#ffffff, #12141c);
+  --bg-sunken: light-dark(#eef0f8, #07080c);
+  --line: light-dark(#d6dae9, #232735);
+  --line-soft: light-dark(#e6e9f3, #1a1d29);
+  --text: light-dark(#14161f, #e8eaf2);
+  --text-strong: light-dark(#000000, #ffffff);
+  --text-soft: light-dark(#333a4d, #d2d7ea);
+  --muted: light-dark(#545b73, #9aa1b8);
+  --faint: light-dark(#7b8299, #6a7189);
+  --accent: light-dark(#4a56d2, #7c8cff);
+  --accent-text: light-dark(#3945b5, #cfd6ff);
+  --accent-2: light-dark(#0c8770, #35e0c0);
+  /* Ink for whatever is drawn on a solid fill of the accent. */
+  --on-accent: light-dark(#ffffff, #0a0b10);
+  --warn: light-dark(#a15c00, #ffb454);
+  --danger: light-dark(#c22344, #ff6b81);
+  /* The band under the caret. It is a wash of the accent either way, but a
+     pale page needs a touch more of it than a dark one to show at all. */
+  --band: light-dark(
+    color-mix(in srgb, #4a56d2 12%, transparent),
+    color-mix(in srgb, #7c8cff 8%, transparent)
+  );
+  --glow-1: light-dark(#dde2ff, #1b2050);
+  --glow-2: light-dark(#d5f0e8, #10362f);
+  --number: light-dark(#8d94a9, #565d78);
+
+  /* Syntax. These are worn by highlight.js's classes in the preview and by the
+     editor's own classes in the source pane, so both panes agree. */
+  --syn-comment: var(--faint);
+  --syn-keyword: light-dark(#8a3ab0, #c792ea);
+  --syn-string: var(--accent-2);
+  --syn-number: var(--warn);
+  --syn-name: var(--accent);
+  --syn-attr: light-dark(#1f6ba8, #9cd0ff);
+
+  --radius: 14px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* A reader who has said which they want, said it. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background:
+    radial-gradient(60rem 40rem at 15% -10%, var(--glow-1) 0%, transparent 60%),
+    radial-gradient(50rem 35rem at 95% 0%, var(--glow-2) 0%, transparent 55%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+}
+
+/* ---------------------------------------------------------------- hero -- */
+
+.hero {
+  position: relative;
+  padding: clamp(3rem, 9vw, 6.5rem) 1.5rem clamp(2rem, 5vw, 3.5rem);
+}
+
+/* The button says what it will do rather than where it is: the sun shows in
+   the dark and the moon in the light. Which of the two is visible is left to
+   `light-dark()`, so the right one is on screen before any script runs. */
+
+.theme {
+  position: absolute;
+  top: 1.1rem;
+  right: 1.25rem;
+  display: grid;
+  place-items: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-raised) 70%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.theme:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.theme:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.theme svg {
+  grid-area: 1 / 1;
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.theme .sun {
+  color: light-dark(transparent, currentColor);
+}
+
+.theme .moon {
+  color: light-dark(currentColor, transparent);
+}
+
+.hero-inner {
+  margin: 0 auto;
+  max-width: 68rem;
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  grid-template-areas:
+    "eyebrow snippet"
+    "title   snippet"
+    "lede    snippet"
+    "cheat   cheat";
+  align-content: start;
+}
+
+.eyebrow {
+  grid-area: eyebrow;
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+
+.hero h1 {
+  grid-area: title;
+  margin: 0;
+  font-size: clamp(2.4rem, 6vw, 4rem);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+
+.glyph {
+  background: linear-gradient(100deg, var(--accent) 10%, var(--accent-2) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.lede {
+  grid-area: lede;
+  margin: 0;
+  max-width: 38rem;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+.lede code {
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+
+.snippet {
+  grid-area: snippet;
+  align-self: center;
+  margin: 0;
+  padding: 1.25rem 1.4rem;
+  background: color-mix(in srgb, var(--bg-sunken) 80%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.8;
+  color: var(--text);
+  backdrop-filter: blur(6px);
+}
+
+.snippet .comment {
+  color: var(--faint);
+}
+
+.cheatsheet {
+  grid-area: cheat;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cheatsheet li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.7rem 0.35rem 0.4rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.cheatsheet code {
+  display: inline-block;
+  min-width: 2.4rem;
+  text-align: center;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-text);
+}
+
+/* ---------------------------------------------------------- playground -- */
+
+.playground {
+  margin: 0 auto;
+  padding: 0 1.5rem 2rem;
+  max-width: 92rem;
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: min(38rem, 70vh);
+  height: min(38rem, 70vh);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0.85rem 0.7rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-sunken) 55%, transparent);
+}
+
+.pane-head h2 {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.pane-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.stat {
+  font-size: 0.75rem;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ghost {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 0.25rem 0.6rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.ghost:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.tabs {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.15rem;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.tabs button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------- editor -- */
+
+/* A textarea, a painted copy of the same text behind it, and a gutter beside
+   them. They only line up while their metrics agree, so the font, the line
+   height and the padding are set here once, in pixels, and shared. */
+
+.editor {
+  --editor-line: 22px;
+  --editor-pad-y: 14px;
+  --editor-pad-x: 16px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: var(--editor-line);
+  tab-size: 2;
+}
+
+.editor-gutter {
+  padding: var(--editor-pad-y) 0.65rem var(--editor-pad-y) 0.9rem;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--bg-sunken) 50%, transparent);
+  color: var(--number);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.editor-gutter span {
+  display: block;
+}
+
+.editor-gutter .is-current {
+  color: var(--accent);
+}
+
+.editor-frame {
+  position: relative;
+  overflow: hidden;
+}
+
+.editor-paint,
+.editor-input {
+  margin: 0;
+  padding: var(--editor-pad-y) var(--editor-pad-x);
+  border: 0;
+  font: inherit;
+  line-height: inherit;
+  tab-size: inherit;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.editor-paint {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text-soft);
+}
+
+.editor-input {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  outline: 0;
+  overflow: auto;
+  background: transparent;
+  /* The text is there for the caret, the selection and the screen reader to
+     hold on to; the colour comes from the layer behind. */
+  color: transparent;
+  caret-color: var(--accent-2);
+}
+
+.editor-input::selection {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.editor-current {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  background: var(--band);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.editor.is-focused .editor-current {
+  opacity: 1;
+}
+
+/* A `%%` block reaches as far as its brackets balance, which is not something
+   a line can say on its own — so the pane says it, with a band down the run and
+   a rule marking the edge the code owns. */
+.editor-blocks,
+.editor-brackets {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.editor-blocks > div {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+/* The bracket the caret is beside, and the one it pairs with. */
+.editor-bracket {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent-2) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 70%, transparent);
+}
+
+/* One that never found a partner. This is exactly why a `%%` block stopped
+   where it did, so it is worth saying loudly. */
+.editor-bracket.is-loose {
+  background: color-mix(in srgb, var(--warn) 26%, transparent);
+  box-shadow: inset 0 0 0 1px var(--warn);
+}
+
+/* Ten characters of the pane's own font, measured and never seen. */
+.editor-ruler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------ mdy in the pane -- */
+
+:is(.editor-paint, .sample) .mdy-punct,
+:is(.editor-paint, .sample) .mdy-escape,
+:is(.editor-paint, .sample) .mdy-break,
+:is(.editor-paint, .sample) .mdy-pipe,
+:is(.editor-paint, .sample) .mdy-table-rule {
+  color: var(--faint);
+}
+
+:is(.editor-paint, .sample) .mdy-comment {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+:is(.editor-paint, .sample) .mdy-caption {
+  color: var(--muted);
+  font-style: italic;
+}
+
+:is(.editor-paint, .sample) .mdy-heading,
+:is(.editor-paint, .sample) .mdy-heading-mark {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+:is(.editor-paint, .sample) .mdy-heading-rule {
+  color: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+:is(.editor-paint, .sample) .mdy-bullet,
+:is(.editor-paint, .sample) .mdy-sigil,
+:is(.editor-paint, .sample) .mdy-fence,
+:is(.editor-paint, .sample) .mdy-matter-fence {
+  color: var(--warn);
+}
+
+:is(.editor-paint, .sample) .mdy-language {
+  color: var(--accent-2);
+}
+
+:is(.editor-paint, .sample) .mdy-task {
+  color: var(--muted);
+}
+
+:is(.editor-paint, .sample) .mdy-task.checked {
+  color: var(--accent-2);
+}
+
+:is(.editor-paint, .sample) .mdy-tag {
+  color: var(--accent);
+}
+
+:is(.editor-paint, .sample) .mdy-attr {
+  color: var(--syn-attr);
+}
+
+:is(.editor-paint, .sample) .mdy-string {
+  color: var(--accent-2);
+}
+
+:is(.editor-paint, .sample) .mdy-url,
+:is(.editor-paint, .sample) .mdy-wiki,
+:is(.editor-paint, .sample) .mdy-tag-link,
+:is(.editor-paint, .sample) .mdy-mention,
+:is(.editor-paint, .sample) .mdy-footnote {
+  color: var(--syn-attr);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--syn-attr) 35%, transparent);
+  text-underline-offset: 3px;
+}
+
+/* Both of these are written as one thing and come out as another. */
+
+:is(.editor-paint, .sample) .mdy-emoji,
+:is(.editor-paint, .sample) .mdy-ellipsis,
+:is(.editor-paint, .sample) .mdy-dash,
+:is(.editor-paint, .sample) .mdy-arrow {
+  color: var(--warn);
+}
+
+/* The inline markers get the shape they will have in the output, as far as a
+   monospaced grid allows: nothing here may change a character's width. */
+
+:is(.editor-paint, .sample) .mdy-strong {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+:is(.editor-paint, .sample) .mdy-em {
+  font-style: italic;
+}
+
+:is(.editor-paint, .sample) .mdy-u {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+:is(.editor-paint, .sample) .mdy-del {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+:is(.editor-paint, .sample) .mdy-mark {
+  background: color-mix(in srgb, var(--accent-2) 22%, transparent);
+  border-radius: 3px;
+}
+
+:is(.editor-paint, .sample) .mdy-sup,
+:is(.editor-paint, .sample) .mdy-sub {
+  color: var(--accent-2);
+}
+
+:is(.editor-paint, .sample) .mdy-code {
+  color: var(--syn-keyword);
+}
+
+.output {
+  flex: 1;
+  overflow: auto;
+}
+
+.rendered {
+  /* The footnotes heading is `.sr-only`, which is `position: absolute`. With
+     nothing positioned between it and the page, its containing block would be
+     the document itself: it would sit at its static position — thousands of
+     pixels down, past the bottom of this scrolling pane — and give the whole
+     page that much empty scroll. `overflow` on an ancestor does not clip what
+     it is not the containing block for. */
+  position: relative;
+  padding: 1.1rem 1.5rem 2rem;
+}
+
+.code {
+  margin: 0;
+  padding: 1.1rem 1.25rem 2rem;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.messages {
+  margin: 0;
+  padding: 0.6rem 1.25rem;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  background: var(--bg-sunken);
+  font-size: 0.8rem;
+  max-height: 8rem;
+  overflow: auto;
+}
+
+.messages .warn {
+  color: var(--warn);
+}
+
+.messages .fatal {
+  color: var(--danger);
+}
+
+.messages b {
+  color: inherit;
+  opacity: 0.7;
+  font-weight: 600;
+}
+
+/* ------------------------------------------------- rendered mdy output -- */
+
+.rendered > :first-child {
+  margin-top: 0;
+}
+
+/* Every heading is a link to itself, so a reader who wants to point someone at
+   one can click the words rather than hunt for a marker. It does not look like
+   a link until you are on it; the `§` is what says it is one. */
+.rendered .heading-anchor {
+  /* Block, so the whole row is the target and not just the width of the words:
+     "click the heading" should mean anywhere on it. */
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.rendered .heading-sign {
+  margin-left: 0.3em;
+  color: var(--faint);
+  font-weight: 400;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.rendered .heading-anchor:hover .heading-sign,
+.rendered .heading-anchor:focus-visible .heading-sign {
+  opacity: 1;
+}
+
+.rendered .heading-anchor:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.rendered h1,
+.rendered h2,
+.rendered h3,
+.rendered h4,
+.rendered h5,
+.rendered h6 {
+  margin: 1.6em 0 0.5em;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  font-weight: 650;
+}
+
+.rendered h1 {
+  font-size: 1.9rem;
+}
+.rendered h2 {
+  font-size: 1.45rem;
+}
+.rendered h3 {
+  font-size: 1.2rem;
+}
+.rendered h4 {
+  font-size: 1.05rem;
+}
+.rendered h5,
+.rendered h6 {
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.rendered p {
+  margin: 0 0 1em;
+  color: var(--text-soft);
+}
+
+.rendered ul,
+.rendered ol {
+  margin: 0 0 1em;
+  padding-left: 1.5em;
+  color: var(--text-soft);
+}
+
+.rendered li {
+  margin: 0.2em 0;
+}
+
+.rendered li::marker {
+  color: var(--accent);
+}
+
+.rendered li > ul,
+.rendered li > ol {
+  margin: 0.2em 0 0.4em;
+}
+
+.rendered li > p {
+  margin: 0 0 0.5em;
+}
+
+.rendered .task-list-item-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  margin-right: 0.15em;
+}
+
+/* The toggle is a submit button, so one click sends the form with no script.
+   These rules give it a checkbox's shape; the glyph inside is the fallback for
+   when they do not load. */
+.rendered .task-list-item-status {
+  font-size: 0.75em;
+  color: var(--faint);
+}
+
+.rendered [data-state='ok'] .task-list-item-status {
+  color: var(--accent-2);
+}
+
+.rendered [data-state='error'] .task-list-item-status {
+  color: var(--danger);
+}
+
+.rendered [aria-busy='true'] .task-list-item-toggle {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.rendered .task-list-item-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 1.05em;
+  height: 1.05em;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-sunken);
+  color: transparent;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rendered .task-list-item-toggle span {
+  font-size: 0;
+}
+
+.rendered .task-list-item-toggle:hover {
+  border-color: var(--accent);
+}
+
+.rendered .task-list-item-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.rendered .task-list-item-toggle[aria-checked='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.rendered .task-list-item-toggle[aria-checked='true']::after {
+  content: '';
+  width: 0.3em;
+  height: 0.55em;
+  margin-top: -0.12em;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.rendered .contains-task-list {
+  list-style: none;
+  padding-left: 0.25em;
+}
+
+.rendered .task-list-item input {
+  margin-right: 0.4em;
+  accent-color: var(--accent);
+}
+
+.rendered table {
+  width: 100%;
+  margin: 0 0 1.25em;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+/* The browser leaves a caption the size of the prose around it. Here it is a
+   label for the table under it, so it reads as one: centred over the columns,
+   quieter, and clear of the header row. */
+.rendered caption {
+  caption-side: top;
+  padding-bottom: 0.6em;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.rendered th,
+.rendered td {
+  padding: 0.5em 0.75em;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.rendered thead th {
+  color: var(--muted);
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-bottom-color: var(--accent);
+  white-space: nowrap;
+}
+
+.rendered tbody tr:last-child th,
+.rendered tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.rendered tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.rendered hr {
+  height: 1px;
+  margin: 1.75em 0;
+  border: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--line) 15%,
+    var(--line) 85%,
+    transparent
+  );
+}
+
+.rendered a[href^="/tags/"],
+.rendered a[href^="/users/"] {
+  text-decoration: none;
+  padding: 0.05em 0.4em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-size: 0.92em;
+}
+
+.rendered a[href^="/users/"] {
+  background: color-mix(in srgb, var(--accent-2) 14%, transparent);
+  color: var(--accent-2);
+}
+
+.rendered #toc {
+  margin: 0 0 1.5em;
+  padding: 0.9em 1.1em;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg-sunken);
+}
+
+/* The headings do not carry their own numbers, so the list carries them:
+   it holds every rule, in order, which is what makes "rule 5" in the prose
+   something a reader can count to. */
+.rendered #toc ol {
+  margin: 0;
+  padding: 0 0 0 1.6em;
+  columns: 2;
+  gap: 1.5em;
+}
+
+.rendered #toc li {
+  margin: 0.15em 0;
+  font-size: 0.9em;
+}
+
+.rendered #toc li::marker {
+  color: var(--muted);
+}
+
+.rendered pre {
+  margin: 0 0 1.25em;
+  padding: 1em 1.15em;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-sunken);
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
+.rendered pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.85em;
+  color: var(--text);
+}
+
+/* highlight.js token classes, in this page's palette. They are worn by the
+   preview's code blocks, by the fences, `%` lines and `{{ }}` expressions the
+   editor paints, and by the JSON pane, so all three are named here. */
+:is(.rendered, .editor-paint, .code, .sample) .hljs-comment,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-quote {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-keyword,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-selector-tag,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-literal,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-type {
+  color: var(--syn-keyword);
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-string,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-regexp,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-symbol {
+  color: var(--syn-string);
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-number,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-meta {
+  color: var(--syn-number);
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-title,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-name,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-section {
+  color: var(--syn-name);
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-attr,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-attribute,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-property,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-variable,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-built_in,
+:is(.rendered, .editor-paint, .code, .sample) .hljs-params {
+  color: var(--syn-attr);
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-deletion {
+  color: var(--danger);
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-addition {
+  color: var(--accent-2);
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-emphasis {
+  font-style: italic;
+}
+
+:is(.rendered, .editor-paint, .code, .sample) .hljs-strong {
+  font-weight: 600;
+}
+
+.rendered .chip {
+  display: inline-block;
+  margin: 0 0.35em 0.4em 0;
+  padding: 0.2em 0.6em;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  font-family: var(--mono);
+  font-size: 0.82em;
+}
+
+.rendered details {
+  margin: 0 0 1em;
+  padding: 0.75em 1em;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-sunken);
+}
+
+.rendered summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rendered details > :last-child {
+  margin-bottom: 0;
+}
+
+.rendered .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.rendered .footnotes {
+  margin-top: 2.5em;
+  padding-top: 1.25em;
+  border-top: 1px solid var(--line);
+  font-size: 0.9em;
+  color: var(--muted);
+}
+
+.rendered .footnotes li::marker {
+  color: var(--faint);
+}
+
+.rendered sup a {
+  text-decoration: none;
+  padding: 0 0.15em;
+}
+
+.rendered a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+
+.rendered a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.rendered mark {
+  background: color-mix(in srgb, var(--accent-2) 30%, transparent);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0.05em 0.25em;
+}
+
+.rendered code {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+  font-size: 0.88em;
+}
+
+.rendered del {
+  color: var(--faint);
+}
+
+.rendered u {
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+
+.rendered .empty {
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------- foot -- */
+
+.foot {
+  padding: 0 1.5rem 3rem;
+  text-align: center;
+  color: var(--faint);
+  font-size: 0.85rem;
+}
+
+.foot code {
+  color: var(--muted);
+}
+
+/* Narrow enough that the pane head has to give something up. */
+@media (max-width: 600px) {
+  #stat-caret {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .hero-inner {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "eyebrow"
+      "title"
+      "lede"
+      "snippet"
+      "cheat";
+  }
+
+  .playground {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pane {
+    height: auto;
+    min-height: 24rem;
+  }
+
+  .editor {
+    min-height: 20rem;
+  }
+}
+
+/* ==========================================================================
+   The landing page. The tour is an application; this is a document, so it is
+   bands of prose down a single column with the same tokens, type and accent —
+   no second identity, just a quieter arrangement of the first.
+   ========================================================================== */
+
+.jump {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 0.35rem 1.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 0.7rem clamp(1.25rem, 5vw, 3rem);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  font-size: 0.85rem;
+}
+
+.jump a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.jump a:hover {
+  color: var(--text);
+}
+
+.jump a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.jump .jump-out {
+  margin-left: auto;
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.band {
+  padding: clamp(2.75rem, 7vw, 4.5rem) clamp(1.25rem, 5vw, 3rem);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.band.alt {
+  background: color-mix(in srgb, var(--bg-sunken) 55%, transparent);
+}
+
+.band-inner {
+  margin: 0 auto;
+  max-width: 68rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  max-width: 46rem;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 3.2vw, 2.1rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  color: var(--text-strong);
+  text-wrap: balance;
+}
+
+.section-head h2 code {
+  font-size: 0.78em;
+}
+
+.section-lede {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+/* The five passes are a sequence, so they are numbered. */
+
+.steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
+  gap: 1.25rem;
+}
+
+.steps li {
+  counter-increment: step;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.9rem;
+  border-top: 2px solid var(--accent);
+}
+
+.steps li::before {
+  content: counter(step, decimal-leading-zero);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  color: var(--number);
+}
+
+.steps h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.steps p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.two-up {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.aside-note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1.15rem 1.3rem;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent-2);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.aside-note h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.aside-note p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.scroll-box {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.api {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 26rem;
+  font-size: 0.86rem;
+}
+
+.api th,
+.api td {
+  text-align: left;
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+
+.api thead th {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--faint);
+  background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+
+.api tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.api td:first-child {
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.api td:last-child {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+/* A painted sample that is not the hero's. The hero's own box comes from
+   `.snippet`, so this must not fight it. */
+
+.sample:not(.snippet) {
+  margin: 0;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.75;
+  color: var(--text-soft);
+  tab-size: 2;
+}
+
+.sample.wide {
+  width: 100%;
+}
+
+.footnote {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 0.88rem;
+  line-height: 1.65;
+  color: var(--faint);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.2rem 1.3rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: inherit;
+  text-decoration: none;
+}
+
+a.card:hover {
+  border-color: var(--accent);
+}
+
+a.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.card p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.card-go {
+  margin-top: auto;
+  padding-top: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--accent-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jump {
+    position: static;
+  }
+}
+
+/* The landing hero's sample is much taller than its text, and the shared grid
+   spans it across three rows — which stretches them apart. Here the text is
+   one stack in one area instead, so the two columns sit against each other
+   however tall either gets. */
+
+.hero-inner.stacked {
+  grid-template-areas:
+    "text  snippet"
+    "cheat cheat";
+}
+
+.hero-inner.stacked .hero-text {
+  grid-area: text;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}

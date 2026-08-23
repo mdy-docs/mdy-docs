@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, sep } from 'node:path';
 
 import { imageSize } from 'image-size';
-import { buildSite, urlToOutFile } from '../src/site/build.js';
+import { buildSite, urlToOutFile } from '../src/build.js';
 import { makePng } from './png-fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -24,7 +24,7 @@ test('urlToOutFile: pretty URLs land on index.html', () => {
 // site is one now (the conventional content/layouts/site.yaml pipeline was
 // removed; see docs/site-plan.md's "Toward a script-defined site"). Every
 // one of these tests exercises renderSite's dispatch to renderScriptSite
-// (src/site/build.js). See examples/blog/main.mdy itself for the site's
+// (src/build.js). See examples/blog/main.mdy itself for the site's
 // whole definition. --------------------------------------------------------
 
 const outDir = await mkdtemp(join(tmpdir(), 'mdy-test-'));
@@ -98,7 +98,7 @@ test('a post renders through post layout and base shell', async () => {
   assert.match(html, /<!doctype html>/);
   assert.match(html, /<title>Hello world — Tablet House<\/title>/);
   assert.match(html, /<h1 id="[^"]*">Hello world<\/h1>/);
-  assert.match(html, /<em>2026-07-18<\/em>/); // post layout's *{{ arg.date }}*, from front matter, not the filename
+  assert.match(html, /<em>2026-07-18<\/em>/); // post layout's //{{ req.date }}//, from front matter, not the filename
   assert.match(html, /tablet house is open/);
 });
 
@@ -209,8 +209,8 @@ test('--entry picks a different entry document', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'mdy-entry-'));
   after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'main.mdy'), '+++\n{% $.emit("index.html", "default entry") %}');
-  await writeFile(join(dir, 'other.mdy'), '+++\n{% $.emit("index.html", "other entry") %}');
+  await writeFile(join(dir, 'main.mdy'), '+++\n% $.emit("index.html", "default entry")');
+  await writeFile(join(dir, 'other.mdy'), '+++\n% $.emit("index.html", "other entry")');
 
   const built = await buildSite(dir, { outDir: join(dir, 'out'), entry: 'other.mdy' });
   assert.equal(built.pages, 1);
@@ -227,7 +227,7 @@ test('buildSite: onSource fires once per ingested file, onWrite once per file ac
   after(() => rm(outDir, { recursive: true, force: true }));
 
   await mkdir(join(dir, 'static'), { recursive: true });
-  await writeFile(join(dir, 'main.mdy'), '+++\n{% $.emit("index.html", "hi") %}');
+  await writeFile(join(dir, 'main.mdy'), '+++\n% $.emit("index.html", "hi")');
   await writeFile(join(dir, 'static', 'style.css'), 'body{}');
 
   const sources = [];
@@ -288,13 +288,13 @@ test('.md: renders with no template interpolation of its own body, wrapped by ma
   const html = await page('posts/plain-markdown/index.html');
   assert.match(html, /<h1 id="[^"]*">Plain markdown<\/h1>/); // title: humanized from the filename (no front matter at all)
   assert.match(html, /<em>2026-07-05<\/em>/); // date: from the filename prefix (no front matter to override it)
-  // The body went through untouched: a bare --- didn't split the document,
-  // and {{ }}/{% %} rendered as literal text, not tags — because
-  // walkRawSources never hands a .md file's text to mdy's parser/compiler
-  // at all (see meta.body).
+  // The body went through its OWN front end: a bare --- didn't split the
+  // document, and a % line and a {{ }} rendered as literal text, not code —
+  // because a .md document never meets mdy's parser or its script stage at
+  // all, it goes straight to hast through src/markdown.js.
   assert.match(html, /<hr>/);
-  assert.match(html, /<code>\{\{ this stays exactly as typed \}\}<\/code>/);
-  assert.match(html, /<code>\{% this too %\}<\/code>/);
+  assert.match(html, /<code>% this stays exactly as typed<\/code>/);
+  assert.match(html, /<code>\{\{ this too \}\}<\/code>/);
   assert.match(html, /const config = \{ retries: 3 \};/); // the code fence's own } is untouched
 });
 
@@ -321,9 +321,9 @@ test('buildSite: a template $.resize call writes a real, correctly-sized image f
   await writeFile(
     join(root, 'main.mdy'),
     '+++\n' +
-      '{% const logo = $.findOne({ path: "static/logo.png" }) %}\n' +
-      '{% const thumb = $.resize(logo, { width: 20 }) %}\n' +
-      '{% $.emit("hello/index.html", "<img src=" + JSON.stringify(thumb.url) + ">") %}'
+      '% const logo = $.findOne({ path: "static/logo.png" })\n' +
+      '% const thumb = $.resize(logo, { width: 20 })\n' +
+      '% $.emit("hello/index.html", "<img src=" + JSON.stringify(thumb.url) + ">")'
   );
   await writeFile(join(root, 'static', 'logo.png'), makePng(40, 20));
 

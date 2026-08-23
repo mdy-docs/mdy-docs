@@ -5,23 +5,22 @@ items:
   - { name: Widget, qty: 3, price: 9.99  }
   - { name: Gadget, qty: 1, price: 24.50 }
 +++
-{%
-  // Mail-merge template: rendered per-record via renderEach, each record
-  // arrives as `arg`; rendered standalone, `arg` is empty and the front
-  // matter above (this file's `self`) is the sample data. The fallback is
-  // explicit — caller-passed data wins, self is the default.
-  const report = arg.report ?? self.report;
-  const items = arg.items ?? self.items;
-%}
-# {{ report.title }}
+% // Mail-merge template: rendered per-record via renderEach, each record
+% // arrives as `req`; rendered standalone, `req` is empty and the front
+% // matter above (this file's own `res.data`) is the sample data. The
+% // fallback is explicit — caller-passed data wins, the document's own is
+% // the default.
+% const report = req.report ?? res.data.report
+% const items = req.items ?? res.data.items
+= {{ report.title }}
 
-Generated for **{{ report.owner }}**.
+Generated for !!{{ report.owner }}!!.
 
-{% const total = items.reduce((s, i) => s + i.qty * i.price, 0) %}
+% const total = items.reduce((s, i) => s + i.qty * i.price, 0)
 | Item | Qty | Price | Line total |
 | :--- | --: | --: | --: |
-{% for (const i of items) { %}
+% for (const i of items) {
 | {{ i.name }} | {{ i.qty }} | ${{ i.price.toFixed(2) }} | ${{ (i.qty * i.price).toFixed(2) }} |
-{% } %}
+% }
 
-**Order total: ${{ total.toFixed(2) }}**
+!!Order total: ${{ total.toFixed(2) }}!!

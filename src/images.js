@@ -8,8 +8,8 @@ import resizeImage, { initResize } from '@jsquash/resize';
  * resized copy of an image (a raw document from walkRawSources — see
  * src/vault.js) and get back where to find it:
  *
- *   {% const logo = $.findOne({ path: 'static/logo.png' }) %}
- *   {% const thumb = $.resize(logo, { width: 200 }) %}
+ *   % const logo = $.findOne({ path: 'static/logo.png' })
+ *   % const thumb = $.resize(logo, { width: 200 })
  *   <img src="{{ thumb.url }}" width="{{ thumb.width }}" height="{{ thumb.height }}">
  *
  * The resized image is a BUILD OUTPUT, never written back into the site

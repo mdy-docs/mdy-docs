@@ -1,10 +1,10 @@
 title: Notes about fred
 +++
-# {{ self.title }}
+= {{ res.data.title }}
 
-{% for (const d of $.withTag('fred')) { %}
-- **{{ d.title }}** — tags: {{ d.tags.join(', ') }}
-{% } %}
+% for (const d of $.withTag('fred')) {
+- !!{{ d.title }}!! — tags: {{ d.tags.join(', ') }}
+% }
 ---
 title: Kickoff
 +++
@@ -14,7 +14,7 @@ title: Pairing notes
 +++
 Notes on #wilma and #fred: they pair well.
 
-A `#comment` in inline code is not a tag, and neither is this:
+A ``#comment`` in inline code is not a tag, and neither is this:
 
 ```sh
 # nor anything in a fence, like #barney

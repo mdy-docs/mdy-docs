@@ -1,5 +1,6 @@
-import { walkRawSources } from '../vault.js';
-import { openDocumentSet } from '../mdy.js';
+import { hold } from './compose.js';
+import { openDocumentSet } from './mdy.js';
+import { walkRawSources } from './vault.js';
 
 // Pure, POSIX-only path math — NOT node:path. A resolved import's absDir
 // can be a real disk path (nodeFsProvider) or a virtual one like "/" or
@@ -43,8 +44,8 @@ function resolvePath(base, spec) {
  * host-side convention: the import is a line the SCRIPT writes, not
  * config.
  *
- *   {% import style from "../blog-style-x" %}
- *   {% const page = style.render({ path: "layouts/base.mdy" }, { content: html, site: site }) %}
+ *   % import style from "../blog-style-x"
+ *   % const page = style.render({ path: "layouts/base.mdy" }, { content: page })
  *
  * `style` is bound to an object shaped exactly like openDocumentSet's own
  * return value (render/find/findOne), plus `resize` (images.js's native,
@@ -61,21 +62,23 @@ function resolvePath(base, spec) {
  *
  * `import` is parsed by extractImports below, NOT the underlying JS engine
  * — a real `import` statement isn't legal inside a function body (which is
- * what every compiled {% %} block ultimately is; see mdy.js's
- * compileTemplateSource/buildProgram), so this is mdy's own tag-level
- * preprocessing, symmetrical to extractDataBlocks' ```data fences: a
- * recognized shape gets rewritten to ordinary (VM-legal) JS before the rest
- * of the compiler ever sees it.
+ * what every compiled `%` line ultimately becomes; see mdy.js's
+ * compileTemplateSource and src/parse/script.js's compileScript), so this is
+ * mdy's own line-level preprocessing, symmetrical to extractDataBlocks'
+ * ```data fences: a recognized shape gets rewritten to ordinary (VM-legal) JS
+ * before the rest of the compiler ever sees it.
  */
 
-// `{% import name from "spec" %}` — and nothing else in that tag; a tag
-// mixing an import with other code isn't recognized (import/from aren't
+// `% import name from "spec"` — a whole code line and nothing else on it. A
+// line mixing an import with other code isn't recognized (import/from aren't
 // legal as ordinary expression code, so mixing them would surface as a
-// template compile error instead — a clear signal, not a silent misparse).
-const IMPORT_TAG = /\{%\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+(["'])([^"']+)\2\s*;?\s*%\}/g;
+// script error instead — a clear signal, not a silent misparse). `%%` is
+// accepted too: the two sigils differ only in how far the code runs, and an
+// import is one line either way.
+const IMPORT_LINE = /^([ \t]*)%%?[ \t]*import[ \t]+([A-Za-z_$][\w$]*)[ \t]+from[ \t]+(["'])([^"']+)\3[ \t]*;?[ \t]*$/gm;
 
 /**
- * Scan a document's raw template text for `{% import name from "spec" %}`
+ * Scan a document's raw text for `% import name from "spec"`
  * declarations, returning the specs found (in source order) and the text
  * with each one rewritten to a plain object literal the VM can actually run:
  *
@@ -99,23 +102,24 @@ const IMPORT_TAG = /\{%\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+(["'])([^"']+)\2\
  */
 export function extractImports(text) {
   const imports = [];
-  const rewritten = text.replace(IMPORT_TAG, (_match, name, _quote, spec) => {
+  // One line in, one line out — a document's positions still point where its
+  // author would look.
+  const rewritten = text.replace(IMPORT_LINE, (_match, indent, name, _quote, spec) => {
     imports.push({ name, spec });
-    const specLiteral = JSON.stringify(spec);
-    return `{%
-  const ${name} = {
-    render: (target, ctx) => $.__importRender(${specLiteral}, target, ctx === undefined ? {} : ctx),
-    find: (query) => $.__importFind(${specLiteral}, query === undefined ? {} : query),
-    findOne: (query) => $.__importFindOne(${specLiteral}, query === undefined ? {} : query),
-    resize: (record, options) => $.__importResize(${specLiteral}, record, options === undefined ? {} : options),
-  };
-%}`;
+    const at = JSON.stringify(spec);
+    return (
+      `${indent}% const ${name} = { ` +
+      `render: (target, ctx) => $.__importRender(${at}, target, ctx === undefined ? {} : ctx), ` +
+      `find: (query) => $.__importFind(${at}, query === undefined ? {} : query), ` +
+      `findOne: (query) => $.__importFindOne(${at}, query === undefined ? {} : query), ` +
+      `resize: (record, options) => $.__importResize(${at}, record, options === undefined ? {} : options) };`
+    );
   });
   return { imports, text: rewritten };
 }
 
 /**
- * Build a document set for `absDir`, resolving every `{% import %}` it (or
+ * Build a document set for `absDir`, resolving every `% import` it (or
  * anything it imports, transitively) declares first — each resolved package
  * gets its OWN document set, built the same way, recursively.
  *
@@ -152,7 +156,7 @@ export function extractImports(text) {
  *
  * @param {string} absDir
  * @param {{
- *   fs: import('../fs-provider.js').FsProvider,
+ *   fs: import('./fs-provider.js').FsProvider,
  *   buildNatives: (absDir: string) => Record<string, Function>,
  *   onEmit?: Function,
  *   onSource?: (meta: object) => void,
@@ -211,11 +215,13 @@ export async function buildImportGraph(absDir, ctx, ancestors = new Set()) {
 
     const extraNatives = {
       ...buildNatives(absDir),
-      // renderRaw, not render: a cross-package render is an EMBEDDING (its
-      // result lands inside the importing template's own output, possibly
-      // raw XML/HTML) — byte-exact, same semantics as the in-set $.render.
+      // A cross-package render is a tree, the same as an in-set one: the
+      // imported package's document is parsed at its own boundary and comes
+      // back as a node, so an imported layout cannot leak an unclosed tag
+      // into the page that used it. `hold` parks it and returns the token
+      // that stands for it (src/compose.js), exactly as $.render does.
       __importRender: async (spec, target, importCtx, _i, docData) =>
-        (await lookupImport(spec, docData)).renderRaw(target, importCtx),
+        hold(await (await lookupImport(spec, docData)).renderTree(target, importCtx)),
       __importFind: async (spec, query, _i, docData) => (await lookupImport(spec, docData)).find(query),
       __importFindOne: async (spec, query, _i, docData) => (await lookupImport(spec, docData)).findOne(query),
       __importResize: async (spec, record, options, _i, docData) =>
@@ -223,11 +229,11 @@ export async function buildImportGraph(absDir, ctx, ancestors = new Set()) {
     };
 
     /*
-     * JS modules: `{% const util = await import("./lib/util.js") %}` — the
+     * JS modules: `% const util = await import("./lib/util.js")` — the
      * OTHER kind of import, real ES modules (engine-instantiated, with
      * their own static import graphs) rather than mdy packages. A template's
      * own import resolves relative to the FILE that wrote it (referrer ""
-     * — same rule as `{% import %}` specs above); a module's imports
+     * — same rule as `% import` specs above); a module's imports
      * resolve relative to the importing module. The canonicalizer makes
      * every specifier an absolute vault path, which becomes the module's
      * registry identity — so "./util.js" from two different directories is

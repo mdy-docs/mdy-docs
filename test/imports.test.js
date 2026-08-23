@@ -5,13 +5,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { extractImports } from '../src/site/imports.js';
-import { renderScriptSite } from '../src/site/script-site.js';
+import { extractImports } from '../src/imports.js';
+import { renderScriptSite } from '../src/script-site.js';
 import { memoryFsProvider } from '../src/fs-provider.js';
-import { buildSite } from '../src/site/build.js';
+import { buildSite } from '../src/build.js';
 
-// `{% import name from "spec" %}` — see src/site/imports.js's own doc
-// comment for the full design (why it's a tag-level rewrite, not real JS;
+// `% import name from "spec"` — see src/imports.js's own doc
+// comment for the full design (why it's a line-level rewrite, not real JS;
 // why cross-package dispatch is a namespaced handle, not a flat merged
 // document set; why cycle detection has to walk a per-path ancestor chain
 // rather than a single flat "currently building" set).
@@ -19,7 +19,7 @@ import { buildSite } from '../src/site/build.js';
 // --- extractImports: a pure string transform, no filesystem -----------------
 
 test('extractImports: rewrites a bare import tag into a callable object literal, and reports the spec', () => {
-  const { imports, text } = extractImports('before\n{% import style from "../blog-style-x" %}\nafter');
+  const { imports, text } = extractImports('before\n% import style from "../blog-style-x"\nafter');
   assert.deepEqual(imports, [{ name: 'style', spec: '../blog-style-x' }]);
   assert.match(text, /const style = \{/);
   assert.match(text, /\$\.__importRender\("\.\.\/blog-style-x", target, ctx/);
@@ -31,25 +31,25 @@ test('extractImports: rewrites a bare import tag into a callable object literal,
 });
 
 test('extractImports: multiple imports in one document, in source order', () => {
-  const { imports } = extractImports('{% import a from "./a" %}\n{% import b from "./b" %}');
+  const { imports } = extractImports('% import a from "./a"\n% import b from "./b"');
   assert.deepEqual(imports, [
     { name: 'a', spec: './a' },
     { name: 'b', spec: './b' },
   ]);
 });
 
-test('extractImports: text with no import tags is returned unchanged', () => {
-  const text = 'title: X\n+++\n{% const x = 1 %}\n{{ x }}';
+test('extractImports: text with no import lines is returned unchanged', () => {
+  const text = 'title: X\n+++\n% const x = 1\n{{ x }}';
   assert.deepEqual(extractImports(text), { imports: [], text });
 });
 
-test("extractImports: a tag mixing an import with other code isn't recognized (import must be a tag's sole content)", () => {
-  const text = '{% import style from "../x"; const y = 1; %}';
+test("extractImports: a line mixing an import with other code isn't recognized (import must be the whole line)", () => {
+  const text = '% import style from "../x"; const y = 1;';
   assert.deepEqual(extractImports(text), { imports: [], text });
 });
 
 test('extractImports: single-quoted specs work the same as double-quoted', () => {
-  const { imports } = extractImports("{% import style from '../blog-style-x' %}");
+  const { imports } = extractImports("% import style from '../blog-style-x'");
   assert.deepEqual(imports, [{ name: 'style', spec: '../blog-style-x' }]);
 });
 
@@ -78,17 +78,23 @@ test('a script can render another package via an import, and reach its other fil
       join(parent, 'site', 'main.mdy'),
       [
         '+++',
-        '{% import style from "../style" %}',
-        '{% const meta = style.findOne({ path: "meta.yaml" }) %}',
-        '{% const page = style.render({ path: "layouts/base.mdy" }, { content: "hi" }) %}',
-        '{{ page }} ({{ meta.license }})',
+        '% import style from "../style"',
+        '% const meta = style.findOne({ path: "meta.yaml" })',
+        '% const page = style.render({ path: "layouts/base.mdy" }, { content: "hi" })',
+        '{{ page }}',
+        '',
+        '({{ meta.license }})',
       ].join('\n')
     );
-    await writeFile(join(parent, 'style', 'layouts', 'base.mdy'), '<html>{{ arg.content }}</html>');
+    await writeFile(join(parent, 'style', 'layouts', 'base.mdy'), '< div class="framed"\n  {{ req.content }}');
     await writeFile(join(parent, 'style', 'meta.yaml'), 'license: CC0\n');
 
     const { output } = await renderScriptSite(join(parent, 'site'));
-    assert.equal(output.trim(), '<html>hi</html> (CC0)');
+    // The imported layout came back as a TREE, spliced into the sentence
+    // that named it — its <div> is a node, not a tag the importer had to
+    // close on its behalf.
+    assert.match(output, /<div class="framed">\s*<p>hi<\/p>\s*<\/div>/);
+    assert.match(output, /\(CC0\)/);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
@@ -101,12 +107,12 @@ test('the SAME import declared by two different files in one package is only wal
     await mkdir(join(parent, 'style'), { recursive: true });
     await writeFile(
       join(parent, 'site', 'main.mdy'),
-      '+++\n{% import style from "../style" %}\n{% const a = style.render({ path: "main.mdy" }, {}) %}\n' +
-        '{% const other = $.render({ path: "about.mdy" }, {}) %}\n{{ a }} / {{ other }}'
+      '+++\n% import style from "../style"\n% const a = style.render({ path: "main.mdy" })\n' +
+        '% const other = $.render({ path: "about.mdy" })\n{{ a }} / {{ other }}'
     );
     await writeFile(
       join(parent, 'site', 'about.mdy'),
-      '+++\n{% import style from "../style" %}\n{{ style.render({ path: "main.mdy" }, {}) }}'
+      '+++\n% import style from "../style"\n{{ style.render({ path: "main.mdy" }) }}'
     );
     await writeFile(join(parent, 'style', 'main.mdy'), '+++\nstyled');
 
@@ -114,7 +120,7 @@ test('the SAME import declared by two different files in one package is only wal
     const { output } = await renderScriptSite(join(parent, 'site'), {
       onSource: (meta) => seen.push(meta.path),
     });
-    assert.equal(output.trim(), 'styled / styled');
+    assert.equal(output.trim(), '<p>styled / styled</p>');
     // style/main.mdy is a distinct absolute path from site's own — walked
     // (and reported via onSource) exactly once despite two importers.
     assert.equal(seen.filter((p) => p === 'main.mdy').length, 2); // site's own + style's own — same relative name, different roots, both real
@@ -128,8 +134,8 @@ test('import cycle (A imports B imports A) throws a clear error instead of hangi
   try {
     await mkdir(join(parent, 'a'), { recursive: true });
     await mkdir(join(parent, 'b'), { recursive: true });
-    await writeFile(join(parent, 'a', 'main.mdy'), '{% import b from "../b" %}\n{{ b.render({ path: "main.mdy" }, {}) }}');
-    await writeFile(join(parent, 'b', 'main.mdy'), '{% import a from "../a" %}\n{{ a.render({ path: "main.mdy" }, {}) }}');
+    await writeFile(join(parent, 'a', 'main.mdy'), '% import b from "../b"\n{{ b.render({ path: "main.mdy" }) }}');
+    await writeFile(join(parent, 'b', 'main.mdy'), '% import a from "../a"\n{{ a.render({ path: "main.mdy" }) }}');
 
     await assert.rejects(renderScriptSite(join(parent, 'a')), /import cycle detected/);
   } finally {
@@ -143,7 +149,7 @@ test('an import spec that resolves to an empty/missing directory surfaces a clea
   // as an EMPTY document set, and the failure surfaces where it actually
   // happens: trying to render something that isn't in it.
   const dir = await makeSite({
-    'main.mdy': '{% import ghost from "./does-not-exist" %}\n{{ ghost.render({ path: "main.mdy" }, {}) }}',
+    'main.mdy': '% import ghost from "./does-not-exist"\n{{ ghost.render({ path: "main.mdy" }) }}',
   });
   try {
     await assert.rejects(renderScriptSite(dir), /no document matches/);
@@ -158,7 +164,7 @@ test("buildSite copies an imported package's static/ too, with the importing sit
   try {
     await mkdir(join(parent, 'site', 'static'), { recursive: true });
     await mkdir(join(parent, 'style', 'static'), { recursive: true });
-    await writeFile(join(parent, 'site', 'main.mdy'), '+++\n{% import style from "../style" %}\n{% $.emit("index.html", "ok") %}');
+    await writeFile(join(parent, 'site', 'main.mdy'), '+++\n% import style from "../style"\n% $.emit("index.html", "ok")');
     await writeFile(join(parent, 'site', 'static', 'shared.txt'), 'from site');
     await writeFile(join(parent, 'style', 'static', 'shared.txt'), 'from style');
     await writeFile(join(parent, 'style', 'static', 'style-only.txt'), 'only in style');
@@ -175,19 +181,19 @@ test("buildSite copies an imported package's static/ too, with the importing sit
 
 // --- JS module imports: `await import("./lib.js")` --------------------------
 // The OTHER kind of import (real ES modules, engine-instantiated), distinct
-// from `{% import %}`'s whole-package imports above — see the loadModule /
-// canonicalizeModule wiring in src/site/imports.js and the async-IIFE
+// from `% import`'s whole-package imports above — see the loadModule /
+// canonicalizeModule wiring in src/imports.js and the async-IIFE
 // program shape in src/mdy.js's buildProgram.
 
 test('a template can await import() a JS module, and the module can import its own dependencies', async () => {
   const dir = await makeSite({
-    'main.mdy': '+++\n{% const util = await import("./lib/util.js") %}\n{{ util.shout("hi") }}',
+    'main.mdy': '+++\n% const util = await import("./lib/util.js")\n{{ util.shout("hi") }}',
     'lib/util.js': 'import { upper } from "./case.js";\nexport const shout = (s) => upper(s) + "!";\n',
     'lib/case.js': 'export const upper = (s) => s.toUpperCase();\n',
   });
   try {
     const { output } = await renderScriptSite(dir);
-    assert.equal(output.trim(), 'HI!');
+    assert.equal(output.trim(), '<p>HI!</p>');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -195,14 +201,14 @@ test('a template can await import() a JS module, and the module can import its o
 
 test("a template's own import resolves relative to the FILE that wrote it, not the site root", async () => {
   const dir = await makeSite({
-    'main.mdy': '+++\n{{ $.render({ path: "pages/about.mdy" }, {}) }}',
+    'main.mdy': '+++\n{{ $.render({ path: "pages/about.mdy" }) }}',
     'util.js': 'export const who = "root";\n',
     'pages/util.js': 'export const who = "pages";\n',
-    'pages/about.mdy': '+++\n{% const u = await import("./util.js") %}\n{{ u.who }}',
+    'pages/about.mdy': '+++\n% const u = await import("./util.js")\n{{ u.who }}',
   });
   try {
     const { output } = await renderScriptSite(dir);
-    assert.equal(output.trim(), 'pages');
+    assert.equal(output.trim(), '<p>pages</p>');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -216,16 +222,16 @@ test("an imported package's own templates load modules from the PACKAGE's direct
     await mkdir(join(parent, 'style', 'lib'), { recursive: true });
     await writeFile(
       join(parent, 'site', 'main.mdy'),
-      '+++\n{% import style from "../style" %}\n{{ style.render({ path: "layouts/base.mdy" }, { content: "x" }) }}'
+      '+++\n% import style from "../style"\n{{ style.render({ path: "layouts/base.mdy" }, { content: "x" }) }}'
     );
     await writeFile(
       join(parent, 'style', 'layouts', 'base.mdy'),
-      '+++\n{% const fmt = await import("../lib/fmt.js") %}\n{{ fmt.wrap(arg.content) }}'
+      '+++\n% const fmt = await import("../lib/fmt.js")\n{{ fmt.wrap(req.content) }}'
     );
     await writeFile(join(parent, 'style', 'lib', 'fmt.js'), 'export const wrap = (s) => "[" + s + "]";\n');
 
     const { output } = await renderScriptSite(join(parent, 'site'));
-    assert.equal(output.trim(), '\\[x]'); // normalized markdown escapes the literal bracket
+    assert.equal(output.trim(), '<p>[x]</p>');
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
@@ -233,13 +239,13 @@ test("an imported package's own templates load modules from the PACKAGE's direct
 
 test('editing a JS module between renders is picked up — no stale module registry in the pooled VMs', async () => {
   const dir = await makeSite({
-    'main.mdy': '+++\n{% const u = await import("./util.js") %}\n{{ u.version }}',
+    'main.mdy': '+++\n% const u = await import("./util.js")\n{{ u.version }}',
     'util.js': 'export const version = "v1";\n',
   });
   try {
-    assert.equal((await renderScriptSite(dir)).output.trim(), 'v1');
+    assert.equal((await renderScriptSite(dir)).output.trim(), '<p>v1</p>');
     await writeFile(join(dir, 'util.js'), 'export const version = "v2";\n');
-    assert.equal((await renderScriptSite(dir)).output.trim(), 'v2');
+    assert.equal((await renderScriptSite(dir)).output.trim(), '<p>v2</p>');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -249,7 +255,7 @@ test('a module import escaping the package directory is rejected, even when the 
   const parent = await mkdtemp(join(tmpdir(), 'mdy-import-escape-'));
   try {
     await mkdir(join(parent, 'site'), { recursive: true });
-    await writeFile(join(parent, 'site', 'main.mdy'), '+++\n{% const s = await import("../secret.js") %}\n{{ s.x }}');
+    await writeFile(join(parent, 'site', 'main.mdy'), '+++\n% const s = await import("../secret.js")\n{{ s.x }}');
     await writeFile(join(parent, 'secret.js'), 'export const x = "leaked";\n');
 
     await assert.rejects(renderScriptSite(join(parent, 'site')), /outside this package/);
@@ -260,7 +266,7 @@ test('a module import escaping the package directory is rejected, even when the 
 
 test('a missing module rejects with a clear error a template can catch', async () => {
   const dir = await makeSite({
-    'main.mdy': '+++\n{% let msg; try { await import("./nope.js") } catch (e) { msg = "" + e } %}\n{{ msg }}',
+    'main.mdy': '+++\n%% let msg; try { await import("./nope.js") } catch (e) { msg = "" + e }\n{{ msg }}',
   });
   try {
     const { output } = await renderScriptSite(dir);
@@ -272,7 +278,7 @@ test('a missing module rejects with a clear error a template can catch', async (
 
 test('only .js/.mjs files can be imported as modules', async () => {
   const dir = await makeSite({
-    'main.mdy': '+++\n{% const d = await import("./meta.yaml") %}\n{{ d }}',
+    'main.mdy': '+++\n% const d = await import("./meta.yaml")\n{{ d }}',
     'meta.yaml': 'license: CC0\n',
   });
   try {
@@ -284,11 +290,11 @@ test('only .js/.mjs files can be imported as modules', async () => {
 
 test('JS module imports work through memoryFsProvider too — the browser playground path, both memory roots', async () => {
   const files = new Map([
-    ['main.mdy', '+++\n{% import style from "/style-pkg" %}\n{% const u = await import("./lib/util.js") %}\n{{ u.exclaim(style.render({ path: "base.mdy" }, { content: "m" })) }}'],
+    ['main.mdy', '+++\n% import style from "/style-pkg"\n% const u = await import("./lib/util.js")\n{{ u.exclaim(style.render({ path: "base.mdy" }, { content: "m" })) }}'],
     ['lib/util.js', 'export const exclaim = (s) => s + "!";'],
-    ['style-pkg/base.mdy', '+++\n{% const fmt = await import("./fmt.js") %}\n{{ fmt.wrap(arg.content) }}'],
-    ['style-pkg/fmt.js', 'export const wrap = (s) => "<" + s + ">";'],
+    ['style-pkg/base.mdy', '+++\n% const fmt = await import("./fmt.js")\n{{ fmt.wrap(req.content) }}'],
+    ['style-pkg/fmt.js', 'export const wrap = (s) => "(" + s + ")";'],
   ]);
   const { output } = await renderScriptSite('/', { fs: memoryFsProvider(files) });
-  assert.equal(output.trim(), '<m>!');
+  assert.equal(output.trim(), '<p>(m)!</p>');
 });

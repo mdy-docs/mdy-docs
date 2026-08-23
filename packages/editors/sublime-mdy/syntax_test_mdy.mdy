@@ -1,22 +1,47 @@
 # SYNTAX TEST "Packages/sublime-mdy/mdy.sublime-syntax"
 
-# {{ self.title }}
-# ^^ punctuation.section.embedded.begin.expression.mdy
-#    ^^^^^^^^^^ meta.embedded.line.mdy
-#               ^^ punctuation.section.embedded.end.expression.mdy
+= {{ res.data.title }}
+# <- punctuation.definition.heading.mdy
+#  ^^ punctuation.section.embedded.begin.expression.mdy
+#     ^^^^^^^^^^^^^^ meta.embedded.line.mdy
+#                    ^^ punctuation.section.embedded.end.expression.mdy
 
-A paragraph with {{ self.count + 1 }} inline.
+A paragraph with {{ res.data.count + 1 }} inline.
 #                ^^ punctuation.section.embedded.begin.expression.mdy
-#                              ^ keyword.operator.js.mdy
-#                                  ^^ punctuation.section.embedded.end.expression.mdy
+#                                  ^ keyword.operator.js.mdy
+#                                      ^^ punctuation.section.embedded.end.expression.mdy
 
-{% for (const m of $.find({ role: 'member' })) { %}
-# <- punctuation.section.embedded.begin.statement.mdy
+% for (const m of $.find({ role: 'member' })) {
+# <- punctuation.definition.script.mdy
 #  ^^^ keyword.control.js.mdy
-#       ^^^^^ keyword.control.js.mdy
-#                  ^ variable.language.dollar.mdy
-#                                 ^^^^^^^^ string.quoted.js.mdy
-#                                                ^^ punctuation.section.embedded.end.statement.mdy
+#      ^^^^^ keyword.control.js.mdy
+#                 ^ variable.language.dollar.mdy
+#                                ^^^^^^^^ string.quoted.js.mdy
+  - !!{{ m.name }}!!
+#   ^^ markup.bold.mdy
+#     ^^ punctuation.section.embedded.begin.expression.mdy
+% }
+# <- punctuation.definition.script.mdy
+
+%% transform((tree) => {
+# <- punctuation.definition.script.mdy
+  visit(tree, 'h1', rename)
+#  ^^^^ support.function.mdy
+})
+# <- meta.embedded.block.mdy
+
+< section class="card"
+# <- punctuation.definition.tag.begin.mdy
+#  ^^^^^^^ entity.name.tag.mdy
+#          ^^^^^ entity.other.attribute-name.mdy
+#                ^^^^^^ string.quoted.mdy
+  Read [[ the API | /docs/api ]] about #history.
+#      ^^ punctuation.definition.link.begin.mdy
+#                 ^ punctuation.separator.link.mdy
+#                                      ^ punctuation.definition.reference.mdy
+
+# a comment nobody renders
+# <- comment.line.number-sign.mdy
 
 \{{ literal braces
 # <- constant.character.escape.mdy
@@ -28,5 +53,5 @@ name: Alice
 # <- meta.frontmatter.mdy
 +++
 # <- punctuation.definition.frontmatter.mdy
-body of the second document with {{ self.name }}
+body of the second document with {{ res.data.name }}
 #                                ^^ punctuation.section.embedded.begin.expression.mdy

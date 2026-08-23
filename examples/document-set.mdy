@@ -1,18 +1,18 @@
 title: Team Roster
 +++
-# {{ self.title }}
+= {{ res.data.title }}
 
-{% const card = $.findOne({ template: 'member-card' }) %}
-{% for (const m of $.find({ role: 'member' })) { %}
+% const card = $.findOne({ template: 'member-card' })
+% for (const m of $.find({ role: 'member' })) {
 {{ $.render(card, m) }}
-{% } %}
+% }
 ---
 template: member-card
 +++
-### {{ arg.name }}
+=== {{ req.name }}
 
-- Age: {{ arg.age ?? 'unknown' }}
-- Skills: {{ (arg.skills ?? []).join(', ') }}
+- Age: {{ req.age ?? 'unknown' }}
+- Skills: {{ (req.skills ?? []).join(', ') }}
 ---
 role: member
 name: Alice

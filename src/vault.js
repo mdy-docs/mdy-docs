@@ -1,6 +1,6 @@
 import { nodeFsProvider } from './fs-provider.js';
 import { imageSize } from 'image-size';
-import { load as loadYaml } from 'js-yaml';
+import { parse as loadYaml } from 'yaml';
 import { extractTags } from './mdy.js';
 
 /*
@@ -87,7 +87,7 @@ const NON_SOURCE = /(^|\/)(dist|node_modules|\.[^/]+)(\/|$)/;
 const PLACEHOLDER_BODY = '​';
 
 // Extensions worth trying image-size on — a superset of what $.resize
-// (src/site/images.js) can actually decode: dimensions are cheap
+// (src/images.js) can actually decode: dimensions are cheap
 // (header-only, no full decode) and worth having as raw identity for any
 // recognizable image, even one $.resize can't process (yet).
 const IMAGE_EXTENSIONS = new Set([
@@ -104,7 +104,7 @@ const IMAGE_EXTENSIONS = new Set([
  * recognized image (below):
  *
  *   .mdy         real text, compiled as an mdy template (front matter +
- *                `{{ }}`/`{% %}` body) — openDocumentSet's normal job.
+ *                `%`/`{{ }}` body) — openDocumentSet's normal job.
  *   .md          real text, but NEVER compiled as a template (the same
  *                reasoning conventional mode's vault.js documents: a bare
  *                `---`/`+++` or a literal `{{ }}` in real prose must not be

@@ -1,20 +1,18 @@
-# {{ self.report.title }}
+= {{ res.data.report.title }}
 
-Generated for **{{ self.report.owner }}**.
+Generated for !!{{ res.data.report.owner }}!!.
 
-{% const total = self.items.reduce((s, i) => s + i.qty * i.price, 0) %}
+% const total = res.data.items.reduce((s, i) => s + i.qty * i.price, 0)
 | Item | Qty | Price | Line total |
 | :--- | --: | --: | --: |
-{% for (const i of self.items) { %}
+% for (const i of res.data.items) {
 | {{ i.name }} | {{ i.qty }} | ${{ i.price.toFixed(2) }} | ${{ (i.qty * i.price).toFixed(2) }} |
-{% } %}
+% }
 
-**Order total: ${{ total.toFixed(2) }}**
+!!Order total: ${{ total.toFixed(2) }}!!
 
-<!--
-Data fences may appear anywhere — even below the template that uses them —
-because every data fence is collected before the template runs.
--->
+# Data fences may appear anywhere — even below the code that uses them —
+# because every data fence is collected before a line of it runs.
 
 ```data
 report:

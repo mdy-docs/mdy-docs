@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { tokenize } from '../src/site/search.js';
+import { tokenize } from '../src/search.js';
 
 // --- tokenize ---------------------------------------------------------------
 // buildSearchIndex (the host-side batch indexer over openVault's

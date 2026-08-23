@@ -9,14 +9,15 @@ export {
   renderEach,
   createProcessor,
   render,
-  renderToMarkdown,
+  toHtml,
 } from './src/mdy.js';
 
-// The HTML-container sugar (`<div` + a two-space indent), exposed as the pure
-// string → string rewrite it is: mdy applies it wherever markdown text is
-// parsed, and an embedder feeding markdown to its own pipeline can apply it
-// there too.
-export { expandHtmlContainers } from './src/html-containers.js';
+// The two front ends, as the plain text → hast functions they are. Anything
+// wanting a tree without a document set around it — an editor, a preview
+// pane, a consumer with its own renderer — takes one of these and stops
+// there.
+export { fromMdy } from './src/parse/block.js';
+export { markdownToHast } from './src/markdown.js';
 
 // "Getting files into the document set" — the filesystem/vault layer,
 // formerly the separate @mdy-docs/vault package (edubba's own experience:
@@ -37,9 +38,9 @@ export { walkVault, walkFiles, walkRawSources } from './src/vault.js';
 // site is a script-defined site (one entry document deciding everything
 // itself via $.find/$.render/$.emit — see script-site.js and
 // docs/site-plan.md's "Toward a script-defined site" for the full design).
-export { renderSite, buildSite, urlToOutFile } from './src/site/build.js';
-export { serveSite } from './src/site/serve.js';
-export { slugify, normalizeDate, rfc822 } from './src/site/vault.js';
-export { tokenize } from './src/site/search.js';
-export { createResizeNative } from './src/site/images.js';
-export { renderScriptSite } from './src/site/script-site.js';
+export { renderSite, buildSite, urlToOutFile } from './src/build.js';
+export { serveSite } from './src/serve.js';
+export { slugify, normalizeDate, rfc822 } from './src/format.js';
+export { tokenize } from './src/search.js';
+export { createResizeNative } from './src/images.js';
+export { renderScriptSite } from './src/script-site.js';

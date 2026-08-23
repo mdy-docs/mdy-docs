@@ -66,15 +66,19 @@ function engineEntry(pkgDir, io) {
 }
 
 /**
- * One render pass, the CLI's file-input pipeline exactly (bin/mdy.js):
- * the source's own documents form a set, document 0 is the entry, its
- * markdown renders to HTML. $.emit output has nowhere to go in a preview,
- * so emitted paths are just collected for the adapter to report (the CLI
- * prints the equivalent "not written" notice).
+ * One render pass, the CLI's file-input pipeline exactly (bin/mdy.js
+ * --html): the source's own documents form a set, document 0 is the entry,
+ * and its finished tree is written out as HTML. $.emit output has nowhere to
+ * go in a preview, so emitted paths are just collected for the adapter to
+ * report (the CLI prints the equivalent "not written" notice).
  *
- * @param {object} engine the imported mdy module (openDocumentSet, createProcessor)
+ * There is no intermediate text any more. `set.render` returns the HTML of a
+ * tree the engine already has — nothing is stringified and parsed again on
+ * the way here.
+ *
+ * @param {object} engine the imported mdy module (openDocumentSet)
  * @param {string} text the .mdy source
- * @param {object} [context] extra context, overrides front matter (CLI: -d/--data-file)
+ * @param {object} [context] extra context, the entry document's `req` (CLI: -d/--data-file)
  * @returns {Promise<{ html: string, emittedPaths: string[] }>}
  */
 async function renderPreview(engine, text, context = {}) {
@@ -82,11 +86,7 @@ async function renderPreview(engine, text, context = {}) {
   const set = await engine.openDocumentSet(text, {
     onEmit: ({ path }) => emittedPaths.push(path),
   });
-  const markdown = await set.render(0, context);
-  // renderMarkdown is the unified-based engine's markdown→HTML; `.md.render`
-  // keeps a workspace-resolved older (markdown-it-based) engine previewing.
-  const proc = engine.createProcessor();
-  const html = proc.renderMarkdown ? await proc.renderMarkdown(markdown) : proc.md.render(markdown);
+  const html = await set.render(0, context);
   return { html, emittedPaths };
 }
 

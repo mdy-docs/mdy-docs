@@ -6,7 +6,7 @@ dedicated view with two modes, toggled from the view header (or the
 
 - **Preview** — the whole document set rendered live by the real engine:
   `---`-split documents, YAML front matter, ` ```data ` fences,
-  `#hashtags`, the `$` query API, and `{{ }}` / `{% %}` template tags
+  `#hashtags`, the `$` query API, and `%` / `%%` / `{{ }}` script lines
   executing **sandboxed in WebAssembly**. Template code can reach exactly
   two things — the document's data and `$` — never your vault, never the
   app. Re-renders debounced as you type.

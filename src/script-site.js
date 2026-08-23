@@ -1,6 +1,6 @@
-import { createProcessor } from '../mdy.js';
-import { nodeFsProvider } from '../fs-provider.js';
-import { normalizeDate, rfc822 } from './vault.js';
+import { nodeFsProvider } from './fs-provider.js';
+import { toHtml } from './mdy.js';
+import { normalizeDate, rfc822 } from './format.js';
 import { createResizeNative } from './images.js';
 import { tokenize } from './search.js';
 import { buildImportGraph } from './imports.js';
@@ -17,23 +17,26 @@ import { buildImportGraph } from './imports.js';
  * interpretation itself, in template code: which files are "posts" (a
  * path prefix it chooses), what URL each gets, what layout wraps it —
  * using $.find (raw, already-inserted documents), $.render (an existing
- * layout document), $.emit (a named output), and four small, genuinely
- * host-dependent primitives no amount of template JS can replace:
+ * layout document), $.emit (a named output), and three small, genuinely
+ * host-dependent primitives no amount of script JS can replace:
  * $.resize (WASM image codecs), $.tokenize (the search widget's word
- * list), $.rfc822 (RSS pubDate — the lamassu VM forbids `new Date()`), and
- * $.markdown (CommonMark → HTML — the unified/remark pipeline, not a
- * hand-rollable parser).
- * None of these four carry any policy of their own — resize doesn't decide
+ * list), and $.rfc822 (RSS pubDate — the lamassu VM forbids `new Date()`).
+ * None of these three carry any policy of their own — resize doesn't decide
  * which images get resized, tokenize doesn't decide what's searchable,
- * rfc822 doesn't decide what's in the feed, markdown doesn't decide which
- * pages get rendered; the script decides everything, these just do the
- * host-only work underneath.
+ * rfc822 doesn't decide what's in the feed; the script decides everything,
+ * these just do the host-only work underneath.
+ *
+ * A fourth used to live here — $.markdown, CommonMark → HTML — and does
+ * not any more. It is a fixed native of the document set itself now (see
+ * src/mdy.js), because Markdown stopped being something a site turns into
+ * HTML text and became one of the two front ends every document set has:
+ * it returns a tree, the same as $.render does.
  *
  * Deliberately NOT wired into renderSite's incremental cache — a script's
  * output is only ever fully rebuilt, never reused verbatim (see build.js's
  * dispatch). See examples/blog for a real site defined this way.
  *
- * A script can also `{% import name from "spec" %}` another mdy project —
+ * A script can also `% import name from "spec"` another mdy project —
  * a style/theme package, or anything else — entirely from its own code, no
  * host convention involved (see ./imports.js). buildImportGraph handles
  * walking/compiling the whole import graph; this file's job is just
@@ -70,9 +73,10 @@ import { buildImportGraph } from './imports.js';
  *                   e.g. the CLI's own "[read] <path>" logging; see
  *                   bin/mdy.js)
  *
- * Returns `{ output, outputs, binaryOutputs, roots }` — `output` is the
- * entry script's own rendered markdown (its template's normal return
- * value, same as any `$.render`); `outputs` is a `Map<path, content>` of
+ * Returns `{ output, text, outputs, binaryOutputs, roots }` — `output` is
+ * the entry script's own rendered HTML and `text` the text its code wrote
+ * (its own normal return values, same as any `$.render` / `$.text`);
+ * `outputs` is a `Map<path, content>` of
  * everything it (or anything it `$.render`s or imports along the way)
  * produced via `$.emit`; `binaryOutputs` is a `Map<path, Uint8Array>` of
  * everything it produced via `$.resize`; `roots` is every resolved
@@ -87,12 +91,10 @@ export async function renderScriptSite(root, options = {}) {
   if (!options.fs) root = (await import('node:path')).resolve(root);
 
   const binaryOutputs = new Map();
-  const { renderMarkdown } = createProcessor();
   const buildNatives = (absDir) => ({
     resize: createResizeNative({ fs, root: absDir, registerBinaryOutput: (path, bytes) => binaryOutputs.set(path, bytes) }),
     tokenize,
     rfc822,
-    markdown: (text) => renderMarkdown(String(text ?? '')),
   });
 
   const outputs = new Map();
@@ -113,7 +115,13 @@ export async function renderScriptSite(root, options = {}) {
   }
 
   const today = normalizeDate(options.now ?? new Date());
-  const output = await set.render(entryIndex, { today, ...options.context });
+  const context = { today, ...options.context };
+  // Both readings of "what the entry itself produced": the finished document,
+  // and the text its own code wrote. An entry script is usually run for its
+  // $.emit side effects and neither is used at all, but the CLI shows one or
+  // the other and they are not the same thing — one document in three here
+  // deliberately is not markup.
+  const result = await set.renderResult(entryIndex, context);
 
-  return { output, outputs, binaryOutputs, roots };
+  return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, roots };
 }

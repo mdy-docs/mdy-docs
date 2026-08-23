@@ -18,8 +18,9 @@ export function slugify(s) {
 /**
  * Normalize a front-matter date to the canonical `YYYY-MM-DD` string — the
  * one form that survives the YAML → JSON trip across the VM boundary intact
- * and sorts correctly as a string. Accepts a Date (js-yaml parses unquoted
- * YAML dates into one), an ISO-ish string, or `YYYY-MM` (padded to the 1st).
+ * and sorts correctly as a string. Accepts a Date — a host may hand one in,
+ * though the YAML parser does not make them: an unquoted date is a string
+ * under YAML 1.2 — an ISO-ish string, or `YYYY-MM` (padded to the 1st).
  * Anything else is undefined.
  */
 export function normalizeDate(value) {

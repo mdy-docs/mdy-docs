@@ -2,40 +2,42 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "mdy",
   "scopeName": "text.html.markdown.mdy",
-  "injections": {
-    "L:text.html.markdown.mdy - meta.embedded.line.mdy - meta.frontmatter.mdy": {
-      "comment": "THE load-bearing rule. The markdown grammar claims headings, list items, emphasis, tables, quotes, fences… as its own begin/end contexts, and inside those contexts the top-level patterns below are never consulted — without this injection, `# {{ title }}` and `- {{ x }}` lose their tag delimiters entirely (the shipped 0.0.1 bug). `L:` injects these with priority at every position of every markdown context; the exclusions keep it from re-matching inside an already-open tag or inside front matter (where {{ }} is literal YAML, never templated). #document-separator is here for the same reason: after a paragraph line, markdown reads `body` + `---` as a setext heading and consumes the --- INSIDE its paragraph context, but splitDocuments splits on a bare --- unconditionally, wherever it appears. Known divergence, accepted: a tag inside an inline `code span` stays unhighlighted — the span's match starts at the earlier backtick and leftmost-wins beats injection priority — even though the engine does run tags there.",
-      "patterns": [
-        { "include": "#document-separator" },
-        { "include": "#escape" },
-        { "include": "#tag-output" },
-        { "include": "#tag-code" }
-      ]
-    }
-  },
+  "comment": "MDY is not Markdown, and this grammar no longer borrows Markdown's. It used to `include: text.html.markdown` and inject template tags into it, which needed an `injections` entry with priority to reach inside the contexts that grammar opens for headings, lists and emphasis. None of that is here any more: every MDY block rule is anchored to the start of its own line, so the whole language is a flat list of line patterns and there is nothing to inject into. The reference implementation is the demo editor's own highlighter (packages/mdy-site/src/syntax.js), which walks the source with the parser's own lexical rules; where this file cannot match it — a TextMate grammar sees one line at a time and cannot count brackets — the approximation is written down in the rule that makes it.",
   "patterns": [
     { "include": "#frontmatter-start" },
     { "include": "#document-separator" },
-    { "include": "#escape" },
-    { "include": "#tag-output" },
-    { "include": "#tag-code" },
-    { "include": "#markdown-body" }
+    { "include": "#body" }
   ],
   "repository": {
+    "body": {
+      "comment": "Everything that is not front matter, in the order the parser takes it. Code first: the script stage runs over the whole document before any of the grammar does, so a `%` line is JavaScript wherever it is written, inside a fenced block included. Fences next, then comments, then the block rules, then inline.",
+      "patterns": [
+        { "include": "#script-block" },
+        { "include": "#script-line" },
+        { "include": "#fence" },
+        { "include": "#comment-line" },
+        { "include": "#heading" },
+        { "include": "#underline" },
+        { "include": "#thematic-break" },
+        { "include": "#doctype" },
+        { "include": "#element" },
+        { "include": "#list-item" },
+        { "include": "#table-row" },
+        { "include": "#inline" }
+      ]
+    },
     "frontmatter-start": {
-      "comment": "YAML front matter at the very start of the file. A TextMate grammar tokenizes one line at a time, so a begin pattern can never look ahead to confirm a later line is a bare +++ (the real, only rule src/mdy.js uses — see FRONT_MATTER_SEPARATOR/parseDocument). This approximates it from the one line we CAN see: front matter starts where the first line looks like a YAML `key:` mapping entry, or is +++ itself (an empty front-matter block, which parseDocument explicitly allows). A document whose body happens to open with `Word: text` is the one (rare, and not seen anywhere in this repo's own examples) case this over-triggers on.",
+      "comment": "YAML front matter at the very start of the file. A TextMate grammar tokenizes one line at a time, so a begin pattern can never look ahead to confirm a later line is a bare +++ (the real, only rule src/mdy.js uses — see FRONT_MATTER_SEPARATOR/parseDocument). This approximates it from the one line we CAN see: front matter starts where the first line looks like a YAML `key:` mapping entry, or is +++ itself (an empty front-matter block, which parseDocument explicitly allows). A document whose body happens to open with `Word: text` is the one (rare) case this over-triggers on.",
       "name": "meta.frontmatter.mdy",
       "begin": "\\A(?=[A-Za-z_][\\w.-]*[ \\t]*:([ \\t]|$)|\\+\\+\\+[ \\t]*$)",
       "end": "^\\+\\+\\+[ \\t]*$",
       "endCaptures": {
         "0": { "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy" }
       },
-      "patterns": [
-        { "include": "source.yaml" }
-      ]
+      "patterns": [{ "include": "source.yaml" }]
     },
     "document-separator": {
-      "comment": "A bare --- line splits a source into multiple documents (splitDocuments). Each new document may have its own front matter, checked the same heuristic way as frontmatter-start, against the line immediately following the separator; otherwise this --- is just a plain separator and what follows is body. `end` is a zero-width lookahead for any real (non-newline) character, deliberately NOT [\\s\\S]: vscode-textmate appends a synthetic trailing newline to every tokenized line (so $ anchors work), and [\\s\\S] would match THAT, closing this region one line too early — before the nested front-matter pattern below ever gets a look at the real next line. The separator carries markup.heading.* IN ADDITION to its punctuation scope (space-separated names push both onto the token's scope stack, deeper one last): a bare --- is the file's most structural line — it starts a whole new document — and plain punctuation scopes render dim in most themes. markup.heading is the scope family themes reliably make bold/colored, and 'a new document starts here' is exactly a heading-weight event. Same treatment for the +++ front-matter fences.",
+      "comment": "A bare --- line splits a source into multiple documents (splitDocuments). Each new document may have its own front matter, checked the same heuristic way as frontmatter-start, against the line immediately following the separator; otherwise this --- is just a plain separator and what follows is body. `end` is a zero-width lookahead for any real (non-newline) character, deliberately NOT [\\s\\S]: vscode-textmate appends a synthetic trailing newline to every tokenized line (so $ anchors work), and [\\s\\S] would match THAT, closing this region one line too early — before the nested front-matter pattern below ever gets a look at the real next line. The separator carries markup.heading.* IN ADDITION to its punctuation scope (space-separated names push both onto the token's scope stack, deeper one last): a bare --- is the file's most structural line — it starts a whole new document — and plain punctuation scopes render dim in most themes. Same treatment for the +++ front-matter fences.",
       "name": "meta.after-document-separator.mdy",
       "begin": "^---[ \\t]*$",
       "beginCaptures": {
@@ -51,19 +53,162 @@
           "endCaptures": {
             "0": { "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy" }
           },
+          "patterns": [{ "include": "source.yaml" }]
+        }
+      ]
+    },
+    "script-block": {
+      "comment": "`%%` says that what follows it is more code, and runs on into the lines under it as far as the line that brings its brackets back to even (see scriptLines in src/parse/script.js). Brackets are exactly what a TextMate grammar cannot count, so this approximates the extent the way these blocks are actually written: it ends after the first line whose own first character is a closing bracket, and before any line that starts a new `%` of its own. An unusual block ends late and paints a line or two of markup as JavaScript; it can never swallow the rest of the file, because a later `%` line always closes it.",
+      "name": "meta.embedded.block.mdy",
+      "contentName": "meta.embedded.line.mdy",
+      "begin": "^[ \\t]*(%%)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.script.mdy keyword.control.script.mdy" }
+      },
+      "end": "^[ \\t]*[)\\]}][^\\n]*$|^(?=[ \\t]*%)",
+      "patterns": [{ "include": "#js" }]
+    },
+    "script-line": {
+      "comment": "One `%` line is one line of code. What it leaves open encloses the markup under it — which is how a loop is written — so its brackets are deliberately not counted and the region is exactly this line. Leading space carries no meaning: the parser lifts a `%` line out before it counts a single column, so how far in the author writes their code is their own business. `\\%` at the start of a line is the literal character instead, handled by #escape and matched one column earlier, so it wins.",
+      "name": "meta.embedded.line.mdy",
+      "begin": "^[ \\t]*(%)(?!%)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.script.mdy keyword.control.script.mdy" }
+      },
+      "end": "$",
+      "patterns": [{ "include": "#js" }]
+    },
+    "fence": {
+      "comment": "Three or more backticks or tildes fence a block of code. Everything up to the closing fence is content, whatever it looks like — the first word after the opener names the language. \\1 makes the closer match the opener's own run, so a longer fence holds a shorter one and a tilde fence holds backticks.",
+      "name": "markup.fenced_code.block.mdy",
+      "begin": "^[ \\t]*(`{3,}|~{3,})[ \\t]*([^\\s`]*)[^\\n]*$",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.fence.begin.mdy" },
+        "2": { "name": "entity.name.type.fence.language.mdy" }
+      },
+      "end": "^[ \\t]*(\\1)[ \\t]*$",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.fence.end.mdy" }
+      },
+      "contentName": "markup.raw.block.mdy",
+      "patterns": [
+        { "include": "#script-block" },
+        { "include": "#script-line" }
+      ]
+    },
+    "comment-line": {
+      "comment": "A `#` with whitespace after it, or alone on its line, is a comment: it comes off after the code has run and before anything is parsed, so it never reaches the tree. `#tag` has no space and is a reference instead.",
+      "match": "^[ \\t]*#([ \\t][^\\n]*)?$",
+      "name": "comment.line.number-sign.mdy"
+    },
+    "heading": {
+      "comment": "A line starting with `=` is a heading, the number of `=` being the level. Trailing `=` are decoration.",
+      "match": "^[ \\t]*(=+)([ \\t]*)([^\\n]*?)([ \\t]*=*[ \\t]*)$",
+      "name": "markup.heading.mdy",
+      "captures": {
+        "1": { "name": "punctuation.definition.heading.mdy" },
+        "3": { "name": "entity.name.section.mdy", "patterns": [{ "include": "#inline" }] },
+        "4": { "name": "punctuation.definition.heading.mdy" }
+      }
+    },
+    "underline": {
+      "comment": "A line of only `=`, or of four or more `-`, under a paragraph underlines it Setext style. Three dashes are the document separator and are matched earlier; one is a list item and two are an em dash, which is why an underline starts at four.",
+      "match": "^[ \\t]*(?:=+|-{4,})[ \\t]*$",
+      "name": "markup.heading.underline.mdy"
+    },
+    "thematic-break": {
+      "comment": "Three or more `-`, `*` or `_` alone on a line, spaces between them allowed. Exactly `---` never reaches here: that spelling belongs to the document separator.",
+      "match": "^[ \\t]*([-*_])(?:[ \\t]*\\1){2,}[ \\t]*$",
+      "name": "punctuation.definition.thematic-break.mdy markup.heading.break.mdy"
+    },
+    "doctype": {
+      "match": "^[ \\t]*(<!doctype[^\\n>]*>?)[ \\t]*$",
+      "captures": { "1": { "name": "entity.name.tag.doctype.mdy" } }
+    },
+    "element": {
+      "comment": "A line starting with `<` opens an element, and everything indented two columns past it is its content — there is no closing tag to match, so this is a single-line rule and the nesting is the indentation's business, not the grammar's. Space after the `<` means nothing, the closing `>` is optional, and anything after it is inline content.",
+      "begin": "^[ \\t]*(<)[ \\t]*([A-Za-z][A-Za-z0-9-]*)?",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.mdy" },
+        "2": { "name": "entity.name.tag.mdy" }
+      },
+      "end": "$",
+      "patterns": [
+        {
+          "begin": "(>|/>)",
+          "beginCaptures": { "1": { "name": "punctuation.definition.tag.end.mdy" } },
+          "end": "$",
+          "patterns": [{ "include": "#inline" }]
+        },
+        { "include": "#attribute" }
+      ]
+    },
+    "attribute": {
+      "patterns": [
+        {
+          "match": "([A-Za-z_:][A-Za-z0-9._:-]*)[ \\t]*(=)[ \\t]*(\"[^\"\\n]*\"?|'[^'\\n]*'?|[^\\s>]+)",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.mdy" },
+            "2": { "name": "punctuation.separator.key-value.mdy" },
+            "3": { "name": "string.quoted.mdy", "patterns": [{ "include": "#interpolation" }] }
+          }
+        },
+        { "match": "[A-Za-z_:][A-Za-z0-9._:-]*", "name": "entity.other.attribute-name.mdy" }
+      ]
+    },
+    "list-item": {
+      "comment": "Markdown's lists, unchanged: `-`, `*` or `+` for bullets, `1.` or `1)` for numbers, and the marker has to be followed by whitespace so `---` and `-5` stay prose. A `[ ]` or `[x]` straight after the marker makes the item a task.",
+      "begin": "^[ \\t]*(?:([-*+])|(\\d{1,9}[.)]))[ \\t]+",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.list.begin.mdy markup.list.unnumbered.mdy" },
+        "2": { "name": "punctuation.definition.list.begin.mdy markup.list.numbered.mdy" }
+      },
+      "end": "$",
+      "patterns": [
+        { "match": "\\G(\\[)([ xX])(\\])(?=[ \\t])", "captures": {
+          "1": { "name": "punctuation.definition.task.mdy" },
+          "2": { "name": "constant.language.task.mdy" },
+          "3": { "name": "punctuation.definition.task.mdy" }
+        } },
+        { "include": "#inline" }
+      ]
+    },
+    "table-row": {
+      "comment": "GitHub's tables, unchanged. A delimiter row (`| :--- | ---: |`) is scoped apart from a content row, because it is the row that says what the table is.",
+      "patterns": [
+        {
+          "match": "^[ \\t]*\\|?[ \\t]*:?-+:?[ \\t]*(\\|[ \\t]*:?-+:?[ \\t]*)*\\|?[ \\t]*$",
+          "name": "punctuation.separator.table.delimiter.mdy markup.heading.table.mdy"
+        },
+        {
+          "begin": "^(?=[ \\t]*\\|)",
+          "end": "$",
           "patterns": [
-            { "include": "source.yaml" }
+            { "match": "\\|", "name": "punctuation.separator.table.mdy" },
+            { "include": "#inline" }
           ]
         }
       ]
     },
+    "inline": {
+      "patterns": [
+        { "include": "#escape" },
+        { "include": "#interpolation" },
+        { "include": "#code-span" },
+        { "include": "#wiki-link" },
+        { "include": "#autolink" },
+        { "include": "#reference" },
+        { "include": "#emoji" },
+        { "include": "#marker" }
+      ]
+    },
     "escape": {
-      "comment": "\\{{ and \\{% render as literal {{ / {% (compileTemplateSource's emitLiteral unescape) — never tag delimiters. Listed before the tag rules everywhere (root and injection); at the same position isn't even needed — the escape's match starts at the backslash, one column earlier than the brace, and leftmost always wins.",
-      "match": "\\\\\\{[{%]",
+      "comment": "A backslash before `{{` opts a line out of interpolation, and a backslash before the `%` a line opens with does the same for a code line — both come off in the output. Listed before every rule they could collide with; at the same position it is not even needed, since the escape's match starts one column earlier and leftmost always wins.",
+      "match": "^([ \\t]*)\\\\%|\\\\\\{\\{",
       "name": "constant.character.escape.mdy"
     },
-    "tag-output": {
-      "comment": "{{ expr }} — an output tag; expr is a JS expression whose value is stringified into the rendered markdown. Closes at the FIRST }}, matching the engine (compileTemplateSource uses indexOf, not brace counting). contentName, NOT name: meta.embedded.line.mdy is mapped to JavaScript in package.json's embeddedLanguages, and a region's `name` covers its begin/end delimiters too — which made VSCode treat the {{ }} braces themselves as JS-language brackets and rainbow-colorize them as nested pairs. With contentName only the expr between the delimiters is JS; the delimiters stay mdy-language punctuation, governed by mdy's own language configuration (which disables bracket-pair colorization).",
+    "interpolation": {
+      "comment": "`{{ expr }}` in content is a JavaScript expression interpolated into the line. It closes at the FIRST `}}`, matching the compiler (which uses indexOf, not brace counting). contentName, NOT name: meta.embedded.line.mdy is mapped to JavaScript in package.json's embeddedLanguages, and a region's `name` covers its begin/end delimiters too — which made VSCode treat the braces themselves as JS-language brackets and rainbow-colorize them as nested pairs.",
       "name": "meta.template.expression.mdy",
       "contentName": "meta.embedded.line.mdy",
       "begin": "\\{\\{",
@@ -74,63 +219,84 @@
       "endCaptures": {
         "0": { "name": "punctuation.section.embedded.end.expression.mdy" }
       },
+      "patterns": [{ "include": "#js-in-interpolation" }]
+    },
+    "code-span": {
+      "comment": "A double backtick opens a raw span: nothing inside it is markup until the next one.",
+      "match": "``(?:[^`\\n]|`(?!`))*``",
+      "name": "markup.inline.raw.mdy"
+    },
+    "wiki-link": {
+      "comment": "`[[ label ]]` or `[[ label | /where ]]`. Without a `|` the label is slugified into the URL, which is the same slugifier a heading's id comes from.",
+      "match": "(\\[\\[)([^\\]|\\n]*)(?:(\\|)([^\\]\\n]*))?(\\]\\])",
+      "name": "meta.link.wiki.mdy",
+      "captures": {
+        "1": { "name": "punctuation.definition.link.begin.mdy" },
+        "2": { "name": "string.other.link.title.mdy" },
+        "3": { "name": "punctuation.separator.link.mdy" },
+        "4": { "name": "markup.underline.link.mdy" },
+        "5": { "name": "punctuation.definition.link.end.mdy" }
+      }
+    },
+    "autolink": {
+      "comment": "URLs in text become links, found before markers so the `//` in `https://` never opens a run of emphasis. Bare domains are not links — a two-letter country code is a valid suffix, so matching those would turn README.md and node.js into links.",
+      "match": "(?:[a-z][a-z0-9+.-]*://|mailto:)[^\\s<>\"'`]+|//[\\w-]+(?:\\.[\\w-]+)+(?:/[^\\s<>\"'`]*)?|[\\w.!#$%&'*+/=?^`{|}~-]+@[\\w-]+(?:\\.[\\w-]+)+",
+      "name": "markup.underline.link.mdy"
+    },
+    "reference": {
+      "comment": "`#tag` and `@user`, each only at the start of a word — which is what keeps the `#` of a URL fragment and the `@` of an email address out of it. The name starts with a letter or an underscore, never a digit, so `#42` stays the issue number it was written as.",
+      "match": "(?<![\\p{L}\\p{N}_])([#@])([\\p{L}_](?:[\\p{L}\\p{N}_-]*[\\p{L}\\p{N}_])?)",
+      "name": "variable.other.reference.mdy",
+      "captures": {
+        "1": { "name": "punctuation.definition.reference.mdy" }
+      }
+    },
+    "emoji": {
+      "match": ":[a-z0-9_+-]+:",
+      "name": "constant.character.emoji.mdy"
+    },
+    "marker": {
+      "comment": "Inline formatting toggles rather than nesting: the first occurrence of a sequence opens the span and the next occurrence of the same sequence closes it. A TextMate grammar has no way to model a toggle, so each sequence is scoped where it appears and the theme colours the marker itself — the same information, without pretending to a structure the language does not have.",
       "patterns": [
-        { "include": "#js-in-expression-tag" }
+        { "match": "!!|\\*\\*", "name": "markup.bold.mdy punctuation.definition.bold.mdy" },
+        { "match": "//", "name": "markup.italic.mdy punctuation.definition.italic.mdy" },
+        { "match": "__", "name": "markup.underline.mdy punctuation.definition.underline.mdy" },
+        { "match": "~~", "name": "markup.strikethrough.mdy punctuation.definition.strikethrough.mdy" },
+        { "match": "\\?\\?|\\^\\^|,,", "name": "markup.other.mdy punctuation.definition.marker.mdy" }
       ]
     },
-    "tag-code": {
-      "comment": "{% ... %} — a code tag; contents are raw JS statements (control flow, declarations, $.emit/$.render calls) spliced directly into the compiled template function. Braces need not balance within a single tag (a { for/if } is often opened in one tag and closed in a later one) — which is exactly why these patterns must NOT include the real source.js grammar: its brace-block begin/end regions would open on the unbalanced { and swallow the %} (a region's end pattern is only consulted while it is top-of-stack). The #js-* rules below are deliberately region-free (or closer-guarded) so the tag's own end pattern always stays live, and the tag closes at the FIRST %}, exactly like the engine's indexOf. contentName, not name — see tag-output's comment.",
-      "name": "meta.template.statement.mdy",
-      "contentName": "meta.embedded.line.mdy",
-      "begin": "\\{%",
-      "beginCaptures": {
-        "0": { "name": "punctuation.section.embedded.begin.statement.mdy" }
-      },
-      "end": "%\\}",
-      "endCaptures": {
-        "0": { "name": "punctuation.section.embedded.end.statement.mdy" }
-      },
-      "patterns": [
-        { "include": "#js-in-statement-tag" }
-      ]
-    },
-    "js-in-statement-tag": {
-      "comment": "JS highlighting inside {% %}. Strings and comments are guarded against %} — the engine closes the tag at the first %} even inside a string or comment (indexOf knows no JS), so a construct that spanned the closer would both diverge from the engine and eat the delimiter. Guarded constructs simply stop highlighting at the closer; the plain text that remains is a smaller loss than a swallowed tag.",
-      "patterns": [
-        { "match": "//(?:(?!%\\})[^\\n])*", "name": "comment.line.double-slash.js.mdy" },
-        { "begin": "/\\*", "end": "\\*/|(?=%\\})", "name": "comment.block.js.mdy" },
-        { "match": "([\"'])(?:\\\\.|(?!%\\}|\\1)[^\\n\\\\])*\\1", "name": "string.quoted.js.mdy" },
-        { "begin": "`", "end": "`|(?=%\\})", "name": "string.template.js.mdy", "patterns": [{ "match": "\\\\." }] },
-        { "match": "%(?!\\})", "name": "keyword.operator.js.mdy" },
-        { "include": "#js-common" }
-      ]
-    },
-    "js-in-expression-tag": {
-      "comment": "Same as #js-in-statement-tag with }} as the guarded closer. (%} needs no guard here — it's plain content inside an output tag, and vice versa.)",
+    "js-in-interpolation": {
+      "comment": "JS highlighting inside `{{ }}`. Strings and comments are guarded against `}}` — the compiler closes at the first one even inside a string (indexOf knows no JS), so a construct that spanned the closer would both diverge from the compiler and eat the delimiter. Guarded constructs simply stop highlighting at the closer; the plain text that remains is a smaller loss than a swallowed delimiter.",
       "patterns": [
         { "match": "//(?:(?!\\}\\})[^\\n])*", "name": "comment.line.double-slash.js.mdy" },
         { "begin": "/\\*", "end": "\\*/|(?=\\}\\})", "name": "comment.block.js.mdy" },
         { "match": "([\"'])(?:\\\\.|(?!\\}\\}|\\1)[^\\n\\\\])*\\1", "name": "string.quoted.js.mdy" },
         { "begin": "`", "end": "`|(?=\\}\\})", "name": "string.template.js.mdy", "patterns": [{ "match": "\\\\." }] },
-        { "match": "%", "name": "keyword.operator.js.mdy" },
+        { "include": "#js-common" }
+      ]
+    },
+    "js": {
+      "comment": "JS highlighting on a `%` or `%%` line. Nothing is guarded here: a code line runs to the end of the line and a `%%` block to the line that closes it, so there is no delimiter further along for a string or a comment to eat.",
+      "patterns": [
+        { "match": "//[^\\n]*", "name": "comment.line.double-slash.js.mdy" },
+        { "begin": "/\\*", "end": "\\*/", "name": "comment.block.js.mdy" },
+        { "match": "([\"'])(?:\\\\.|[^\\n\\\\])*?\\1", "name": "string.quoted.js.mdy" },
+        { "begin": "`", "end": "`", "name": "string.template.js.mdy", "patterns": [{ "match": "\\\\." }] },
         { "include": "#js-common" }
       ]
     },
     "js-common": {
-      "comment": "Region-free JS token rules shared by both tag types. Every rule here is a single match that cannot span a closer (single-char operator matches can start AT a closer's first char, but a region's end pattern is checked before inner patterns at the same position, so the closer still wins). $ before . is the template's native-function namespace ($.find, $.render, $.emit, $.resize, …) — highlighted like a language-provided variable, not a plain identifier.",
+      "comment": "Region-free JS token rules shared by every code context. `$` before a `.` is the document's native-function namespace ($.find, $.render, $.emit, $.resize, …) — highlighted like a language-provided variable, not a plain identifier; `req`, `res` and `transform` are the three names a document is always handed.",
       "patterns": [
         { "match": "\\$(?=\\s*\\.)", "name": "variable.language.dollar.mdy" },
+        { "match": "\\b(?:req|res)\\b(?=\\s*[.\\[])", "name": "variable.language.mdy" },
+        { "match": "\\b(?:transform|visit|h|toText|slug)\\b(?=\\s*\\()", "name": "support.function.mdy" },
         { "match": "\\b(?:const|let|var|function|return|if|else|for|while|do|break|continue|new|typeof|instanceof|of|in|try|catch|finally|throw|switch|case|default|async|await|yield|class|extends|import|export|from|delete|void)\\b", "name": "keyword.control.js.mdy" },
         { "match": "\\b(?:true|false|null|undefined|NaN|Infinity)\\b", "name": "constant.language.js.mdy" },
         { "match": "\\bthis\\b", "name": "variable.language.this.js.mdy" },
         { "match": "\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b", "name": "constant.numeric.js.mdy" },
         { "match": "=>", "name": "storage.type.function.arrow.js.mdy" },
         { "match": "[+\\-*/<>=!&|?:]", "name": "keyword.operator.js.mdy" }
-      ]
-    },
-    "markdown-body": {
-      "patterns": [
-        { "include": "text.html.markdown" }
       ]
     }
   }

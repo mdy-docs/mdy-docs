@@ -1,4 +1,4 @@
-import { nodeFsProvider } from '../fs-provider.js';
+import { nodeFsProvider } from './fs-provider.js';
 import { renderSite } from './build.js';
 
 /*

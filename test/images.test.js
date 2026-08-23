@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { imageSize } from 'image-size';
 import { memoryFsProvider } from '../index.js';
-import { createResizeNative } from '../src/site/images.js';
+import { createResizeNative } from '../src/images.js';
 import { makePng } from './png-fixture.js';
 
 function setup(pngBytes) {

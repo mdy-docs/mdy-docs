@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { serveSite } from '../src/site/serve.js';
+import { serveSite } from '../src/serve.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const exampleBlog = join(here, '..', 'examples', 'blog');
@@ -122,7 +122,7 @@ test('editing one post rebuilds the whole script-defined site (no incremental re
   // Unlike the conventional content/layouts/site.yaml pipeline, a
   // script-defined site (main.mdy, here) has no incremental cache — every
   // rebuild walks the whole directory and re-runs the entry from scratch
-  // (src/site/script-site.js's own file-level comment). So editing ONE
+  // (src/script-site.js's own file-level comment). So editing ONE
   // post rebuilds EVERY output, not just that post's page.
   const events = await get('/__mdy__/events');
   const reader = events.body.getReader();

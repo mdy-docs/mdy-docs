@@ -38,6 +38,12 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node18', // VSCode ^1.90's extension host
+  // One dependency (yaml) ships CJS that calls `require` at load time. In an
+  // ESM bundle there is no `require` to call, so give it one built from this
+  // module's own URL — the standard esbuild ESM-for-node shim.
+  banner: {
+    js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);",
+  },
   outfile: join(outDir, 'mdy-engine.mjs'),
   logLevel: 'warning',
 });

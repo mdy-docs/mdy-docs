@@ -65,7 +65,7 @@ const mount = async (element, until = () => container.innerHTML !== '') => {
 };
 
 test('renders a document into the DOM', async () => {
-  await mount(createElement(Mdy, { source: 'title: Hi\n+++\n# {{ self.title }}' }));
+  await mount(createElement(Mdy, { source: 'title: Hi\n+++\n= {{ res.data.title }}' }));
   assert.equal(container.querySelector('h1').textContent, 'Hi');
   assert.equal(container.querySelector('h1').id, 'hi');
 });
@@ -86,7 +86,7 @@ test('shows the fallback only until the first render resolves', async () => {
     createElement(
       Recorder,
       null,
-      createElement(Mdy, { source: '# done', fallback: createElement('p', null, 'loading') }),
+      createElement(Mdy, { source: '= done', fallback: createElement('p', null, 'loading') }),
     ),
     () => container.querySelector('h1'),
   );
@@ -96,8 +96,8 @@ test('shows the fallback only until the first render resolves', async () => {
   assert.doesNotMatch(container.innerHTML, /loading/);
 });
 
-test('data reaches the template as arg', async () => {
-  await mount(createElement(Mdy, { source: '{{ arg.who ?? "nobody" }}', data: { who: 'Ada' } }));
+test('data reaches the document as req', async () => {
+  await mount(createElement(Mdy, { source: '{{ req.who ?? "nobody" }}', data: { who: 'Ada' } }));
   assert.match(container.textContent, /Ada/);
 });
 
@@ -105,7 +105,7 @@ test('data reaches the template as arg', async () => {
 
 test('a broken edit keeps the last good render on screen', async () => {
   const errors = [];
-  const props = { source: '# good', onError: (e) => errors.push(e) };
+  const props = { source: '= good', onError: (e) => errors.push(e) };
 
   await mount(createElement(Mdy, props));
   assert.equal(container.querySelector('h1').textContent, 'good');
@@ -114,7 +114,7 @@ test('a broken edit keeps the last good render on screen', async () => {
   assert.equal(container.querySelector('h1').textContent, 'good', 'output was destroyed by a template error');
   assert.equal(errors.length, 1);
 
-  await mount(createElement(Mdy, { ...props, source: '# better' }));
+  await mount(createElement(Mdy, { ...props, source: '= better' }));
   assert.equal(container.querySelector('h1').textContent, 'better');
 });
 
@@ -129,7 +129,7 @@ test('errorFallback covers the case where there is no good render to keep', asyn
 });
 
 test('only the newest of several rapid edits is committed', async () => {
-  const source = (n) => `# edit ${n}`;
+  const source = (n) => `= edit ${n}`;
   await act(async () => {
     for (let n = 1; n <= 8; n++) root.render(createElement(Mdy, { source: source(n) }));
   });
@@ -143,7 +143,7 @@ test('inline object props do not spin the render loop', async () => {
     // Fresh object literals every render: the shape that turns a naive
     // useEffect dependency list into an infinite loop.
     return createElement(Mdy, {
-      source: '# stable',
+      source: '= stable',
       data: { nested: { a: 1 } },
       components: { h1: ({ children }) => createElement('h1', null, children) },
       rehypePlugins: [],
@@ -159,7 +159,7 @@ test('inline object props do not spin the render loop', async () => {
 });
 
 test('survives StrictMode double-invocation', async () => {
-  await mount(createElement(StrictMode, null, createElement(Mdy, { source: '# strict' })));
+  await mount(createElement(StrictMode, null, createElement(Mdy, { source: '= strict' })));
   assert.equal(container.querySelector('h1').textContent, 'strict');
 });
 
@@ -168,7 +168,7 @@ test('survives StrictMode double-invocation', async () => {
 test('useMdy exposes element, error and pending', async () => {
   const seen = [];
   const Probe = () => {
-    const state = useMdy('# hi');
+    const state = useMdy('= hi');
     seen.push({ element: !!state.element, error: !!state.error, pending: state.pending });
     return state.element;
   };
@@ -181,7 +181,7 @@ test('useMdy exposes element, error and pending', async () => {
 test('the processor is not rebuilt when nothing meaningful changed', async () => {
   const seen = new Set();
   const Probe = ({ tick }) => {
-    const state = useMdy('# hi', { data: { a: 1 } });
+    const state = useMdy('= hi', { data: { a: 1 } });
     const id = useRef({});
     seen.add(state.element ? id.current : null);
     return createElement('div', { 'data-tick': tick }, state.element);

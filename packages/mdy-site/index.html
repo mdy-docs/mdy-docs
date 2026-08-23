@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mdy-docs — documents with data</title>
+    <meta
+      name="description"
+      content="Documents that carry their own data and render themselves: a markup language, a query engine over the document set, a sandboxed template runtime, and a static site generator built on all three."
+    />
+    <link rel="icon" href="data:," />
+    <meta name="color-scheme" content="light dark" />
+
+    <!--
+      The theme, applied before the first paint. `src/theme.js` owns this
+      choice and this key; the only reason it is read again here is that a
+      module runs too late to keep a page whose reader wants light from
+      starting out dark.
+    -->
+    <script>
+      try {
+        const theme = localStorage.getItem('mdy:theme')
+
+        if (theme === 'light' || theme === 'dark') {
+          document.documentElement.dataset.theme = theme
+        }
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <header class="hero">
+      <button type="button" class="theme" id="theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="4.2" />
+          <path d="M12 2v2.6M12 19.4V22M4.2 4.2l1.9 1.9M17.9 17.9l1.9 1.9M2 12h2.6M19.4 12H22M4.2 19.8l1.9-1.9M17.9 6.1l1.9-1.9" />
+        </svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M20.5 14.3A8.5 8.5 0 0 1 9.7 3.5a8.5 8.5 0 1 0 10.8 10.8z" />
+        </svg>
+      </button>
+
+      <div class="hero-inner stacked">
+        <div class="hero-text">
+          <p class="eyebrow">documents · data · sandboxed templates · sites</p>
+          <h1>Every document carries its own <span class="glyph">data</span>.</h1>
+          <p class="lede">
+            A file is a set of documents. Each one holds YAML and a template
+            written in <a href="/language.html">MDY</a>. The set goes into a
+            query engine, the templates run in a sandbox, and one of them
+            decides what all of it becomes — a page, a feed, a whole site.
+          </p>
+        </div>
+        <pre class="snippet sample" data-mdy>+++
+title: Team Roster
++++
+= {{ res.data.title }}
+
+%% for (const m of $.find({role: 'member'})) {
+     write($.render({template: 'card'}, m))
+%% }
+---
+template: card
++++
+=== {{ req.name }}
+
+- Age: {{ req.age }}
+---
+role: member
+name: Alice
+age: 30
++++</pre>
+        <ul class="cheatsheet">
+          <li><code>---</code><span>next document</span></li>
+          <li><code>+++</code><span>end of front matter</span></li>
+          <li><code>%</code> <code>%%</code><span>template code</span></li>
+          <li><code>{{ }}</code><span>interpolate</span></li>
+          <li><code>res.data</code><span>this document's data</span></li>
+          <li><code>req</code><span>what the caller passed</span></li>
+          <li><code>$</code><span>the document set</span></li>
+        </ul>
+      </div>
+    </header>
+
+    <nav class="jump" aria-label="Sections">
+      <a href="#pipeline">Pipeline</a>
+      <a href="#sets">Document sets</a>
+      <a href="#sandbox">Sandbox</a>
+      <a href="#sites">Sites</a>
+      <a href="#cli">CLI</a>
+      <a href="/language.html" class="jump-out">The language →</a>
+    </nav>
+
+    <main>
+      <section class="band" id="pipeline">
+        <div class="band-inner">
+          <div class="section-head">
+            <p class="eyebrow">How a file becomes a page</p>
+            <h2>Five passes, and the third one is the interesting one</h2>
+            <p class="section-lede">
+              Nothing here is a plugin chain you configure. It is the same five
+              steps every time, and a document can reach the ones after it.
+            </p>
+          </div>
+
+          <ol class="steps">
+            <li>
+              <h3>Split</h3>
+              <p>
+                Bare <code>---</code> lines cut the file into documents; the
+                first <code>+++</code> in each cuts YAML from body.
+              </p>
+            </li>
+            <li>
+              <h3>Store</h3>
+              <p>
+                Every document's data goes into an in-memory
+                <a href="https://github.com/mdy-docs/nisaba-db">nisaba</a>
+                collection, so a template can query the set it belongs to.
+              </p>
+            </li>
+            <li>
+              <h3>Compile</h3>
+              <p>
+                The body becomes one statement sequence, so a
+                <code>const</code> in one tag is visible to every later tag.
+              </p>
+            </li>
+            <li>
+              <h3>Run</h3>
+              <p>
+                Inside the
+                <a href="https://github.com/mdy-docs/lamassu-js">lamassu</a>
+                VM, with the document's data as <code>res.data</code> and the
+                caller's as <code>req</code>. The output is MDY source.
+              </p>
+            </li>
+            <li>
+              <h3>Render</h3>
+              <p>
+                That source is parsed to
+                <a href="https://github.com/syntax-tree/hast">hast</a> — an
+                HTML syntax tree — and stringified. React swaps in at this step
+                and nothing above it changes.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="band alt" id="sets">
+        <div class="band-inner">
+          <div class="section-head">
+            <p class="eyebrow">Document sets</p>
+            <h2>A file is a set, and the set is queryable</h2>
+            <p class="section-lede">
+              Documents are anonymous and positional, so nothing addresses
+              anything by index. Give them attributes and both the data and the
+              template become queries — adding a member is appending a
+              document, and nothing else changes.
+            </p>
+          </div>
+
+          <div class="two-up">
+            <div class="scroll-box">
+              <table class="api">
+                <thead>
+                  <tr><th>Call</th><th>What it gives you</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>$.find(query)</code></td><td>Data of every match, in document order — full Mongo operators</td></tr>
+                  <tr><td><code>$.findOne(query)</code></td><td>The first match, or <code>null</code></td></tr>
+                  <tr><td><code>$.render(t, data)</code></td><td>Run a document with <code>data</code> as its <code>req</code>; gives back its finished tree</td></tr>
+                  <tr><td><code>$.text(t, data)</code></td><td>The same render as the text its code wrote, for output that was never markup</td></tr>
+                  <tr><td><code>$.withTag(tag)</code></td><td>Every document that mentions <code>#tag</code> in its text</td></tr>
+                  <tr><td><code>$.emit(path, content)</code></td><td>Produce a named output — this is what builds a site</td></tr>
+                  <tr><td><code>$.parse(source)</code></td><td>MDY source to a tree, to walk or rewrite</td></tr>
+                  <tr><td><code>$.markdown(md)</code></td><td>Markdown text through the other front end, to the same kind of tree</td></tr>
+                  <tr><td><code>$.table(rows, align)</code></td><td>A 2-D array as a table, cells read as MDY</td></tr>
+                  <tr><td><code>$.toc()</code></td><td>A contents list of this document's final headings, after every transform</td></tr>
+                  <tr><td><code>transform(fn)</code></td><td>Rewrite the finished tree, inside the sandbox, before it becomes HTML</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="aside-note">
+              <h3>Tags are known without rendering</h3>
+              <p>
+                A <code>#tag</code> written in a body is scanned out of the
+                source before any template runs, so
+                <code>$.withTag('release')</code> can select documents the
+                engine has not executed. That is what keeps a query over a
+                thousand-file directory cheap.
+              </p>
+              <p>
+                Links and <code>@mentions</code> are collected the same way, and
+                a link to another page of your own is lower-cased with its
+                spaces as dashes on the way past.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="sandbox">
+        <div class="band-inner">
+          <div class="section-head">
+            <p class="eyebrow">Sandbox</p>
+            <h2>Template code cannot reach the host</h2>
+            <p class="section-lede">
+              Documents execute in a JavaScript-subset interpreter compiled to
+              WebAssembly, with the engine's own bounded CPU, memory and stack.
+              Template code can reach exactly two things: its own data, and the
+              document set.
+            </p>
+          </div>
+
+          <div class="two-up">
+            <pre class="sample" data-mdy>%% write(typeof process)
+%% write(' / ')
+%% write(typeof Function)</pre>
+            <div class="aside-note">
+              <h3>Both are <code>undefined</code></h3>
+              <p>
+                There is no host runtime behind the template, so there is
+                nothing to escape into — no filesystem, no network, no
+                <code>process</code>, and no way to build a function out of a
+                string.
+              </p>
+              <p>
+                Which means a document from somewhere else is safe to render.
+                For most template engines that sentence needs a paragraph of
+                caveats after it.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band alt" id="sites">
+        <div class="band-inner">
+          <div class="section-head">
+            <p class="eyebrow">Static sites</p>
+            <h2>No <code>content/</code>, no <code>layouts/</code>, no <code>site.yaml</code></h2>
+            <p class="section-lede">
+              Every site is a script-defined site. There is no convention
+              deciding what a path means — one entry document decides all of
+              it, in template code. Which files are posts, what URL each gets,
+              how tags group, what the feed contains.
+            </p>
+          </div>
+
+          <div class="two-up">
+            <pre class="sample" data-mdy>%% for (const post of $.withTag('post')) {
+     const html = $.render({template: 'page'}, post)
+     $.emit(post.slug + '/index.html', html)
+%% }
+%% $.emit('feed.xml', $.render({template: 'rss'}))</pre>
+            <div class="aside-note">
+              <h3>Four things the script cannot do itself</h3>
+              <p>
+                Image resizing, the search index's tokeniser, RFC-822 dates
+                (the VM has no clock), and turning assembled source into HTML.
+                Those are host natives. None of them carries any policy — the
+                script still decides which images, what is searchable, what is
+                in the feed.
+              </p>
+            </div>
+          </div>
+
+          <p class="footnote">
+            A site can <code>import</code> another mdy project the way code
+            imports a package — a theme is a directory with its own document
+            set, reached through its own <code>$</code>. Swap the import and
+            only the look changes.
+          </p>
+        </div>
+      </section>
+
+      <section class="band" id="cli">
+        <div class="band-inner">
+          <div class="section-head">
+            <p class="eyebrow">Command line</p>
+            <h2>One file, one directory, or a whole site</h2>
+          </div>
+
+          <pre class="sample wide" data-lang="bash">mdy report.mdy                        # generated source on stdout
+mdy report.mdy --html -o report.html  # an HTML file
+mdy report.mdy -o out.mdy --watch     # re-render on every save
+cat report.mdy | mdy - --html         # stdin, straight through
+
+mdy ./my-site                         # scan the directory, run main.mdy
+mdy build ./my-blog --out ./dist      # build the whole site
+mdy serve ./my-blog                   # dev server, watch, live reload</pre>
+
+          <p class="footnote">
+            A directory input inserts every file under it as a document —
+            path, name, extension, size, modified time, plus front matter for
+            <code>.mdy</code> files — and the entry document reaches any of
+            them. Nothing interprets what a path means before the script does.
+          </p>
+        </div>
+      </section>
+
+      <section class="band alt" id="around">
+        <div class="band-inner">
+          <div class="section-head">
+            <p class="eyebrow">Around the engine</p>
+            <h2>Editors, React, and a playground</h2>
+          </div>
+
+          <div class="cards">
+            <a class="card" href="/language.html">
+              <h3>The language, live</h3>
+              <p>
+                Every rule in MDY, in an editor that runs the real parser as
+                you type — with bracket matching, block extents and a preview.
+              </p>
+              <span class="card-go">Open the tour →</span>
+            </a>
+            <div class="card">
+              <h3>React</h3>
+              <p>
+                <code>&lt;Mdy source={…} /&gt;</code>. The pipeline ends at hast
+                either way, so React is one compiler swap — reconciliation
+                instead of raw HTML, and fenced blocks that are components.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Editors</h3>
+              <p>
+                VS Code, Obsidian and Sublime packages, plus a Monaco live
+                preview running the whole engine client-side as WebAssembly.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Web editor</h3>
+              <p>
+                <code>mdy serve</code> with the browser as the editor: edit any
+                source file, preview unsaved changes, upload assets, rebuild on
+                save.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>
+        The engine is <code>src/</code> and the markup language is
+        <code>src/parse</code>, reachable as <code>mdy-docs/parse</code>. This
+        page and the language tour are <code>packages/mdy-site</code>, which is
+        not shipped with the package.
+      </p>
+    </footer>
+
+    <script type="module" src="/src/landing.js"></script>
+  </body>
+</html>

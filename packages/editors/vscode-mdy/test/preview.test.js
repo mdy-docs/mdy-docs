@@ -31,8 +31,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 // --- renderPreview: the CLI's file-input pipeline
 
-test('renders the entry document: front matter feeds {{ }} tags, markdown becomes HTML', async () => {
-  const { html, emittedPaths } = await renderPreview(engine, 'title: Hello\n+++\n# {{ self.title }}\n');
+test('renders the entry document: front matter feeds {{ }}, markup becomes HTML', async () => {
+  const { html, emittedPaths } = await renderPreview(engine, 'title: Hello\n+++\n= {{ res.data.title }}\n');
   assert.match(html, /<h1 id="[^"]*">Hello<\/h1>/);
   assert.deepEqual(emittedPaths, []);
 });
@@ -41,9 +41,9 @@ test('multi-document files render document 0 as the entry, with $.find reaching 
   const source = [
     'title: Index',
     '+++',
-    '{% for (const d of $.find({ role: "member" })) { %}',
+    '% for (const d of $.find({ role: "member" })) {',
     '- {{ d.title }}',
-    '{% } %}',
+    '% }',
     '---',
     'title: Alice',
     'role: member',
@@ -55,16 +55,16 @@ test('multi-document files render document 0 as the entry, with $.find reaching 
   assert.doesNotMatch(html, /unused body/); // only the entry renders
 });
 
-test('extra context (the CLI -d flag) arrives as arg, front matter as self — never merged', async () => {
-  const source = 'title: Hello\n+++\n# {{ arg.title ?? self.title }}\n';
+test('extra context (the CLI -d flag) arrives as req, front matter as res.data — never merged', async () => {
+  const source = 'title: Hello\n+++\n= {{ req.title ?? res.data.title }}\n';
   const { html } = await renderPreview(engine, source, { title: 'Override' });
-  assert.match(html, /<h1 id="[^"]*">Override<\/h1>/); // arg wins when passed
+  assert.match(html, /<h1 id="[^"]*">Override<\/h1>/); // req wins when passed
   const { html: bare } = await renderPreview(engine, source);
-  assert.match(bare, /<h1 id="[^"]*">Hello<\/h1>/); // self is the fallback with no context
+  assert.match(bare, /<h1 id="[^"]*">Hello<\/h1>/); // res.data is the fallback with no context
 });
 
 test('$.emit output is collected, not lost', async () => {
-  const { emittedPaths } = await renderPreview(engine, "{% $.emit('out/a.txt', 'hi') %}ok\n");
+  const { emittedPaths } = await renderPreview(engine, "% $.emit('out/a.txt', 'hi')\nok\n");
   assert.deepEqual(emittedPaths, ['out/a.txt']);
 });
 
@@ -76,7 +76,7 @@ test('a real example file renders', async () => {
 
 test('the BUNDLED engine (dist/, built by pretest) renders standalone — sandbox and query wasm included', async () => {
   const bundled = await import('../dist/mdy-engine.mjs');
-  const source = 'title: Bundled\n+++\n# {{ self.title }}\n\n{% for (const d of $.find({})) { %}- {{ d.title }}\n{% } %}';
+  const source = 'title: Bundled\n+++\n= {{ res.data.title }}\n\n% for (const d of $.find({})) {\n- {{ d.title }}\n% }';
   const { html } = await renderPreview(bundled, source);
   assert.match(html, /<h1 id="[^"]*">Bundled<\/h1>/); // lamassu.wasm ran the template
   assert.match(html, /<li>Bundled<\/li>/); // nisaba.wasm answered $.find

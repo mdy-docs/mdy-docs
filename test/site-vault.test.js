@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeDate, rfc822, slugify } from '../src/site/vault.js';
+import { normalizeDate, rfc822, slugify } from '../src/format.js';
 
-// src/site/vault.js used to also hold openVault (computed fields, draft/
+// src/format.js used to also hold openVault (computed fields, draft/
 // future filtering, .md/.yaml interpretation, kind: 'file' inventory,
 // metadata sidecars) for the conventional content/layouts/site.yaml
 // pipeline — removed along with that pipeline (every site is now a

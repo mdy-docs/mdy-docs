@@ -1,12 +1,14 @@
-# {{ arg.title }}
+= {{ req.title }}
 
-*{{ arg.date }}*
+//{{ req.date }}//
 
-{{ arg.content }}
+{{ req.content }}
 
-{%
-  const myRelated = arg.related ?? [];
-  if (myRelated.length > 0) {
-%}
-**More like this:** {% for (const p of myRelated) { %}[{{ p.title }}]({{ p.url }}) {% } %}
-{% } %}
+% const related = req.related ?? []
+% if (related.length > 0) {
+!!More like this:!!
+
+% for (const p of related) {
+- [[ {{ p.title }} | {{ p.url }} ]]
+% }
+% }

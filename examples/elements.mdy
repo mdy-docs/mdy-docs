@@ -1,0 +1,97 @@
+title: Elements and indentation
+subtitle: structure without closing tags
+members:
+  - { name: Ada Lovelace, role: analyst,  lead: true  }
+  - { name: Grace Hopper, role: admiral,  lead: true  }
+  - { name: Alan Turing,  role: cryptanalyst, lead: false }
++++
+< header class="page"
+  = {{ res.data.title }}
+  //{{ res.data.subtitle }}//
+
+A line starting with ``<`` opens an element, and everything indented two spaces
+past it is its content. The closing tag is never written: the end of the
+indent is the end of the element. This is a rule of the grammar, not a rewrite
+over the top of one — the parser opens a node and closes it, so an element
+that runs off the end of the file ends there and nowhere else.
+
+< div class="callout"
+  == Every block rule works at every depth
+
+  The indentation is structure, so a heading, a list, a table or a fence all
+  read the same in here as they do at the margin:
+
+  - !!bold!! and ``code`` work
+  - so do [[ links | https://example.com ]]
+
+  | Marker   | Element |
+  | :------- | :------ |
+  | two bangs | strong |
+This paragraph is outside the callout: the indent ended, so the element did.
+
+== Nesting, and generated content
+
+Elements nest — each level is two more columns — and because a ``%`` line is
+lifted out before any column is counted, code can sit anywhere it reads best
+without moving the markup it encloses.
+
+< section class="team"
+  < div class="roster"
+    % for (const m of res.data.members) {
+    - !!{{ m.name }}!! — {{ m.role }}{{ m.lead ? ' //(lead)//' : '' }}
+    % }
+
+  < div class="count"
+    {{ res.data.members.length }} people, {{ res.data.members.filter((m) => m.lead).length }} of them leads.
+
+== Nesting another document
+
+``$.render`` gives back a whole document's finished tree, and ``\{{ }}`` is where
+it goes. There is no indent to pass: the parser knows which element is open
+where the token landed, so the returned tree simply becomes its child.
+
+< section class="roster-cards"
+  % for (const m of res.data.members) {
+  < article class="card"
+    {{ $.render({ template: 'card' }, m) }}
+  % }
+
+That is also why one document cannot damage another. Each is parsed at its own
+boundary and comes back as a node, so an element left open in the card reaches
+the end of the card and stops. There is no such thing as an unclosed element
+in a tree.
+
+== Element kinds
+
+Void elements stand alone; they never get a closing tag:
+
+<hr class="rule"
+
+<img src="team.png" alt="The team"
+
+Raw-text elements keep their body exactly as written — de-indented, but never
+read as markup:
+
+< pre class="ascii"
+     _____
+    /     \    //not// emphasis
+   |  o o  |   and    the    spacing    survives
+    \_____/
+
+< style
+  .callout { border-left: 3px solid #ccc; padding-left: 1rem }
+
+== What an opener is not
+
+An opener shown inside a fence is sample text, not structure:
+
+```mdy
+< div class="example"
+  This block is displayed, not expanded.
+```
+---
+template: card
++++
+=== {{ req.name }}
+
+{{ req.role }}{{ req.lead ? ' — team lead' : '' }}

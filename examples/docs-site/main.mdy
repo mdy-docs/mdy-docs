@@ -45,90 +45,83 @@ footer:
   message: Released under the MIT License.
   copyright: Copyright © lamassu-js contributors
 +++
-{%
-  // The whole site is defined right here: which files are pages, what URL
-  // each gets, the sidebar/outline/pager around it — the same content
-  // files VitePress rendered, but the config + theme are replaced by this
-  // script, two .mdy layouts, and static/{style.css,docs.js}.
-  const md = await import("./lib/md.js");
-  const html = await import("./lib/html.js");
-
-  // Every .md file under the site root is a page; its URL comes from its
-  // path (guide/language.md → /guide/language/, guide/index.md → /guide/).
-  // The home page is index.mdy (rendered below) — a real mdy document, so
-  // its hero/features front matter needs no host-side parsing at all.
-  const pages = [];
-  for (const raw of $.find({})) {
-    if (raw.ext !== ".md" || raw.path === "README.md") { continue; }
-    const stem = raw.path.slice(0, -3);
-    let url;
-    if (stem.slice(-6) === "/index") {
-      url = "/" + stem.slice(0, -5);
-    } else {
-      url = "/" + stem + "/";
-    }
-    pages.push({ raw: raw, url: url, section: url.split("/")[1] || "" });
-  }
-
-  // Flatten each section's sidebar for prev/next links, VitePress-style.
-  const flat = {};
-  for (const key of Object.keys(self.sidebar)) {
-    const items = [];
-    for (const g of self.sidebar[key]) {
-      for (const it of g.items) { items.push(it); }
-    }
-    flat[key] = items;
-  }
-
-  const searchRecords = [];
-
-  for (const p of pages) {
-    const body = md.rewriteLinks(md.transformContainers(md.stripFrontMatter(p.raw.body)));
-    const headings = $.toc(body);
-    const h1 = headings.find((e) => e.depth === 1);
-    const title = h1 ? h1.text : p.raw.name;
-    const items = flat[p.section] || [];
-    let at = -1;
-    for (let i = 0; i < items.length; i += 1) {
-      if (items[i].link === p.url) { at = i; }
-    }
-    const pageHtml = $.render({ path: "layouts/base.mdy" }, {
-      site: self.site, nav: self.nav, footer: self.footer, socialLinks: self.socialLinks,
-      page: { title: title, url: p.url, layout: "doc", section: p.section },
-      content: $.markdown(body),
-      sidebarHtml: html.sidebarHtml(self.sidebar[p.section] || [], p.url),
-      outlineHtml: html.outlineHtml(headings.filter((e) => e.depth === 2 || e.depth === 3)),
-      prevNextHtml: html.prevNextHtml(at > 0 ? items[at - 1] : null, at >= 0 && at < items.length - 1 ? items[at + 1] : null),
-      editUrl: self.editLink.pattern.replace(":path", p.raw.path),
-      editText: self.editLink.text,
-      lastUpdated: md.formatDate(p.raw.mtime),
-    });
-    $.emit(p.url.slice(1) + "index.html", pageHtml);
-    searchRecords.push({ url: p.url, title: title, excerpt: md.excerpt(md.stripFrontMatter(p.raw.body)), words: $.tokenize(title + " " + p.raw.body) });
-  }
-
-  // Home page: index.mdy — a data-only mdy document whose front matter IS
-  // the hero + features config, already parsed by mdy's own parser.
-  const home = $.findOne({ path: "index.mdy" });
-  const heroHtml = $.render({ path: "layouts/home.mdy" }, { hero: home.hero || {}, features: home.features || [] });
-  $.emit("index.html", $.render({ path: "layouts/base.mdy" }, {
-    site: self.site, nav: self.nav, footer: self.footer, socialLinks: self.socialLinks,
-    page: { title: "", url: "/", layout: "home", section: "" },
-    content: heroHtml,
-    sidebarHtml: "", outlineHtml: "", prevNextHtml: "", editUrl: "", editText: "", lastUpdated: "",
-  }));
-  searchRecords.push({ url: "/", title: (home.hero && home.hero.name) || self.site.title, excerpt: (home.hero && home.hero.tagline) || self.site.description, words: $.tokenize(self.site.title + " " + self.site.description) });
-
-  // 404 page (VitePress emits one too).
-  const nfHtml = '<div class="not-found"><p class="nf-code">404</p><h1 class="nf-title">PAGE NOT FOUND</h1><div class="nf-divider"></div><blockquote class="nf-quote">But if you don\'t change your direction, and if you keep looking, you may end up where you are heading.</blockquote><a class="hero-action brand" href="/">Take me home</a></div>';
-  $.emit("404.html", $.render({ path: "layouts/base.mdy" }, {
-    site: self.site, nav: self.nav, footer: self.footer, socialLinks: self.socialLinks,
-    page: { title: "404", url: "/404.html", layout: "home", section: "" },
-    content: nfHtml,
-    sidebarHtml: "", outlineHtml: "", prevNextHtml: "", editUrl: "", editText: "", lastUpdated: "",
-  }));
-
-  $.emit("search-index.json", JSON.stringify(searchRecords));
-%}
+% // The whole site is defined right here: which files are pages, what URL
+% // each gets, the sidebar/outline/pager around it — the same content
+% // files VitePress rendered, but the config + theme are replaced by this
+% // script, three .mdy layouts, and static/{style.css,docs.js}.
+% const md = await import("./lib/md.js")
+% const html = await import("./lib/html.js")
+% const self = res.data
+%
+% // Every .md file under the site root is a page; its URL comes from its
+% // path (guide/language.md → /guide/language/, guide/index.md → /guide/).
+% // The home page is index.mdy (rendered below) — a real mdy document, so
+% // its hero/features front matter needs no host-side parsing at all.
+% const pages = []
+% for (const raw of $.find({})) {
+%   if (raw.ext !== ".md" || raw.path === "README.md") { continue }
+%   const stem = raw.path.slice(0, -3)
+%   const url = stem.slice(-6) === "/index" ? "/" + stem.slice(0, -5) : "/" + stem + "/"
+%   pages.push({ raw: raw, url: url, section: url.split("/")[1] || "" })
+% }
+%
+% // Flatten each section's sidebar for prev/next links, VitePress-style.
+% const flat = {}
+% for (const key of Object.keys(self.sidebar)) {
+%   const items = []
+%   for (const g of self.sidebar[key]) {
+%     for (const it of g.items) { items.push(it) }
+%   }
+%   flat[key] = items
+% }
+%
+% // Everything a page needs around it, in one place: the two layouts take
+% // the same shape whether it is a doc page, the home page or the 404.
+% const chrome = (page, content, extra) => ({
+%   site: self.site, nav: self.nav, footer: self.footer, socialLinks: self.socialLinks,
+%   page: page, content: content,
+%   sidebar: extra?.sidebar ?? "", outline: extra?.outline ?? "", prevNext: extra?.prevNext ?? "",
+%   editUrl: extra?.editUrl ?? "", editText: extra?.editText ?? "", lastUpdated: extra?.lastUpdated ?? ""
+% })
+% const fragment = (tree) => tree ? $.node(tree) : ""
+%
+% const searchRecords = []
+%
+% for (const p of pages) {
+%   const source = md.rewriteLinks(md.transformContainers(md.stripFrontMatter(p.raw.body)))
+%   const content = $.markdown(source)
+%   const headings = $.toc(content)
+%   const h1 = headings.find((e) => e.depth === 1)
+%   const title = h1 ? h1.text : p.raw.name
+%   const items = flat[p.section] || []
+%   let at = -1
+%   for (let i = 0; i < items.length; i += 1) {
+%     if (items[i].link === p.url) { at = i }
+%   }
+%   const page = { title: title, url: p.url, layout: "doc", section: p.section }
+%   $.emit(p.url.slice(1) + "index.html", $.render({ path: "layouts/base.mdy" }, chrome(page, content, {
+%     sidebar: fragment(html.sidebar(self.sidebar[p.section] || [], p.url)),
+%     outline: fragment(html.outline(headings.filter((e) => e.depth === 2 || e.depth === 3))),
+%     prevNext: fragment(html.prevNext(at > 0 ? items[at - 1] : null, at >= 0 && at < items.length - 1 ? items[at + 1] : null)),
+%     editUrl: self.editLink.pattern.replace(":path", p.raw.path),
+%     editText: self.editLink.text,
+%     lastUpdated: md.formatDate(p.raw.mtime)
+%   })))
+%   searchRecords.push({ url: p.url, title: title, excerpt: md.excerpt(md.stripFrontMatter(p.raw.body)), words: $.tokenize(title + " " + p.raw.body) })
+% }
+%
+% // Home page: index.mdy — a data-only mdy document whose front matter IS
+% // the hero + features config, already parsed by mdy's own parser.
+% const home = $.findOne({ path: "index.mdy" })
+% const hero = $.render({ path: "layouts/home.mdy" }, { hero: home.hero || {}, features: home.features || [] })
+% $.emit("index.html", $.render({ path: "layouts/base.mdy" }, chrome({ title: "", url: "/", layout: "home", section: "" }, hero)))
+% searchRecords.push({ url: "/", title: (home.hero && home.hero.name) || self.site.title, excerpt: (home.hero && home.hero.tagline) || self.site.description, words: $.tokenize(self.site.title + " " + self.site.description) })
+%
+% // 404 page (VitePress emits one too) — a layout like any other now, not a
+% // string of HTML this script had to hold.
+% const notFound = $.render({ path: "layouts/404.mdy" })
+% $.emit("404.html", $.render({ path: "layouts/base.mdy" }, chrome({ title: "404", url: "/404.html", layout: "home", section: "" }, notFound)))
+%
+% $.emit("search-index.json", JSON.stringify(searchRecords))
 
 lamassu-js docs — {{ pages.length }} page(s) emitted from this one script.

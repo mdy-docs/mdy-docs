@@ -3,11 +3,10 @@ import { parseArgs } from 'node:util';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
-import { load as loadYaml } from 'js-yaml';
+import { parse as loadYaml } from 'yaml';
 import {
   parseDocuments,
   compileTemplateSource,
-  createProcessor,
   nodeFsProvider,
   openDocumentSet,
   walkRawSources,
@@ -203,7 +202,10 @@ Options:
                         the entry produced is written under it instead (the
                         entry's own rendered output still goes to stdout in
                         that case, since there is no filename for it).
-      --html            Emit HTML instead of generated markdown.
+      --html            Emit the finished document as HTML instead of the
+                        text its own code wrote (which is what an .mdy file
+                        producing a feed, a robots.txt or any other
+                        non-markup output actually means).
       --entry <path>    Directory input only: the entry document's path,
                         relative to the directory (default: main.mdy).
       --emit-js         Emit the compiled JavaScript instead of rendering
@@ -388,23 +390,23 @@ Examples:
       // documents and render one designated entry — its $/$.find/$.render
       // reach every other file under the directory, and $.emit/$.resize
       // collect any named side outputs. Shared with mdy build/serve's own
-      // script-site detection (src/site/build.js) — same primitive, same
+      // script-site detection (src/build.js) — same primitive, same
       // natives, one implementation.
       const entryPath = values.entry ?? 'main.mdy';
       if (values['emit-js']) {
         const sources = await walkRawSources(inputAbs, { fs });
         const docs = parseDocuments(sources);
         const i = findEntryIndex(docs, entryPath, inputAbs);
-        output = `// document ${i}\nfunction __doc${i}(self, arg) {\n${compileTemplateSource(docs[i].content)}\nreturn __out;\n}`;
+        output = `// document ${i}\nfunction __doc${i}(req, res) {\n${compileTemplateSource(docs[i].content)}\nreturn __out;\n}`;
       } else {
-        const { output: md, outputs, binaryOutputs } = await renderScriptSite(inputAbs, {
+        const site = await renderScriptSite(inputAbs, {
           entry: entryPath,
           fs,
           context,
           onSource: logSource,
         });
-        emitted = new Map([...outputs, ...binaryOutputs]);
-        output = values.html ? await createProcessor().renderMarkdown(md) : md;
+        emitted = new Map([...site.outputs, ...site.binaryOutputs]);
+        output = values.html ? site.output : site.text;
       }
     } else {
       // 'file' or 'stdin': just that one input's own text, no site walk.
@@ -420,7 +422,7 @@ Examples:
         output = docs
           .map(
             (doc, i) =>
-              `// document ${i}\nfunction __doc${i}(self, arg) {\n${compileTemplateSource(doc.content)}\nreturn __out;\n}`
+              `// document ${i}\nfunction __doc${i}(req, res) {\n${compileTemplateSource(doc.content)}\nreturn __out;\n}`
           )
           .join('\n\n');
       } else {
@@ -428,9 +430,8 @@ Examples:
         const set = await openDocumentSet(text, {
           onEmit: ({ path, content }) => localEmitted.set(path, content),
         });
-        const md = await set.render(0, context);
         emitted = localEmitted;
-        output = values.html ? await createProcessor().renderMarkdown(md) : md;
+        output = values.html ? await set.render(0, context) : await set.renderText(0, context);
       }
     }
 

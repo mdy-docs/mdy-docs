@@ -1,5 +1,5 @@
-# Tags
+= Tags
 
-{% for (const t of arg.tags) { %}
-- [{{ t.tag }}]({{ t.url }}) ({{ t.count }})
-{% } %}
+% for (const t of req.tags) {
+- [[ {{ t.tag }} | {{ t.url }} ]] ({{ t.count }})
+% }

@@ -140,7 +140,7 @@ export function App() {
           </div>
         </div>
         <div id="github">
-          <a href="https://github.com/belteshazzar/mdy-docs">
+          <a href="https://github.com/mdy-docs/mdy-docs">
             <img src="image/GitHub-Mark-Light-32px.webp" alt="GitHub" />
           </a>
         </div>

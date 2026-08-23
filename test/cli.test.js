@@ -51,20 +51,20 @@ test('reads stdin with "-" and writes stdout', () => {
 });
 
 test('--html emits HTML on stdout from stdin', () => {
-  const { stdout } = run(['-', '--html'], '# Hi {{ 2 * 3 }}');
+  const { stdout } = run(['-', '--html'], '= Hi {{ 2 * 3 }}');
   assert.match(stdout, /<h1 id="[^"]*">Hi 6<\/h1>/);
 });
 
 test('-d supplies context; JSON values parse, bare stays a string', () => {
-  const { stdout } = run(['-', '-d', 'n=3', '-d', 'name=ada'], '{{ arg.name }}×{{ arg.n }}={{ arg.name.repeat(arg.n) }}');
+  const { stdout } = run(['-', '-d', 'n=3', '-d', 'name=ada'], '{{ req.name }}×{{ req.n }}={{ req.name.repeat(req.n) }}');
   assert.equal(stdout.trim(), 'ada×3=adaadaada');
 });
 
-test('-d data is arg, front matter is self; overriding is an explicit fallback', () => {
-  const src = 'who: nobody\n+++\nhi {{ arg.who ?? self.who }}';
-  // -d values arrive as `arg` and win in the template's own fallback…
+test('-d data is req, front matter is res.data; overriding is an explicit fallback', () => {
+  const src = 'who: nobody\n+++\nhi {{ req.who ?? res.data.who }}';
+  // -d values arrive as `req` and win in the document's own fallback…
   assert.equal(run(['-', '-d', 'who=world'], src).stdout.trim(), 'hi world');
-  // …while with nothing passed, the front matter (`self`) is the default.
+  // …while with nothing passed, the front matter (`res.data`) is the default.
   assert.equal(run(['-'], src).stdout.trim(), 'hi nobody');
 });
 
@@ -77,20 +77,20 @@ test('a .mdy file renders to stdout by default (no file written)', () => {
 
   const { status, stdout } = run([src]);
   assert.equal(status, 0);
-  assert.match(stdout, /# Team Roster/);
-  assert.match(stdout, /- \*\*Ada Lovelace\*\* \(36\) — team lead/);
-  assert.ok(!existsSync(join(dir, 'roster.md')), 'should not write a file without -o');
+  assert.match(stdout, /= Team Roster/);
+  assert.match(stdout, /- !!Ada Lovelace!! \(36\) — team lead/);
+  assert.ok(!existsSync(join(dir, 'roster.mdy.out')), 'should not write a file without -o');
 });
 
 test('-o writes output to a file', () => {
   const dir = workdir();
   const src = join(dir, 'roster.mdy');
-  const out = join(dir, 'out.md');
+  const out = join(dir, 'out.mdy');
   copyFileSync(example('roster.mdy'), src);
 
   const { status } = run([src, '-o', out]);
   assert.equal(status, 0);
-  assert.match(readFileSync(out, 'utf8'), /# Team Roster/);
+  assert.match(readFileSync(out, 'utf8'), /= Team Roster/);
 });
 
 test('-o --html writes HTML to a file', () => {
@@ -114,7 +114,7 @@ test('warns on non-.mdy input but still processes', () => {
   const { status, stdout, stderr } = run([src]);
   assert.equal(status, 0);
   assert.match(stderr, /does not have a \.mdy extension/);
-  assert.match(stdout, /# Team Roster/);
+  assert.match(stdout, /= Team Roster/);
 });
 
 test('-o refuses to overwrite the input file', () => {
@@ -138,12 +138,12 @@ test('a file input has no access to sibling files (unlike a directory input)', (
 });
 
 test('--emit-js prints the compiled function of every document in a file', () => {
-  const src = 'hi {{ arg.x }}\n---\ny: 2\n+++\n{% let z = 1 %}z is {{ z }}';
+  const src = 'hi {{ req.x }}\n---\ny: 2\n+++\n% let z = 1\nz is {{ z }}';
   const { status, stdout } = run(['-', '--emit-js'], src);
   assert.equal(status, 0);
-  assert.match(stdout, /function __doc0\(self, arg\)/);
-  assert.match(stdout, /function __doc1\(self, arg\)/);
-  assert.match(stdout, /__out \+= \(arg\.x\)/);
+  assert.match(stdout, /function __doc0\(req, res\)/);
+  assert.match(stdout, /function __doc1\(req, res\)/);
+  assert.match(stdout, /\$\{ req\.x \}/);
   assert.match(stdout, /let z = 1/);
 });
 
@@ -155,7 +155,7 @@ test('--emit-js rejects --html', () => {
 
 test('$.emit output is reported but not written without --out', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'entry.mdy'), '+++\n{% $.emit("a.html", "hi") %}\nentry text');
+  writeFileSync(join(dir, 'entry.mdy'), '+++\n% $.emit("a.html", "hi")\nentry text');
 
   const { status, stdout, stderr } = run([join(dir, 'entry.mdy')]);
   assert.equal(status, 0);
@@ -166,7 +166,7 @@ test('$.emit output is reported but not written without --out', () => {
 
 test('$.emit output is written under -o when it is an existing directory', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'entry.mdy'), '+++\n{% $.emit("nested/a.html", "hi from a") %}\nentry text');
+  writeFileSync(join(dir, 'entry.mdy'), '+++\n% $.emit("nested/a.html", "hi from a")\nentry text');
   const out = join(dir, 'out');
   mkdirSync(out);
 
@@ -204,7 +204,7 @@ test('stdin given more than once fails (a second positional)', () => {
 
 test('a directory input is scanned in full; the entry\'s $.find reaches every file', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'main.mdy'), '+++\n# Siblings\n{% for (const d of $.find({})) { %}\n- {{ d.path }}\n{% } %}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n= Siblings\n% for (const d of $.find({})) {\n- {{ d.path }}\n% }');
   writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nirrelevant body');
 
   const { status, stdout } = run([dir]);
@@ -215,7 +215,7 @@ test('a directory input is scanned in full; the entry\'s $.find reaches every fi
 
 test('a directory sibling that is not the entry is inserted with raw identity only', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'main.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}{{ o.name }}/{{ o.ext }}/{{ typeof o.title }}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n% const o = $.findOne({ path: "other.mdy" })\n{{ o.name }}/{{ o.ext }}/{{ typeof o.title }}');
   writeFileSync(join(dir, 'other.mdy'), 'title: Other\n+++\nbody');
 
   const { stdout } = run([dir]);
@@ -252,13 +252,13 @@ test('--entry is rejected for a file or stdin input', () => {
 
 test('--emit-js on a directory input compiles just the entry document', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'main.mdy'), '+++\nhi {{ arg.x }}');
-  writeFileSync(join(dir, 'other.mdy'), '+++\nother {{ arg.y }}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\nhi {{ req.x }}');
+  writeFileSync(join(dir, 'other.mdy'), '+++\nother {{ req.y }}');
 
   const { status, stdout } = run([dir, '--emit-js']);
   assert.equal(status, 0);
-  assert.match(stdout, /__out \+= \(arg\.x\)/);
-  assert.doesNotMatch(stdout, /__out \+= \(arg\.y\)/);
+  assert.match(stdout, /\$\{ req\.x \}/);
+  assert.doesNotMatch(stdout, /\$\{ req\.y \}/);
 });
 
 test('-o refuses to overwrite a directory input', () => {
@@ -275,7 +275,7 @@ test('-o refuses to overwrite a directory input', () => {
 test('--watch re-renders when an input file changes', async () => {
   const dir = workdir();
   const src = join(dir, 'doc.mdy');
-  const out = join(dir, 'out.md');
+  const out = join(dir, 'out.mdy');
   writeFileSync(src, 'hello {{ 1 + 1 }}\n');
 
   const child = spawn('node', [bin, src, '-o', out, '--watch']);
@@ -291,7 +291,7 @@ test('--watch re-renders when an input file changes', async () => {
 test('--watch survives a render error and recovers on the next save', async () => {
   const dir = workdir();
   const src = join(dir, 'doc.mdy');
-  const out = join(dir, 'out.md');
+  const out = join(dir, 'out.mdy');
   writeFileSync(src, 'ok {{ 1 + 1 }}\n');
 
   const child = spawn('node', [bin, src, '-o', out, '--watch']);
@@ -299,8 +299,8 @@ test('--watch survives a render error and recovers on the next save', async () =
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
     await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('ok 2'));
-    writeFileSync(src, 'broken {{ unclosed\n');
-    await waitFor(() => /unclosed/.test(stderr));
+    writeFileSync(src, '% throw "kaboom"\nbroken\n');
+    await waitFor(() => /kaboom/.test(stderr));
     assert.equal(readFileSync(out, 'utf8').includes('ok 2'), true); // old output intact
     writeFileSync(src, 'fixed {{ 3 + 3 }}\n');
     await waitFor(() => readFileSync(out, 'utf8').includes('fixed 6'));
@@ -313,8 +313,8 @@ test('--watch re-renders when the --data-file changes', async () => {
   const dir = workdir();
   const src = join(dir, 'doc.mdy');
   const data = join(dir, 'ctx.yaml');
-  const out = join(dir, 'out.md');
-  writeFileSync(src, 'env is {{ arg.env }}\n');
+  const out = join(dir, 'out.mdy');
+  writeFileSync(src, 'env is {{ req.env }}\n');
   writeFileSync(data, 'env: dev\n');
 
   const child = spawn('node', [bin, src, '--data-file', data, '-o', out, '--watch']);
@@ -335,8 +335,8 @@ test('--watch rejects stdin input', () => {
 
 test('--watch on a directory re-renders when ANY file under it changes', async () => {
   const dir = workdir();
-  const out = join(dir, 'out.md');
-  writeFileSync(join(dir, 'main.mdy'), '+++\n{% const o = $.findOne({ path: "other.mdy" }) %}other says {{ o.text }}');
+  const out = join(dir, 'out.mdy');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n% const o = $.findOne({ path: "other.mdy" })\nother says {{ o.text }}');
   writeFileSync(join(dir, 'other.mdy'), 'text: hi\n+++\n');
 
   const child = spawn('node', [bin, dir, '-o', out, '--watch']);
@@ -378,8 +378,8 @@ test('mdy build excludes drafts unless --drafts is given', () => {
 
 test('mdy build --entry picks a different entry document', () => {
   const dir = workdir();
-  writeFileSync(join(dir, 'main.mdy'), '+++\n{% $.emit("index.html", "default entry") %}');
-  writeFileSync(join(dir, 'other.mdy'), '+++\n{% $.emit("index.html", "other entry") %}');
+  writeFileSync(join(dir, 'main.mdy'), '+++\n% $.emit("index.html", "default entry")');
+  writeFileSync(join(dir, 'other.mdy'), '+++\n% $.emit("index.html", "other entry")');
   const { status } = runIn(['build', '.', '--entry', 'other.mdy'], dir);
   assert.equal(status, 0);
   assert.equal(readFileSync(join(dir, 'dist', 'index.html'), 'utf8'), 'other entry');

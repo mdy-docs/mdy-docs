@@ -1,13 +1,14 @@
-# {{ arg.site.title }}
+= {{ req.site.title }}
 
-{{ arg.site.description }}
+{{ req.site.description }}
 
-{% for (const p of arg.posts) { %}
-- [{{ p.title }}]({{ p.url }}) — {{ p.date }}
-{%
-  }
-  if (arg.pagination.totalPages > 1) {
-%}
+% for (const p of req.posts) {
+- [[ {{ p.title }} | {{ p.url }} ]] — {{ p.date }}
+% }
 
-{% if (arg.pagination.prevUrl) { %}[← newer]({{ arg.pagination.prevUrl }}) · {% } %}page {{ arg.pagination.page }} of {{ arg.pagination.totalPages }}{% if (arg.pagination.nextUrl) { %} · [older →]({{ arg.pagination.nextUrl }}){% } %}
-{% } %}
+% const page = req.pagination
+% if (page.totalPages > 1) {
+%   const newer = page.prevUrl ? "[[ ← newer | " + page.prevUrl + " ]] · " : ""
+%   const older = page.nextUrl ? " · [[ older → | " + page.nextUrl + " ]]" : ""
+{{ newer }}page {{ page.page }} of {{ page.totalPages }}{{ older }}
+% }

@@ -55,13 +55,13 @@ const useJson = (value) => {
  *
  * @param {string | string[]} source
  * @param {object} [options] as createReactProcessor, plus `data` (the entry
- *   document's `arg`) and `entry` (which document to render, default 0)
+ *   document's `req`) and `entry` (which document to render, default 0)
  * @returns {{ element: import('react').ReactElement | null, error: Error | null, pending: boolean }}
  */
 export function useMdy(source, options = {}) {
-  const { data = EMPTY, entry = 0, components, passNode, remarkPlugins, rehypePlugins, sanitize } = options;
+  const { data = EMPTY, entry = 0, components, passNode, rehypePlugins, sanitize } = options;
 
-  const config = useShallow({ components, passNode, remarkPlugins, rehypePlugins, sanitize });
+  const config = useShallow({ components, passNode, rehypePlugins, sanitize });
   const stableData = useJson(data);
   const processor = useMemo(() => createReactProcessor(config), [config]);
 

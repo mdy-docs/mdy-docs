@@ -1,7 +1,7 @@
 {
   "name": "vscode-mdy",
   "displayName": "mdy",
-  "description": "Support for .mdy documents: syntax highlighting, folding, outline, and a live rendered preview. Markdown with YAML front matter and embedded {{ }} / {% %} JavaScript template tags.",
+  "description": "Support for .mdy documents: syntax highlighting, folding, outline, and a live rendered preview. The MDY markup language, with YAML front matter and JavaScript on % and %% lines.",
   "version": "0.0.11",
   "type": "module",
   "main": "./extension.cjs",
@@ -107,8 +107,7 @@
         "path": "./syntaxes/mdy.tmLanguage.json",
         "embeddedLanguages": {
           "meta.embedded.line.mdy": "javascript",
-          "source.yaml": "yaml",
-          "text.html.markdown": "markdown"
+          "source.yaml": "yaml"
         }
       }
     ]
@@ -116,7 +115,7 @@
   "icon": "icon.png",
   "keywords": [
     "mdy",
-    "markdown",
+    "markup",
     "yaml",
     "front matter",
     "templates",

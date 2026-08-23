@@ -2,18 +2,18 @@
 // its member documents entirely by query.
 export const defaultInput = `title: Team Roster
 +++
-# {{ self.title }}
+= {{ res.data.title }}
 
-{% for (const m of $.find({ role: 'member' })) { %}
+% for (const m of $.find({ role: 'member' })) {
 {{ $.render({ template: 'member-card' }, m) }}
-{% } %}
+% }
 ---
 template: member-card
 +++
-### {{ arg.name }}
+=== {{ req.name }}
 
-- Age: {{ arg.age }}
-- Skills: {{ arg.skills.join(', ') }}
+- Age: {{ req.age }}
+- Skills: {{ req.skills.join(', ') }}
 ---
 role: member
 name: Alice

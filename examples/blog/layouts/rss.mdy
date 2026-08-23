@@ -1,24 +1,21 @@
-{%
-  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const base = String(arg.site.baseURL == null ? "" : arg.site.baseURL).replace(/\/+$/, "");
-%}
+% // Text out, not markup: main.mdy takes this through $.text, which is the
+% // document's own output byte for byte and never reads it as MDY.
+% const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+% const base = String(req.site.baseURL == null ? "" : req.site.baseURL).replace(/\/+$/, "")
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0">
 <channel>
-<title>{{ esc(arg.site.title) }}</title>
+<title>{{ esc(req.site.title) }}</title>
 <link>{{ esc(base + "/") }}</link>
-<description>{{ esc(arg.site.description) }}</description>
-{%
-  for (const p of arg.posts.slice(0, 20)) {
-    const pubDate = $.rfc822(p.date);
-%}
+<description>{{ esc(req.site.description) }}</description>
+% for (const p of req.posts.slice(0, 20)) {
 <item>
 <title>{{ esc(p.title) }}</title>
 <link>{{ esc(base + p.url) }}</link>
 <guid>{{ esc(base + p.url) }}</guid>
-<pubDate>{{ pubDate }}</pubDate>
+<pubDate>{{ $.rfc822(p.date) }}</pubDate>
 <description>{{ esc(p.summary) }}</description>
 </item>
-{% } %}
+% }
 </channel>
 </rss>

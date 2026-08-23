@@ -3,27 +3,29 @@
 VSCode support for `.mdy` documents: syntax highlighting, front-matter
 folding, an outline of the file's documents, and a live rendered preview.
 
-An `.mdy` file is markdown with optional YAML front matter (split from the
-body by a bare `+++` line, not `---`) and embedded JS template tags —
-`{{ expr }}` output tags and `{% ... %}` code tags (see the root
-[README](../../README.md) and [src/mdy.js](../../src/mdy.js)). A single
-file may hold several documents, split on bare `---` lines.
+An `.mdy` file is a document in the MDY markup language, with optional YAML
+front matter (split from the body by a bare `+++` line, not `---`) and
+JavaScript on `%` and `%%` lines, interpolated with `{{ expr }}` (see the root
+[README](../../README.md), the language reference
+[docs/language.md](../../docs/language.md), and
+[src/mdy.js](../../src/mdy.js)). A single file may hold several documents,
+split on bare `---` lines.
 
 What the extension provides:
 
-- **Highlighting** — mdy's own syntax (front matter, `---` separators,
-  tag delimiters, `\{{`/`\{%` escapes) recognized by a hand-written
-  TextMate grammar; markdown body and YAML front matter highlighted by
-  VSCode's own bundled grammars via the standard `include` mechanism. Tag
-  interiors get a deliberately small, self-contained JS ruleset — see
-  "Why tags don't embed the real JS grammar" below. `---` and `+++`
-  lines carry a `markup.heading.*` scope on top of their punctuation
-  scope, so themes render the file's structural seams bold instead of
-  dim.
+- **Highlighting** — the whole language, recognized by a hand-written
+  TextMate grammar: front matter, `---` separators, `%` and `%%` code lines,
+  `{{ }}`, and every MDY block and inline rule (headings, elements and their
+  attributes, lists and task boxes, tables, fences, comments, wiki links,
+  autolinks, `#tag`/`@user`, the inline markers). Only YAML front matter is
+  handed to somebody else's grammar. Code interiors get a deliberately small,
+  self-contained JS ruleset — see "Why code lines don't embed the real JS
+  grammar" below. `---` and `+++` lines carry a `markup.heading.*` scope on
+  top of their punctuation scope, so themes render the file's structural
+  seams bold instead of dim.
 - **Folding** — each front-matter block folds to its first line.
-  (Per-document folding was tried and removed: whole-document ranges
-  nested awkwardly with markdown's own folding — navigating between
-  documents is the outline's job.)
+  (Per-document folding was tried and removed: whole-document ranges nested
+  awkwardly — navigating between documents is the outline's job.)
 - **Outline / breadcrumbs / Ctrl+Shift+O** — one symbol per document,
   named by its front-matter `title:` (`document N` otherwise), with the
   engine's document index as the detail — the same `i` a template passes
@@ -101,28 +103,38 @@ very first line happens to read like `Key: value`. See
 `document-separator`'s comment in the grammar for why its `end` pattern
 is `(?=[^\n])` and not the more obvious `(?=[\s\S])`.
 
-**The injection is load-bearing.** The markdown grammar claims headings,
-list items, emphasis, tables, quotes… as its own begin/end contexts, and
-inside those contexts the mdy grammar's top-level patterns are never
-consulted — `# {{ self.title }}` would lose its tag delimiters entirely. The
-grammar's `injections` entry re-injects the escape/tag/separator rules
-with `L:` priority into every markdown context (excluding open tags and
-front matter, where `{{ }}` is literal YAML).
+**There is no injection any more, and that is the point.** The grammar used
+to `include` VSCode's markdown grammar and inject its own rules back into it
+with `L:` priority, because markdown claims headings, list items, emphasis,
+tables and quotes as its own begin/end contexts and nothing else is consulted
+inside them. MDY is not Markdown: every block rule is anchored to the start of
+its own line, so the grammar is a flat list of line patterns with no foreign
+contexts to reach into and nothing to be swallowed by. A whole class of bug
+went with it.
 
-**Why tags don't embed the real JS grammar.** mdy deliberately allows
-unbalanced braces across tags (`{% for (...) { %}` … `{% } %}`), and the
-real `source.js` grammar opens a brace-block *region* on that `{` which
-swallows the `%}` — a region's end pattern is only consulted while it is
-top-of-stack. Tag interiors instead use a small region-free JS ruleset
-(keywords, strings, comments, numbers, `$`) whose string/comment rules
-are guarded so nothing can span a closer: the tag closes at the FIRST
-`%}` / `}}`, exactly like the engine's `indexOf`. Relatedly, the JS
-language mapping (`meta.embedded.line.mdy` → javascript in
-`embeddedLanguages`) is applied via `contentName`, so the delimiters
-themselves stay mdy-language punctuation — which, with
-`colorizedBracketPairs: []` in the language configuration, keeps
-bracket-pair colorization from painting `{{ }}` as nested code braces
-while real JS braces inside a tag keep JavaScript's own bracket behavior.
+**A `%%` block's extent is a guess.** `%%` runs on as far as the line that
+brings its brackets back to even, and brackets are exactly what a TextMate
+grammar cannot count — it sees one line at a time. The rule approximates it
+the way these blocks are actually written: it ends after the first line whose
+own first character is a closing bracket, and before any line that starts a
+new `%`. An unusual block ends late and paints a line or two of markup as
+JavaScript; it can never swallow the rest of the file.
+
+**Why code lines don't embed the real JS grammar.** MDY deliberately allows
+unbalanced braces across `%` lines (`% for (...) {` … markup … `% }`), and the
+real `source.js` grammar opens a brace-block *region* on that `{` which would
+swallow everything after it — a region's end pattern is only consulted while
+it is top-of-stack. Code lines instead use a small region-free JS ruleset
+(keywords, strings, comments, numbers, `$`, `req`/`res`, the toolkit
+functions). Inside `{{ }}` its string and comment rules are additionally
+guarded so nothing can span the closer: the interpolation closes at the FIRST
+`}}`, exactly like the compiler's `indexOf`. Relatedly, the JS language
+mapping (`meta.embedded.line.mdy` → javascript in `embeddedLanguages`) is
+applied via `contentName`, so the delimiters themselves stay mdy-language
+punctuation — which, with `colorizedBracketPairs: []` in the language
+configuration, keeps bracket-pair colorization from painting `{{ }}` as
+nested code braces while real JS braces in code keep JavaScript's own
+bracket behavior.
 
 ## Folding and outline
 
@@ -138,19 +150,16 @@ document indexes).
 No VSCode install required — `npm test` runs everything headless:
 
 - `test/tokenize.test.js` drives the compiled grammar with
-  `vscode-textmate`/`vscode-oniguruma` (the same engine VSCode uses)
-  against VSCode's REAL bundled markdown grammar, vendored into
-  `test/fixtures/` — an empty markdown stub passes trivially (nothing
-  competes for `# {{ self.title }}`) and is exactly the false confidence that
-  shipped 0.0.1's missing-delimiter bugs. Unrelated embedded scopes
-  (`source.js`, `source.yaml`, fence languages…) stay stubbed empty: an
-  unresolved `include` poisons its entire containing rule, and where
-  regions start/end is what's under test, not their interior coloring.
-- Both test files end in a **sweep over every `examples/**/*.mdy`** in
-  the repo, with the engine as the oracle: tokenize asserts every tag
-  delimiter `compileTemplateSource` would honor is highlighted (and no
-  others), structure asserts `scanDocuments` agrees with
-  `parseDocuments` on document counts and titles.
+  `vscode-textmate`/`vscode-oniguruma` (the same engine VSCode uses).
+  `source.yaml` stays stubbed empty: an unresolved `include` poisons its
+  entire containing rule, and where regions start and end is what is under
+  test, not YAML's interior coloring.
+- Both test files end in a **sweep over every `examples/**/*.mdy`** in the
+  repo, with the engine as the oracle: tokenize asserts that every line the
+  PARSER treats as code (`scriptLines`, the same function the parser and the
+  demo editor's own highlighter both ask) is highlighted as code and no other
+  line is; structure asserts `scanDocuments` agrees with `parseDocuments` on
+  document counts and titles.
 
 ```sh
 npm install

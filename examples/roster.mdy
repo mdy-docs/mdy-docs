@@ -4,14 +4,14 @@ users:
   - { name: Alan Turing,   age: 41, lead: false }
   - { name: Grace Hopper,  age: 45, lead: true  }
 +++
-# {{ self.title }}
+= {{ res.data.title }}
 
-{% let leads = 0 %}
-{% for (const u of self.users) { if (u.lead) leads++ %}
-- **{{ u.name }}** ({{ u.age }}){{ u.lead ? ' — team lead' : '' }}
-{% } %}
+% let leads = 0
+% for (const u of res.data.users) { if (u.lead) leads++
+- !!{{ u.name }}!! ({{ u.age }}){{ u.lead ? ' — team lead' : '' }}
+% }
 
-_{{ leads }} of {{ self.users.length }} are team leads._
+//{{ leads }} of {{ res.data.users.length }} are team leads.//
 
 The raw config, shown as a normal code block (not consumed):
 
@@ -19,4 +19,4 @@ The raw config, shown as a normal code block (not consumed):
 title: Team Roster
 ```
 
-Escaped braces render literally: \{{ this stays as-is }}.
+Escaped interpolation renders literally: \{{ this stays as-is }}.

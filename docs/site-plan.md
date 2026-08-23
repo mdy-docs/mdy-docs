@@ -4,6 +4,16 @@
 > where documents were stored, copied, and taught. This one builds websites
 > out of them.
 
+> **A note on syntax, added later.** This document is a design history, and
+> most of it was written while mdy documents were Markdown with `{% %}` and
+> `{{ }}` template tags. They are now MDY — its own markup language, parsing
+> straight to hast — with JavaScript on `%` and `%%` lines, `req` and `res`
+> where `arg` and `self` were, and nested renders that splice a *tree* rather
+> than concatenate source (so `$.render`'s `indent` argument is gone, along
+> with `$.stringify` and the site-level `$.markdown` native). The design
+> decisions recorded below all still hold; the code samples are in the old
+> spelling. See the root [README](../README.md) for the current one.
+
 A static site generator built on [mdy-docs](https://github.com/mdy-docs/mdy-docs)
 — in the family of Hugo / Jekyll / Eleventy — whose first target is a
 **personal blog**. But the design brief is wider: mdy is a data-driven
@@ -830,7 +840,7 @@ render it, collect `$.emit`) as an everyday, first-class CLI capability —
 not a demo of the idea but *the* way `mdy <directory>` works — the standalone
 function had nothing left to prove and no caller left but the CLI itself.
 
-Retired, not reimplemented: `src/site/script-site.js` deleted;
+Retired, not reimplemented: `src/script-site.js` deleted;
 `walkRawSources` (the walk-into-raw-`{ text, meta }`-sources half — genuinely
 generic, no more "script-site" specific than `walkFiles`/`walkVault` are)
 moved into `src/vault.js` alongside them and re-exported from `index.js`
@@ -850,7 +860,7 @@ already exercise through `bin/mdy.js` itself, so it wasn't duplicated.
 
 The retirement above was correct for what was true at the time: `bin/mdy.js`
 was the only real caller, so a separate function had nothing left to prove.
-That stopped being true the moment `renderSite` (`src/site/build.js`) — the
+That stopped being true the moment `renderSite` (`src/build.js`) — the
 conventional content/layouts/site.yaml engine `mdy build`/`mdy serve` and
 the browser playground all go through — needed the SAME "walk root raw,
 resolve an entry by path, render it, collect `$.emit`" logic too, so a
@@ -858,7 +868,7 @@ script-defined site could be built/served through the exact same commands
 and functions as a conventional one, no separate code path for the caller
 to know about. Two real consumers (`bin/mdy.js`'s own directory mode,
 `renderSite`'s dispatch) again justified pulling it back out into its own
-module (`src/site/script-site.js`, recreated) rather than duplicating the
+module (`src/script-site.js`, recreated) rather than duplicating the
 walk-plus-entry-resolution logic in both places — `bin/mdy.js`'s directory
 mode now calls it directly too, so the CLI's `findEntryIndex` inlining from
 the retirement above stayed only for `--emit-js` (a debug path that compiles
@@ -969,20 +979,20 @@ script-defined as the *only* way a site works, themes dropped rather than
 reinvented for script mode (no existing precedent to build one on, and
 inventing a new feature under an already-large removal wasn't the ask).
 
-Deleted outright: `src/site/theme.js` (`resolveThemeDir`/`loadTheme`),
-`src/site/defaults.js` (`DEFAULT_LAYOUTS` — 404/rss/sitemap/robots as JS
+Deleted outright: `src/theme.js` (`resolveThemeDir`/`loadTheme`),
+`src/defaults.js` (`DEFAULT_LAYOUTS` — 404/rss/sitemap/robots as JS
 string constants, now just `layouts/{404,rss,sitemap,robots}.mdy` files any
-script can $.render), `src/site/config.js` (`loadSite`, site.yaml parsing),
-`src/site/incremental.js` (`createCache`/`filterKey`/`setsEqual`/
+script can $.render), `src/config.js` (`loadSite`, site.yaml parsing),
+`src/incremental.js` (`createCache`/`filterKey`/`setsEqual`/
 `stableKey` — the whole per-output file-dep/query-dep cache; a
 script-defined site was already documented as having no incremental
 reuse, so nothing needed it once the conventional path was gone),
 `examples/theme-mono`, `examples/themed-blog`, and `mdy new post` (scaffolds
 `content/posts/<date>-<slug>.mdy` — a pure content/posts/ convention with
-nothing left to scaffold for). `src/site/vault.js` shrank from openVault
+nothing left to scaffold for). `src/format.js` shrank from openVault
 plus all its computed-field/draft-filtering/`.md`/`.yaml`/`kind:'file'`/
 sidecar machinery down to three surviving pure functions (`slugify`,
-`normalizeDate`, `rfc822` — still used by script-site.js); `src/site/
+`normalizeDate`, `rfc822` — still used by script-site.js); `src/
 search.js` shrank to just `tokenize` (`buildSearchIndex`'s host-side batch
 indexing over openVault's pages/bodies had no more caller). `build.js`
 itself shrank from ~550 lines (openVault wiring, theme/default-layout
@@ -1060,7 +1070,7 @@ into a compiled function body (`compileTemplateSource`/`buildProgram`) —
 and a real ES `import` statement is only legal at a module's top level, not
 inside a function. So `{% import name from "spec" %}` is parsed by mdy's
 own compiler, the same way `extractDataBlocks` already pulls ```data```
-fences out before the rest of the template compiles — `src/site/
+fences out before the rest of the template compiles — `src/
 imports.js`'s `extractImports` scans for the shape (nothing else in the
 same tag — mixing an import with other code isn't recognized, and
 `import`/`from` would surface as a JS syntax error if it reached the VM),

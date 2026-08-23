@@ -82,8 +82,8 @@ level deep: keep those as module-level constants.
 ### `createReactProcessor(options)`
 
 The processor behind both, mirroring `mdy-docs`' `createProcessor`. Same shape —
-`render`, `renderMarkdown`, `renderTree`, `renderToMarkdown` — with the first
-three resolving to React elements. Reuse one across many renders.
+`render`, `renderMdy`, `renderMarkdown`, `renderTree` — all resolving to React
+elements. Reuse one across many renders.
 
 ### `renderToReact(source, data, options)`
 

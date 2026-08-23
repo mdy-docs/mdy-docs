@@ -1,10 +1,8 @@
-{%
-  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const base = String(arg.site.baseURL == null ? "" : arg.site.baseURL).replace(/\/+$/, "");
-%}
+% const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+% const base = String(req.site.baseURL == null ? "" : req.site.baseURL).replace(/\/+$/, "")
 <?xml version="1.0" encoding="utf-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-{% for (const u of arg.urls) { %}
+% for (const u of req.urls) {
 <url><loc>{{ esc(base + u) }}</loc></url>
-{% } %}
+% }
 </urlset>
