@@ -1,0 +1,6 @@
+title: Flaky
++++
+% // Deliberately unrenderable, to show what happens to a message that
+% // cannot be handled: it is returned, retried on a doubling backoff, and
+% // dead-lettered once it runs out of attempts.
+% throw "flaky: this page always fails"

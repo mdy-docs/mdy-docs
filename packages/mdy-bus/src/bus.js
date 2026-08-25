@@ -13,13 +13,28 @@
  * matter says nothing about messaging. See docs/messaging-plan.md.
  *
  * ONE registration covers every page — `PUT /push/>` — rather than one per
- * page, and this turned out to be strictly better than the lazy per-name
- * consumers the plan proposed. sukkal keys receipts `<subject>/<consumer>`,
- * so a pattern subscription is already "N ordinary subscriptions
- * discovered by pattern instead of by name": each page gets its own
- * receipt, its own lag, and its own retry, and the broker walks its
- * matches round-robin so no page starves behind a busy one. The extra
- * machinery would have bought nothing.
+ * page. sukkal keys receipts `<subject>/<consumer>`, so a pattern
+ * registration is already "N ordinary subscriptions discovered by pattern
+ * instead of by name": each page gets its own receipt, its own lag and its
+ * own retry, and the broker walks its matches round-robin so no page
+ * starves behind a busy one.
+ *
+ * That registration names a queue GROUP, which is what makes a message
+ * that cannot be rendered survivable. A plain push subscription retries a
+ * failing callback forever — deliberately, since giving up would decide on
+ * the subscriber's behalf that its messages no longer matter — and has
+ * nowhere to put one it can never deliver. A group has attempts, doubling
+ * backoff, and `<name>.dead`. The cost is ordering: jobs finish
+ * independently, so messages for one page are no longer strictly ordered
+ * against each other. For "render the page this names" that is the better
+ * trade — the alternative is one unrenderable message standing in front of
+ * every later one, forever.
+ *
+ * A dead-letter channel is delivered like anything else, and needs no new
+ * concept: `<name>.dead` is a name, so a page called `<name>.dead` handles
+ * it. handlers/invoice.dead.mdy is where messages that died on
+ * handlers/invoice.mdy arrive. With no such page they are reported and
+ * finished, and stay in the log for `mdy dead` to read.
  *
  * Lives outside mdy-docs for the reason its src/publish.js gives: core
  * resolves a name and hands the message to `onPublish`, and a broker
@@ -70,39 +85,54 @@ export function parseDelivery(body, decode) {
   });
 }
 
+/** A page whose name ends in this is a dead-letter handler. */
+const DEAD_SUFFIX = '.dead';
+
 /**
  * The message-handling core, with no HTTP and no broker in it: given a
  * batch for one subject, render the page it is addressed to once per
- * message and report how far it got.
+ * message and report which ones succeeded.
  *
- * Messages are rendered in order and one at a time. That is the order
- * they were published in and the only thing a receipt can express — a
- * receipt is a high-water mark, so "message 3 succeeded but 2 did not"
- * is not a state the broker can be told about.
+ * Jobs are acknowledged INDIVIDUALLY — `{ done, failed }`, not a
+ * high-water mark. That is the difference queue-group delivery makes: a
+ * message that fails is returned on its own, retried on its own backoff,
+ * and dead-lettered on its own, instead of standing in front of every
+ * later message for its page.
  *
- * Returns `{ took, error }`. `took` is the index acked up to, which is 0
- * when the first message failed — the broker reads that as "not now" and
- * retries with a backoff rather than immediately.
- *
- * @param {{ site: object, flush: (messages: object[]) => Promise<void>, onEvent?: Function }} deps
+ * @param {{ site: object, flush: (messages: object[]) => Promise<void>, now?: () => number, onEvent?: Function }} deps
  */
-export function createDeliveryHandler({ site, flush, onEvent }) {
+export function createDeliveryHandler({ site, flush, now = () => Date.now(), onEvent }) {
   const { set, pages, messages } = site;
 
   return async function deliver(subject, batch) {
     const targets = pages.get(subject) ?? [];
+
     if (targets.length !== 1) {
-      // Undeliverable, and permanently so: refusing would make the broker
-      // redeliver forever. Acking the batch lets it move on and lets the
-      // message be seen for what it is — a publisher addressing a page
-      // that this set does not have, or has twice.
+      // A dead-letter channel with no page to handle it is not a failure:
+      // `<name>.dead` is where sukkal republishes what this bus already
+      // gave up on, and returning those would loop. They are reported and
+      // finished; the entries stay in the log for `mdy dead` to read.
+      if (subject.endsWith(DEAD_SUFFIX)) {
+        for (const message of batch) {
+          onEvent?.({ type: 'dead', subject, index: message.index, data: message.value, handled: false });
+        }
+        return { done: batch.map((m) => m.index), failed: [] };
+      }
+      // Anything else addressed to a page this set does not have — or has
+      // twice — is RETURNED, not discarded. Phase 1 acked and dropped it,
+      // because refusing a push subscription meant redelivering forever;
+      // a queue group has somewhere for it to go, so the message is
+      // preserved and ends up in `<name>.dead` where it can be looked at
+      // and requeued. Silent discard was the weaker half of that design.
       const why = targets.length === 0 ? 'no page of that name here' : `${targets.length} pages share that name`;
       onEvent?.({ type: 'undeliverable', subject, count: batch.length, why });
-      return { took: batch.at(-1)?.index ?? 0, error: null };
+      return { done: [], failed: batch.map((m) => m.index) };
     }
     const target = targets[0];
+    const isDeadHandler = subject.endsWith(DEAD_SUFFIX);
 
-    let took = 0;
+    const done = [];
+    const failed = [];
     for (const message of batch) {
       // The message's data IS `req`, exactly as $.render(name, data)
       // binds it — the two are the same call in different tenses, so a
@@ -112,29 +142,45 @@ export function createDeliveryHandler({ site, flush, onEvent }) {
       const data = message.value !== null && typeof message.value === 'object' && !Array.isArray(message.value)
         ? message.value
         : { value: message.value };
-      const req = { ...data, msg: { name: subject, index: message.index, attempts: message.attempts ?? 1 } };
+      const attempts = message.attempts ?? 1;
+      const req = { ...data, msg: { name: subject, index: message.index, attempts } };
 
+      const started = now();
       try {
         await set.renderResult(target.index, req);
       } catch (error) {
-        // Not acked, so it comes back. Pages reached this way have to be
-        // idempotent; a page that emitted or published before it threw
-        // will do so again on the retry.
-        onEvent?.({ type: 'failed', subject, index: message.index, error });
-        return { took, error };
+        // Returned, so it comes back on its own backoff and dead-letters
+        // once it runs out of attempts. Pages reached this way have to be
+        // idempotent: one that emitted or published before it threw will
+        // do so again on the retry.
+        failed.push(message.index);
+        onEvent?.({
+          type: 'failed',
+          subject, index: message.index, attempts, error,
+          path: target.data?.path,
+          ms: now() - started,
+        });
+        continue;
       }
 
       // Whatever the page published while rendering, flushed only now
       // that its render has succeeded — the same deferral $.publish has
-      // during a build (src/publish.js), one message deep instead of one
-      // build deep.
+      // during a build (mdy-docs' src/publish.js), one message deep
+      // instead of one build deep.
       const produced = messages.splice(0);
       if (produced.length > 0) await flush(produced);
 
-      took = message.index;
-      onEvent?.({ type: 'delivered', subject, index: message.index, published: produced.length });
+      done.push(message.index);
+      onEvent?.({
+        type: isDeadHandler ? 'dead' : 'delivered',
+        subject, index: message.index, attempts,
+        path: target.data?.path,
+        ms: now() - started,
+        published: produced.length,
+        ...(isDeadHandler ? { handled: true } : {}),
+      });
     }
-    return { took, error: null };
+    return { done, failed };
   };
 }
 
@@ -212,6 +258,16 @@ function localAddressFor(brokerUrl) {
  *                     something that renders pages by name, and does not
  *                     need to know what a site directory is.
  *   options.broker    broker URL (default http://127.0.0.1:8080)
+ *   options.group     queue group (default 'mdy'). Delivery is a queue
+ *                     group rather than a plain subscription because that
+ *                     is where sukkal keeps attempts, backoff and the
+ *                     dead-letter channel: a plain push subscription
+ *                     retries a failing callback forever and has nowhere
+ *                     to put a message it can never deliver. It also means
+ *                     several buses on one group share the work.
+ *   options.maxAttempts / options.backoffMs / options.maxBackoffMs
+ *                     the retry policy, applied per page name the first
+ *                     time a message for it arrives
  *   options.port      port to receive deliveries on (default 0 — any free one)
  *   options.consumer  durable consumer name (default 'mdy-bus'). Naming it
  *                     is what makes the subscription survive a restart:
@@ -224,6 +280,12 @@ function localAddressFor(brokerUrl) {
 export async function runBus(site, options = {}) {
   const broker = (options.broker ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
   const consumer = options.consumer ?? 'mdy-bus';
+  const group = options.group ?? 'mdy';
+  const policy = {
+    max_attempts: options.maxAttempts ?? 5,
+    backoff_ms: options.backoffMs ?? 1000,
+    max_backoff_ms: options.maxBackoffMs ?? 300000,
+  };
   const onEvent = options.onEvent;
   const token = randomBytes(16).toString('hex');
 
@@ -241,6 +303,25 @@ export async function runBus(site, options = {}) {
     const run = queue.then(fn, fn);
     queue = run.then(() => {}, () => {});
     return run;
+  };
+
+  // The retry policy is set per subject, and a subject only exists once
+  // something has been published to it — so it is applied on the first
+  // delivery for a name rather than at startup, where most of it would be
+  // 404s for pages nobody ever writes to. The first delivery is attempt 1,
+  // so this is always in place before any attempt can be spent.
+  const policied = new Set();
+  const applyPolicy = async (subject) => {
+    if (policied.has(subject)) return;
+    policied.add(subject);
+    const query = new URLSearchParams({ group, ...Object.fromEntries(Object.entries(policy).map(([k, v]) => [k, String(v)])) });
+    try {
+      const { status, text } = await brokerRequest(broker, 'PUT', `/queue/${subject}?${query}`);
+      if (status < 200 || status >= 300) onEvent?.({ type: 'error', error: new Error(`policy for ${subject}: ${status} ${text}`) });
+    } catch (error) {
+      policied.delete(subject);
+      onEvent?.({ type: 'error', error });
+    }
   };
 
   const deliver = createDeliveryHandler({
@@ -269,8 +350,16 @@ export async function runBus(site, options = {}) {
     }
     if (typeof subject !== 'string' || batch.length === 0) return reply(400);
 
-    const { took } = await serialize(() => deliver(subject, batch));
-    reply(200, { 'X-Sukkal-Ack': String(took) });
+    await applyPolicy(subject);
+    const { done, failed } = await serialize(() => deliver(subject, batch));
+
+    // A job batch is acknowledged by naming what finished: jobs complete
+    // independently, so a high-water mark cannot say which. The broker
+    // returns whatever the list omits, and a delivery where nothing
+    // succeeded is a 500, which returns all of them.
+    if (done.length === 0) return reply(500);
+    if (failed.length > 0) return reply(200, { 'X-Sukkal-Done': done.join(',') });
+    reply(200);
   });
 
   await new Promise((resolve, reject) => {
@@ -282,7 +371,7 @@ export async function runBus(site, options = {}) {
   const callback = `http://${host.includes(':') ? `[${host}]` : host}:${port}/mdy/${consumer}`;
 
   const register = async () => {
-    const query = new URLSearchParams({ consumer, callback, token });
+    const query = new URLSearchParams({ consumer, callback, token, group });
     const { status, text } = await brokerRequest(broker, 'PUT', `/push/>?${query}`);
     if (status < 200 || status >= 300) {
       throw new Error(`bus: the broker refused the registration (${status}${text ? ` — ${text}` : ''})`);
@@ -290,7 +379,7 @@ export async function runBus(site, options = {}) {
   };
 
   await register();
-  onEvent?.({ type: 'registered', callback, consumer, broker });
+  onEvent?.({ type: 'registered', callback, consumer, group, broker, policy, pages: site.pages.size });
 
   // Re-assert periodically. A broker that was restarted onto a rebuilt
   // store has no record of this subscription, and from this side that is
@@ -314,7 +403,7 @@ export async function runBus(site, options = {}) {
     });
   };
 
-  return { url: callback, consumer, broker, pages: site.pages, close };
+  return { url: callback, consumer, group, broker, pages: site.pages, close };
 }
 
 export { MEDIA_TYPE };

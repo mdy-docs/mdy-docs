@@ -54,7 +54,10 @@ Usage:
   mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
       dev server: watch, rebuild, live reload (default port: 4321)
   mdy bus [site-dir] [--broker <url>] [--port <n>] [--consumer <name>]
+          [--group <name>] [--max-attempts <n>] [--backoff <ms>]
       deliver messages to pages: render whichever page each one names
+  mdy dead <page-name> [--broker <url>] [--requeue <index>]
+      what could not be rendered, and putting one back
 
 Every site is a script-defined site: site-dir's entry document (main.mdy,
 or --entry <path>) decides everything itself — content, URLs, layouts,
@@ -89,6 +92,11 @@ function parseSiteArgs(args) {
     else if (a === '--entry') opts.entry = args[++i];
     else if (a === '--publish') opts.publish = true;
     else if (a === '--consumer') opts.consumer = args[++i];
+    else if (a === '--group') opts.group = args[++i];
+    else if (a === '--max-attempts') opts.maxAttempts = args[++i];
+    else if (a === '--backoff') opts.backoff = args[++i];
+    else if (a === '--max-backoff') opts.maxBackoff = args[++i];
+    else if (a === '--requeue') opts.requeue = args[++i];
     else if (a === '--broker') opts.broker = args[++i];
     else opts.root = a;
   }
@@ -150,6 +158,77 @@ function makeServeLogger() {
   };
 }
 
+/*
+ * `mdy bus`'s logger, deliberately the same shape as makeServeLogger's.
+ *
+ * A delivery IS a re-render — the same page, the same engine, reached by a
+ * message instead of by a file changing — so it should read like one. A
+ * rebuild says what it rendered and how long it took; so does this, plus
+ * the two things only a delivery has: which message caused it, and which
+ * attempt this is.
+ *
+ * Retries are the reason `attempt` is on the line at all. A page that
+ * fails and comes back looks identical to one being delivered twice
+ * unless the line says which it is.
+ */
+function makeBusLogger() {
+  const attempt = (n, max) => (n > 1 ? ` ${yellow(`attempt ${n}${max ? `/${max}` : ''}`)}` : '');
+  let maxAttempts = 0;
+
+  return (e) => {
+    const ts = timestamp();
+    switch (e.type) {
+      case 'registered': {
+        maxAttempts = e.policy?.max_attempts ?? 0;
+        console.log(
+          [
+            '',
+            `  ${bold(magenta('MDY'))}  ${dim('bus listening')}`,
+            '',
+            `  ${green('➜')}  ${bold('Broker:')}    ${cyan(e.broker)}`,
+            `  ${green('➜')}  ${bold('Callback:')}  ${cyan(e.callback)}`,
+            `  ${green('➜')}  ${bold('Pages:')}     ${e.pages} addressable`,
+            `  ${green('➜')}  ${dim(`group ${e.group}, up to ${maxAttempts} attempts — press ctrl+c to stop`)}`,
+            '',
+          ].join('\n')
+        );
+        break;
+      }
+      case 'delivered': {
+        const extra = e.published > 0 ? dim(` (published ${e.published})`) : '';
+        console.log(
+          `${ts} ${green('[deliver]')} ${e.subject} ${dim(`#${e.index}`)} → rendered ${bold(e.path ?? '?')} in ${bold(`${e.ms}ms`)}${extra}${attempt(e.attempts, maxAttempts)}`
+        );
+        break;
+      }
+      case 'failed': {
+        const last = maxAttempts > 0 && e.attempts >= maxAttempts;
+        console.error(
+          `${ts} ${red('[refuse]')} ${e.subject} ${dim(`#${e.index}`)} — ${bold(e.path ?? '?')} threw after ${e.ms}ms${attempt(e.attempts, maxAttempts)}\n` +
+            `  ${e.error?.message ?? e.error}\n` +
+            `  ${dim(last ? `out of attempts — dead-lettering to ${e.subject}.dead` : 'returned; the broker will try again after a backoff')}`
+        );
+        break;
+      }
+      case 'dead': {
+        const where = e.handled
+          ? `→ rendered ${bold(e.path ?? '?')} in ${bold(`${e.ms}ms`)}`
+          : dim(`no ${e.subject} page — kept, see \`mdy dead ${e.subject.replace(/\.dead$/, '')}\``);
+        console.error(`${ts} ${red('[dead]')} ${e.subject} ${dim(`#${e.index}`)} ${where}`);
+        break;
+      }
+      case 'undeliverable':
+        console.error(
+          `${ts} ${yellow('[return]')} ${e.subject} ${dim(`(${e.why})`)} — ${e.count} message(s) returned; they will dead-letter`
+        );
+        break;
+      case 'error':
+        console.error(`${ts} ${red('[bus]')} ${e.error?.message ?? e.error}`);
+        break;
+    }
+  };
+}
+
 /** A given path gets a `[read]` line only the first time this process ever
  * sees it — a script-defined site has no incremental cache (script-site.js),
  * so every rebuild re-walks and re-ingests everything; reporting all of it
@@ -164,7 +243,38 @@ function makeSourceLogger() {
   };
 }
 
-if (['build', 'serve', 'bus'].includes(process.argv[2])) {
+if (process.argv[2] === 'dead') {
+  const rest = process.argv.slice(3);
+  if (rest.includes('--help') || rest.includes('-h') || rest.length === 0) {
+    process.stdout.write(SITE_USAGE);
+    process.exit(rest.length === 0 ? 1 : 0);
+  }
+  const { root: name, broker, requeue } = parseSiteArgs(rest.filter((a) => a !== '--requeue' || true));
+  try {
+    const { deadLetters, requeueDead } = await loadBus();
+    const url = broker ?? 'http://127.0.0.1:8080';
+    if (requeue !== undefined) {
+      const result = await requeueDead(url, name, Number(requeue));
+      console.log(`${green('✓')} requeued ${cyan(name)} ${dim(`(dead #${requeue} → #${result?.index ?? '?'})`)}`);
+    } else {
+      const letters = await deadLetters(url, name);
+      if (letters.length === 0) {
+        console.log(`${dim(`nothing has died on ${name}`)}`);
+      } else {
+        for (const letter of letters) {
+          const why = letter.error ?? letter.reason ?? '';
+          console.log(
+            `${red('[dead]')} ${dim(`#${letter.index}`)} ${bold(name)}` +
+              `${letter.attempts ? dim(` after ${letter.attempts} attempt(s)`) : ''}${why ? ` — ${why}` : ''}`
+          );
+        }
+        console.log(dim(`  ${letters.length} dead — \`mdy dead ${name} --requeue <index>\` puts one back`));
+      }
+    }
+  } catch (err) {
+    siteFail(err.message ?? err);
+  }
+} else if (['build', 'serve', 'bus'].includes(process.argv[2])) {
   const [siteCmd, ...siteRest] = process.argv.slice(2);
   if (siteRest.includes('--help') || siteRest.includes('-h')) {
     process.stdout.write(SITE_USAGE);
@@ -207,7 +317,7 @@ if (['build', 'serve', 'bus'].includes(process.argv[2])) {
       break;
     }
     case 'bus': {
-      const { root, broker, port, consumer } = parseSiteArgs(siteRest);
+      const { root, broker, port, consumer, group, maxAttempts, backoff, maxBackoff } = parseSiteArgs(siteRest);
       try {
         const { runBus } = await loadBus();
         const { openScriptSite } = await import('../src/script-site.js');
@@ -220,31 +330,11 @@ if (['build', 'serve', 'bus'].includes(process.argv[2])) {
           broker,
           port,
           consumer,
-          onEvent: (e) => {
-            const ts = timestamp();
-            if (e.type === 'registered') {
-              console.log(
-                [
-                  '',
-                  `  ${bold(magenta('MDY'))}  ${dim('bus listening')}`,
-                  '',
-                  `  ${green('➜')}  ${bold('Broker:')}    ${cyan(e.broker)}`,
-                  `  ${green('➜')}  ${bold('Callback:')}  ${cyan(e.callback)}`,
-                  `  ${green('➜')}  ${dim(`consumer ${e.consumer} — press ctrl+c to stop`)}`,
-                  '',
-                ].join('\n')
-              );
-            } else if (e.type === 'delivered') {
-              const also = e.published > 0 ? dim(` → published ${e.published}`) : '';
-              console.log(`${ts} ${green('[deliver]')} ${e.subject} ${dim(`#${e.index}`)}${also}`);
-            } else if (e.type === 'undeliverable') {
-              console.error(`${ts} ${yellow('[drop]')} ${e.subject} ${dim(`(${e.why})`)} — ${e.count} message(s) acknowledged and discarded`);
-            } else if (e.type === 'failed') {
-              console.error(`${ts} ${red('[refuse]')} ${e.subject} ${dim(`#${e.index}`)} — ${e.error?.message ?? e.error}\n  ${dim('not acknowledged; the broker will send it again')}`);
-            } else if (e.type === 'error') {
-              console.error(`${ts} ${red('[bus]')} ${e.error?.message ?? e.error}`);
-            }
-          },
+          group,
+          maxAttempts: maxAttempts === undefined ? undefined : Number(maxAttempts),
+          backoffMs: backoff === undefined ? undefined : Number(backoff),
+          maxBackoffMs: maxBackoff === undefined ? undefined : Number(maxBackoff),
+          onEvent: makeBusLogger(),
         });
         const stop = () => bus.close().then(() => process.exit(0), () => process.exit(1));
         process.on('SIGINT', stop);

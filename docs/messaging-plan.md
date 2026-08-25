@@ -390,12 +390,63 @@ What the implementation settled:
     the address book already does, so script-site adds `fromName` on the way
     past rather than core computing it twice.
 
-### Phase 3 — retries, dead letters, and looking at them
+### Phase 3 — retries, dead letters, and looking at them ✅
 
 Retry policy per name, `/dead/<name>` reachable from a document, requeue. A
 dead-letter dashboard is a page over a query, which is the kind of thing this
 stack should make trivial — and it is the natural first proof that the
 messaging state is just more data.
+
+**Done**, and it required changing how the bus is registered. Phase 1's plain
+push subscription cannot do any of this: sukkal retries a failing callback
+*forever*, deliberately — giving up would decide on the subscriber's behalf
+that its messages no longer matter — and has nowhere to put a message it can
+never deliver. Attempts, doubling backoff and `<name>.dead` are queue-group
+features, so the registration now names a group.
+
+  - **Retry policy per name** is `PUT /queue/<name>`, applied the first time a
+    message for that name arrives (a subject does not exist until something is
+    published to it, and the first delivery is attempt 1, so nothing is
+    missed). `--max-attempts`, `--backoff`, `--max-backoff`.
+  - **A dead-letter handler is a page called `<name>.dead`**, and that needed
+    no new concept at all: `handlers.invoice.dead` is a name, so
+    `handlers/invoice.dead.mdy` is addressable exactly like every other page.
+    Nothing declares the relationship. With no such page the message is
+    reported and kept.
+  - **`mdy dead <name>` lists what died, `--requeue <index>` puts one back.**
+    The dead record stays put — it is republished, not moved — so the history
+    of what failed survives its own repair.
+
+The cost, stated plainly: **messages for one page are no longer strictly
+ordered against each other.** Jobs are held and returned individually, which
+is exactly what stops one unrenderable message standing in front of every
+later one; a high-water-mark ack cannot express "3 succeeded but 2 did not",
+and under Phase 1's subscription a single poison message blocked its page
+forever. For "render the page this names" that is the better trade, but it is
+a trade.
+
+It also fixed the weaker half of Phase 1: a message for a name this set has no
+page for used to be acked and **discarded**, because refusing meant
+redelivering forever. It is now returned, and ends up in `<name>.dead` where it
+can be looked at and requeued.
+
+Verified end to end: a page that always throws is retried on a doubling
+backoff with the attempt counter climbing, dead-letters when it runs out,
+and the dead letter is delivered to `handlers/flaky.dead.mdy` and rendered.
+`mdy dead` then lists both deaths and requeues one.
+
+**Logging.** A delivery *is* a re-render — the same page, the same engine,
+reached by a message instead of by a file changing — so `mdy bus` logs it the
+way `mdy serve` logs a rebuild: what it rendered, and how long it took.
+
+```
+11:41:16 PM [deliver] handlers.invoice #1 → rendered handlers/invoice.mdy in 54ms (published 1)
+11:41:35 PM [refuse]  handlers.flaky #1 — handlers/flaky.mdy threw after 1ms attempt 2/3
+11:42:30 PM [dead]    handlers.flaky.dead #2 → rendered handlers/flaky.dead.mdy in 4ms
+```
+
+The attempt counter is on the line because without it a retry is
+indistinguishable from the same message being delivered twice.
 
 ## Open questions
 

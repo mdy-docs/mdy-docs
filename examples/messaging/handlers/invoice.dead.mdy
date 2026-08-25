@@ -1,0 +1,9 @@
+title: Invoice failed
++++
+% // A dead-letter handler, and no new concept was needed for it:
+% // `handlers.invoice.dead` is a name, so a page of that name is
+% // addressable exactly like any other. Messages that ran out of attempts
+% // on handlers/invoice.mdy arrive here.
+= Gave up on an invoice
+
+{{ req.msg.name }} #{{ req.msg.index }} could not be rendered.

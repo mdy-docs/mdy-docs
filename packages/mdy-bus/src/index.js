@@ -12,6 +12,8 @@
  *
  *   publishMessages(messages, { url })   send what a build collected
  *   runBus(site, { broker })             receive, and render the page named
+ *   deadLetters(broker, name)            what could not be rendered
+ *   requeueDead(broker, name, index)     put one back
  *
  * Note what runBus does NOT take: a directory. It is given an already-open
  * document set (mdy-docs' `openScriptSite`), so this package depends on
@@ -22,3 +24,4 @@
  */
 export { publishMessages } from './publish.js';
 export { runBus, createDeliveryHandler, parseDelivery } from './bus.js';
+export { deadLetters, requeueDead } from './dead.js';

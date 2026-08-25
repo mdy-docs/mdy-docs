@@ -1,0 +1,9 @@
+title: Flaky failed
++++
+% // Proof that a dead-letter handler needs no new concept: this page is
+% // called handlers.flaky.dead because of where it sits, and that is the
+% // name the broker republishes to when handlers/flaky.mdy runs out of
+% // attempts. Nothing declares the relationship.
+= Gave up
+
+{{ req.msg.name }} #{{ req.msg.index }} — {{ req.msg.attempts }} attempt(s).
