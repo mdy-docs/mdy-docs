@@ -1,5 +1,11 @@
 /*
- * `mdy bus` — the delivery runtime. Pages as endpoints.
+ * The delivery runtime. Pages as endpoints.
+ *
+ * Driven by `mdy serve`, which runs it alongside the dev server so that
+ * publishing, delivering and editing are one process (there is no separate
+ * `mdy bus` command — serve already built the set and already rebuilds it
+ * on save, which is most of what this needs). An embedder can drive it
+ * directly: `runBus(site, options)`.
  *
  * A document set, an HTTP server, and one registration with a sukkal
  * broker. Per delivered message: resolve its subject to the page of that

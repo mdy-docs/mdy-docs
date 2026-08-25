@@ -264,7 +264,7 @@ mode re-fires every publish in the site. Consequently:
   flush, so it is not available to the caller. Fire-and-forget is the whole
   contract; a page whose caller needs an answer should have been rendered.
 
-## The delivery runtime — `mdy bus`
+## The delivery runtime
 
 1. Build the document set; resolve every page's name.
 2. Start the callback HTTP server and take the catch-all registration.
@@ -323,9 +323,17 @@ share a process:
     message that happened to arrive and re-sent under its name — an invoice
     publishing itself. Serve drains the array as it publishes.
 
-`mdy bus` remains, and is what you deploy: no watch, no live reload, no
-page serving, and it never runs the entry document — a worker rather than a
-dev server.
+There is no separate `mdy bus` command. It existed for one release and was
+removed once serve did the same job better: two processes over one directory,
+where only one of them noticed your edits, is not a division worth keeping.
+`runBus` remains as the package's entry point for an embedder driving it
+directly.
+
+What that gives up, recorded so it is a decision rather than a discovery:
+`mdy serve` is now the only long-running way to deliver messages, and it
+watches the filesystem and injects a live-reload snippet into every page.
+Anything deployed that consumes messages is running a dev server. If that
+becomes a problem the answer is a flag on serve, not a second command.
 
 ## Phases
 
@@ -361,13 +369,14 @@ Three things the implementation settled that the plan had guessed at:
     `a/b/c.mdy` and `a.b/c.mdy` both derive `a.b.c`, and silently choosing
     one would deliver somebody's messages to the wrong page.
 
-### Phase 1 — `mdy bus`, pages as endpoints ✅
+### Phase 1 — the delivery runtime, pages as endpoints ✅
 
 Catch-all registration, render-per-message, ack-by-reply. Exit: two pages, one
 publishing to the other across a broker restart, with nothing in either page's
 front matter but its name.
 
-**Done.** [../packages/mdy-bus](../packages/mdy-bus) is the runtime and `mdy bus` runs it;
+**Done.** [../packages/mdy-bus](../packages/mdy-bus) is the runtime (driven by
+`mdy serve`; it had a `mdy bus` command of its own at first, since removed);
 [../src/script-site.js](../src/script-site.js) gained `openScriptSite` — a
 site built but not run, which is what a process that renders on demand needs
 and a build does not. The entry document is never rendered by the bus, because
@@ -476,7 +485,7 @@ and the dead letter is delivered to `handlers/flaky.dead.mdy` and rendered.
 `mdy dead` then lists both deaths and requeues one.
 
 **Logging.** A delivery *is* a re-render — the same page, the same engine,
-reached by a message instead of by a file changing — so `mdy bus` logs it the
+reached by a message instead of by a file changing — so it is logged the same
 way `mdy serve` logs a rebuild: what it rendered, and how long it took.
 
 ```

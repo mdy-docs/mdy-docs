@@ -52,10 +52,10 @@ Usage:
             [--publish [--broker <url>]]
       render the site (default dir: ., out: <site-dir>/dist)
   mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
-      dev server: watch, rebuild, live reload (default port: 4321)
-  mdy bus [site-dir] [--broker <url>] [--port <n>] [--consumer <name>]
-          [--group <name>] [--max-attempts <n>] [--backoff <ms>]
-      deliver messages to pages: render whichever page each one names
+            [--broker <url>] [--consumer <name>] [--group <name>]
+            [--max-attempts <n>] [--backoff <ms>] [--max-backoff <ms>]
+      dev server: watch, rebuild, live reload (default port: 4321) — and,
+      when a broker answers, publish and deliver messages too
   mdy dead <page-name> [--broker <url>] [--requeue <index>]
       what could not be rendered, and putting one back
 
@@ -72,12 +72,14 @@ nothing and a watch-mode rebuild does not re-fire what the last one sent.
 Without --publish they are reported and dropped; with it they go to a
 sukkal broker (--broker, default http://127.0.0.1:8080).
 
-\`mdy bus\` is the other end: it renders whichever page a delivered message
-is addressed to, with the message bound as \`req\`. Nothing subscribes and
-no front matter marks a page as a handler — a page is addressable because
-it exists, and its name is its path without the extension, "/" written as
-".". A render that throws does not acknowledge, so the message comes back;
-pages reached this way have to be idempotent.
+\`mdy serve\` is also the other end. With a broker reachable it sends what a
+rebuild publishes and renders whichever page each delivered message is
+addressed to, with the message bound as \`req\` — so the whole loop is one
+process and editing a page changes what the next message renders. Nothing
+subscribes and no front matter marks a page as a handler: a page is
+addressable because it exists, and its name is its path without the
+extension, "/" written as ".". A render that throws does not acknowledge,
+so the message comes back; pages reached this way have to be idempotent.
 `;
 
 /** Shared flag parsing for build/serve: positional root + options. */
@@ -128,8 +130,8 @@ const siteFail = (message) => {
 };
 
 /*
- * `mdy serve`'s messaging half: the same loop `mdy build --publish` and
- * `mdy bus` make between them, in one process.
+ * `mdy serve`'s messaging half: publishing and delivering in the one
+ * process that already has the document set.
  *
  * Both halves, because half of it is not a loop: a dev server that
  * delivered but never published would still need a second terminal to make
@@ -152,7 +154,7 @@ const siteFail = (message) => {
  * on the other end is the only thing that makes delivery meaningful, and
  * that is a fact to discover rather than a mode to select.
  */
-async function connectServeMessaging(brokerUrl) {
+async function connectServeMessaging(brokerUrl, delivery = {}) {
   const broker = brokerUrl ?? 'http://127.0.0.1:8080';
   let bus;
   let publishMessages;
@@ -182,7 +184,7 @@ async function connectServeMessaging(brokerUrl) {
       // a second one, so serve and its deliveries can never disagree about
       // what a page name means.
       if (!running) {
-        running = await bus(info.site, { broker, onEvent: busLog }).catch((err) => {
+        running = await bus(info.site, { ...delivery, broker, onEvent: busLog }).catch((err) => {
           console.error(`${timestamp()} ${red('[bus]')} ${err.message ?? err}`);
           return null;
         });
@@ -271,7 +273,7 @@ function makeServeLogger({ live = false } = {}) {
 }
 
 /*
- * `mdy bus`'s logger, deliberately the same shape as makeServeLogger's.
+ * The delivery logger, deliberately the same shape as makeServeLogger's.
  *
  * A delivery IS a re-render — the same page, the same engine, reached by a
  * message instead of by a file changing — so it should read like one. A
@@ -390,7 +392,7 @@ if (process.argv[2] === 'dead') {
   } catch (err) {
     siteFail(err.message ?? err);
   }
-} else if (['build', 'serve', 'bus'].includes(process.argv[2])) {
+} else if (['build', 'serve'].includes(process.argv[2])) {
   const [siteCmd, ...siteRest] = process.argv.slice(2);
   if (siteRest.includes('--help') || siteRest.includes('-h')) {
     process.stdout.write(SITE_USAGE);
@@ -432,39 +434,18 @@ if (process.argv[2] === 'dead') {
       }
       break;
     }
-    case 'bus': {
-      const { root, broker, port, consumer, group, maxAttempts, backoff, maxBackoff } = parseSiteArgs(siteRest);
+    case 'serve': {
+      const { root, broker, consumer, group, maxAttempts, backoff, maxBackoff, ...opts } =
+        parseSiteArgs(siteRest);
       try {
-        const { runBus } = await loadBus();
-        const { openScriptSite } = await import('../src/script-site.js');
-        // The bus is handed an OPEN site rather than a directory: it is a
-        // transport over something that renders pages by name, and knows
-        // nothing about site directories. Which is also what keeps
-        // mdy-docs and @mdy-docs/mdy-bus from depending on each other.
-        const site = await openScriptSite(root, { onSource: makeSourceLogger() });
-        const bus = await runBus(site, {
-          broker,
-          port,
+        const started = Date.now();
+        const messaging = await connectServeMessaging(broker, {
           consumer,
           group,
           maxAttempts: maxAttempts === undefined ? undefined : Number(maxAttempts),
           backoffMs: backoff === undefined ? undefined : Number(backoff),
           maxBackoffMs: maxBackoff === undefined ? undefined : Number(maxBackoff),
-          onEvent: makeBusLogger(),
         });
-        const stop = () => bus.close().then(() => process.exit(0), () => process.exit(1));
-        process.on('SIGINT', stop);
-        process.on('SIGTERM', stop);
-      } catch (err) {
-        siteFail(err.message ?? err);
-      }
-      break;
-    }
-    case 'serve': {
-      const { root, broker, ...opts } = parseSiteArgs(siteRest);
-      try {
-        const started = Date.now();
-        const messaging = await connectServeMessaging(broker);
         const logger = makeServeLogger({ live: messaging !== null });
         const { url } = await serveSite(root, {
           ...opts,

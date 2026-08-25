@@ -21,8 +21,10 @@ await publishMessages(messages, { url: 'http://127.0.0.1:8080' });
 const bus = await runBus(await openScriptSite('./site'), { broker: 'http://127.0.0.1:8080' });
 ```
 
-Both are wired into mdy's own CLI already: `mdy build --publish` and
-`mdy bus`.
+Both are wired into mdy's own CLI already: `mdy build --publish` sends,
+and `mdy serve` does both — with a broker reachable it publishes what a
+rebuild produced and delivers to the pages named, so editing a page
+changes what the next message renders.
 
 ## There is no subscribe
 
@@ -54,10 +56,13 @@ The HTTP response to a delivery **is** the acknowledgement:
 - a name this set has no page for is acked and dropped, not refused;
   refusing would redeliver it forever
 
-`runBus` takes an already-open document set rather than a directory. The
-bus is a transport over *something that renders pages by name* — it has no
-business knowing what a site directory is, and that is also what keeps
-this package and mdy-docs from depending on each other in a circle.
+`runBus` takes an already-open document set rather than a directory, and
+`setSite` swaps it: the bus is a transport over *something that renders
+pages by name*, so a host that rebuilds (as `mdy serve` does on every
+save) replaces the set without tearing down the registration and losing
+its place in the queue. It has no business knowing what a site directory
+is, which is also what keeps this package and mdy-docs from depending on
+each other in a circle.
 
 See mdy-docs' `docs/messaging-plan.md` for why the design has no
 `$.subscribe` and no request/reply verb.

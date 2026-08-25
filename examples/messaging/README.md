@@ -35,29 +35,29 @@ git clone --recurse-submodules https://github.com/mdy-docs/sukkal-msg.git
 make -C sukkal-msg
 ```
 
-Then three terminals, all on defaults — no flags, no configuration:
+Then two terminals, both on defaults — no flags, no configuration:
 
 ```sh
 # 1. the broker
 sukkal-msg/bin/sukkal serve
 
-# 2. the delivery runtime: renders whichever page each message names
-mdy bus examples/messaging
-
-# 3. the publisher
-mdy build examples/messaging --publish
+# 2. everything else
+mdy serve examples/messaging
 ```
 
-The build reports what it sent, and the bus reports what it rendered:
+`mdy serve` publishes what the rebuild produced and delivers each message
+to the page it names, so the whole loop is one process:
 
 ```
+➜  Local:   http://localhost:4321/
+➜  Broker:  http://127.0.0.1:8080 — publishing and delivering
+
 [send] handlers.invoice (73 bytes)
-✓ published 2 message(s)
-
-[deliver] handlers.invoice #1 → rendered handlers/invoice.mdy in 52ms (published 1)
-[deliver] handlers.invoice #2 → rendered handlers/invoice.mdy in 4ms (published 1)
+[send] handlers.invoice (73 bytes)
+[deliver] handlers.invoice #1 → rendered handlers/invoice.mdy in 4ms (published 1)
 [deliver] handlers.mailer #1 → rendered handlers/mailer.mdy in 2ms
-[deliver] handlers.mailer #2 → rendered handlers/mailer.mdy in 1ms
+[deliver] handlers.invoice #2 → rendered handlers/invoice.mdy in 3ms (published 1)
+[deliver] handlers.mailer #2 → rendered handlers/mailer.mdy in 2ms
 ```
 
 Four deliveries from two publishes: `handlers/invoice.mdy` publishes to
@@ -65,8 +65,14 @@ Four deliveries from two publishes: `handlers/invoice.mdy` publishes to
 goes out only once the invoice's own render has succeeded — the chain of
 pages is the workflow.
 
-Without `--publish`, the build lists the messages and drops them, so you
-can see what a site would send without a broker running at all.
+**Now edit `handlers/mailer.mdy`.** Serve rebuilds, and the next message
+delivered to it renders the version you just saved — no restart. A rebuild
+never re-sends what it already sent, so saving a file does not replay the
+whole site; adding an order publishes exactly the one new message.
+
+Stop the broker and `mdy serve` still serves the site, listing the
+messages it would have sent and holding them. `mdy build --publish` is the
+one-shot version, for a build that should send and exit.
 
 ## Watching one fail
 
@@ -89,7 +95,7 @@ doubling backoff. When it runs out of attempts the broker republishes it
 to `handlers.flaky.dead` — which is a name, so the page called
 `handlers/flaky.dead.mdy` handles it. Nothing declares that either.
 
-`--max-attempts 2 --backoff 200` on `mdy bus` makes it happen in about a
+`--max-attempts 2 --backoff 200` on `mdy serve` makes it happen in about a
 second instead of several minutes.
 
 Afterwards:

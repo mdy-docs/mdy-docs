@@ -124,7 +124,7 @@ export async function renderScriptSite(root, options = {}) {
  *
  * renderScriptSite is this plus "now render the entry", which is what a
  * build wants. What wants the other half is a long-running process that
- * renders pages on demand rather than once: `mdy bus` renders whichever
+ * renders pages on demand rather than once: the delivery runtime renders whichever
  * page a delivered message is addressed to (@mdy-docs/mdy-bus), and never
  * runs the entry at all, because nothing in this design registers
  * anything — a page is addressable because it exists.

@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { memoryFsProvider, openScriptSite } from 'mdy-docs';
 import { createDeliveryHandler, parseDelivery } from '../src/index.js';
 
-// `mdy bus` — pages as endpoints (src/bus.js; mdy-docs' docs/messaging-plan.md).
+// The delivery runtime — pages as endpoints (src/bus.js; mdy-docs'
+// docs/messaging-plan.md).
 //
 // The runtime is deliberately split so the part with the decisions in it
 // has neither HTTP nor a broker in it: createDeliveryHandler takes an
