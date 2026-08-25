@@ -73,7 +73,8 @@ const defaultOnRebuild = (info) => {
   if (info.changed?.length > 0) console.log(`mdy: changed: ${info.changed.join(', ')}`);
   if (info.ok) {
     const detail = info.reused > 0 ? ` (${info.reused} reused, ${info.rebuilt} rebuilt)` : '';
-    console.log(`mdy: rendered ${info.pages} page(s) in ${info.ms}ms${detail}`);
+    const held = info.messages?.length > 0 ? `, ${info.messages.length} message(s) held` : '';
+    console.log(`mdy: rendered ${info.pages} page(s) in ${info.ms}ms${detail}${held}`);
   } else {
     console.error(`mdy: build failed — still serving the last good build\n  ${info.error}`);
   }
@@ -88,7 +89,11 @@ const defaultOnRebuild = (info) => {
  *
  * `options.onRebuild(info)` — fires after every rebuild attempt, including
  * the first (`info.first`): `{ ok: true, first, changed, pages, ms, reused,
- * rebuilt }` on success, `{ ok: false, first, changed, error }` on failure
+ * rebuilt, messages }` on success, `{ ok: false, first, changed, error }` on
+ * failure. `messages` is every `$.publish` the rebuild made, unsent — the
+ * dev server never publishes (a rebuild happens on every save, and a
+ * publish that went out would re-fire on every keystroke), but it says so
+ * rather than dropping them silently
  * (the last good build keeps serving). `changed` is the list of watched
  * paths that triggered this rebuild — empty for the first (nothing changed
  * yet, it just ran). Defaults to plain `console.log`/`console.error` text
@@ -163,6 +168,13 @@ export async function serveSite(root, options = {}) {
         ms: Date.now() - started,
         reused: stats.reused.length,
         rebuilt: stats.rebuilt.length,
+        // What the site WOULD have published. The dev server never sends:
+        // there is no incremental cache here, so every save reruns the
+        // entry from scratch and a publish that went out would re-fire on
+        // every keystroke (see src/publish.js). But dropping them without
+        // a word made $.publish look like it did nothing at all, which is
+        // the one thing it must not look like.
+        messages: rendered.messages,
       });
       return true;
     } catch (err) {

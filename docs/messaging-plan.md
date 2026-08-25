@@ -255,8 +255,11 @@ This is not fastidiousness. A script-defined site has no incremental cache, so
 from scratch on every save. Immediate publishing means every keystroke in watch
 mode re-fires every publish in the site. Consequently:
 
-- **`build` and `serve` do not publish.** The default is a no-op that logs what
-  would have gone out. Publishing is opt-in and belongs to the delivery runtime.
+- **`build` and `serve` do not publish.** Both report what would have gone
+  out instead — `build` lists it, `serve` names each page once and then
+  counts them on the rebuild line, the way it already treats `[read]`, since
+  a site that publishes on every rebuild would otherwise drown out what
+  changed. Publishing is opt-in and belongs to the delivery runtime.
 - `$.publish` returns `null`. The broker-assigned index exists only after the
   flush, so it is not available to the caller. Fire-and-forget is the whole
   contract; a page whose caller needs an answer should have been rendered.

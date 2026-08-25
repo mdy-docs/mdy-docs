@@ -192,3 +192,28 @@ test("onRebuild's info.changed lists the watched path(s) that triggered the rebu
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("onRebuild reports what the site would have published, unsent", async () => {
+  // The dev server deliberately does not publish: there is no incremental
+  // cache, so every save reruns the entry from scratch and anything that
+  // went out would re-fire on every keystroke (src/publish.js). Dropping
+  // them without a word, though, made $.publish look like it did nothing —
+  // so they come back on the rebuild info instead.
+  const dir = await mkdtemp(join(tmpdir(), 'mdy-serve-publish-'));
+  await writeFile(
+    join(dir, 'main.mdy'),
+    '+++\n% $.publish("h", { n: 1 })\n% $.publish("h", { n: 2 })\n% $.emit("index.html", "hi")'
+  );
+  await writeFile(join(dir, 'h.mdy'), '+++\nhandler');
+
+  const rebuilds = [];
+  const site = await serveSite(dir, { port: 0, onRebuild: (info) => rebuilds.push(info) });
+  try {
+    assert.equal(rebuilds.length, 1);
+    assert.deepEqual(rebuilds[0].messages.map((m) => m.name), ['h', 'h']);
+    assert.deepEqual(rebuilds[0].messages.map((m) => m.data.n), [1, 2]);
+  } finally {
+    await site.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

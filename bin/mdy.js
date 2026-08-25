@@ -143,15 +143,32 @@ function serveReadyBanner(url, ms) {
  * timestamped line (vite's HMR-update style), prefixed with which watched
  * file(s) triggered it; the first is covered by serveReadyBanner instead,
  * unless it failed — a broken first build still serves, so that's worth
- * surfacing immediately rather than staying silent under the ready banner. */
+ * surfacing immediately rather than staying silent under the ready banner.
+ *
+ * A rebuild's $.publish calls are counted on the line and never sent. The
+ * dev server deliberately does not publish — there is no incremental cache,
+ * so every save reruns the entry and anything that went out would re-fire on
+ * every keystroke (src/publish.js) — but silence made $.publish look inert.
+ * The names are listed ONCE, the first time this process sees each one, for
+ * the same reason `[read]` lines are: a site that publishes on every rebuild
+ * would otherwise drown out what changed. `mdy build --publish` is what
+ * actually sends. */
 function makeServeLogger() {
+  const announced = new Set();
   return (info) => {
-    if (info.ok && info.first) return;
     const ts = timestamp();
+    const held = info.messages ?? [];
+    for (const message of held) {
+      if (announced.has(message.name)) continue;
+      announced.add(message.name);
+      console.log(`${ts} ${dim('[hold]')} ${message.name} ${dim('— serve never publishes; mdy build --publish sends')}`);
+    }
+    if (info.ok && info.first) return;
     for (const path of info.changed ?? []) console.log(`${ts} ${tagChange()} ${path}`);
     if (info.ok) {
       const detail = info.reused > 0 ? dim(` (${info.reused} reused, ${info.rebuilt} rebuilt)`) : '';
-      console.log(`${ts} ${mdyTag()} rendered ${bold(info.pages)} page(s) in ${info.ms}ms${detail}`);
+      const holding = held.length > 0 ? dim(`, ${held.length} message(s) held`) : '';
+      console.log(`${ts} ${mdyTag()} rendered ${bold(info.pages)} page(s) in ${info.ms}ms${detail}${holding}`);
     } else {
       console.error(`${ts} ${red('[mdy] build failed')} — still serving the last good build\n  ${info.error}`);
     }
