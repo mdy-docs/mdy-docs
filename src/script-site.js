@@ -74,8 +74,8 @@ import { buildImportGraph } from './imports.js';
  *                   e.g. the CLI's own "[read] <path>" logging; see
  *                   bin/mdy.js)
  *
- * Returns `{ output, text, outputs, binaryOutputs, messages, roots }` —
- * `output` is
+ * Returns `{ output, text, outputs, binaryOutputs, messages, roots, set,
+ * pages }` — `output` is
  * the entry script's own rendered HTML and `text` the text its code wrote
  * (its own normal return values, same as any `$.render` / `$.text`);
  * `outputs` is a `Map<path, content>` of
@@ -110,7 +110,11 @@ export async function renderScriptSite(root, options = {}) {
   // deliberately is not markup.
   const result = await set.renderResult(entryIndex, context);
 
-  return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, messages, roots };
+  // `set`/`pages` come back too: a caller that goes on running after the
+  // build — `mdy serve`, which then delivers messages to pages — needs the
+  // very set that was just built, not a second one opened behind its back
+  // that could disagree about what a name means.
+  return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, messages, roots, set, pages: site.pages };
 }
 
 /**

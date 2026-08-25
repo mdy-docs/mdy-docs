@@ -102,9 +102,16 @@ const DEAD_SUFFIX = '.dead';
  * @param {{ site: object, flush: (messages: object[]) => Promise<void>, now?: () => number, onEvent?: Function }} deps
  */
 export function createDeliveryHandler({ site, flush, now = () => Date.now(), onEvent }) {
-  const { set, pages, messages } = site;
+  // `site` may be a function, for a host that rebuilds while running:
+  // `mdy serve` replaces the whole document set on every save, and a
+  // delivery has to render against the CURRENT one or editing a page would
+  // not change what the next message does. Read once per delivery, not per
+  // message — a batch that started against one build finishes against it,
+  // rather than rendering half against each.
+  const current = typeof site === 'function' ? site : () => site;
 
   return async function deliver(subject, batch) {
+    const { set, pages, messages } = current();
     const targets = pages.get(subject) ?? [];
 
     if (targets.length !== 1) {
@@ -250,6 +257,8 @@ function localAddressFor(brokerUrl) {
  * Run the bus until stopped.
  *
  *   site              an OPEN document set — mdy-docs' `openScriptSite`
+ *                     return value (or `renderScriptSite`'s, which carries
+ *                     the same fields), swappable later via `setSite`
  *                     return value, or anything with the same three
  *                     fields: `set.renderResult(index, data)`,
  *                     `pages` (Map<name, doc[]>), and the `messages`
@@ -324,11 +333,17 @@ export async function runBus(site, options = {}) {
     }
   };
 
+  // The site is held in a box rather than captured, so a caller that
+  // rebuilds — `mdy serve` — can swap it without tearing down the
+  // registration and losing its place in the broker's queue.
+  let currentSite = site;
   const deliver = createDeliveryHandler({
-    site,
+    site: () => currentSite,
     flush: (produced) => publishMessages(produced, { url: broker }),
     onEvent,
   });
+
+  const pageCount = () => currentSite.pages.size;
 
   const server = createServer(async (req, res) => {
     const reply = (status, headers = {}) => {
@@ -379,7 +394,7 @@ export async function runBus(site, options = {}) {
   };
 
   await register();
-  onEvent?.({ type: 'registered', callback, consumer, group, broker, policy, pages: site.pages.size });
+  onEvent?.({ type: 'registered', callback, consumer, group, broker, policy, pages: pageCount() });
 
   // Re-assert periodically. A broker that was restarted onto a rebuilt
   // store has no record of this subscription, and from this side that is
@@ -403,7 +418,17 @@ export async function runBus(site, options = {}) {
     });
   };
 
-  return { url: callback, consumer, group, broker, pages: site.pages, close };
+  return {
+    url: callback,
+    consumer,
+    group,
+    broker,
+    get pages() { return currentSite.pages; },
+    /** Deliver against a newly built set from here on. In-flight
+     * deliveries finish against the one they started with. */
+    setSite: (next) => { currentSite = next; },
+    close,
+  };
 }
 
 export { MEDIA_TYPE };

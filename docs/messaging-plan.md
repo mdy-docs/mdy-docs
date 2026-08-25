@@ -290,6 +290,43 @@ Step 4 is where reliability comes from and where the sharp edges live:
   belongs in sukkal's `/dead/<name>`, and it is the reason the dead-letter work
   in Phase 3 is not optional.
 
+## `mdy serve` is the whole loop ✅
+
+The dev server publishes and delivers, in one process, with no flag. It
+already builds the set and already rebuilds on save, so the two things the
+bus needs it had anyway; what it lacked was somewhere for a message to go.
+
+There is no `--bus` switch because a broker on the other end is the only
+thing that makes delivery mean anything, and that is a fact to discover
+rather than a mode to select: serve asks `/health` once, and if nothing
+answers it behaves exactly as before — holding messages and saying so.
+
+Editing a page changes what the next message renders. `runBus` holds its
+site in a box rather than capturing it, so a rebuild swaps it without
+tearing down the registration and losing its place in the queue; a delivery
+reads the site once, so a batch that started against one build finishes
+against it instead of rendering half against each.
+
+Two things had to be got right, both of which only appear once the halves
+share a process:
+
+  - **A rebuild must not re-send.** There is no incremental cache, so every
+    keystroke reruns the entry. A message is sent at most once per run,
+    fingerprinted on name and data. Deliberately per-process rather than a
+    broker-level dedup key: it needs no decision about where a durable id
+    would come from (below), and a restart resending is right for a dev
+    loop.
+  - **The two halves must not share a message queue.** `messages` is one
+    array per built set, and both the entry's own `$.publish` calls and a
+    delivered page's land in it. The bus flushes whatever it finds there
+    after a render, so anything left behind was attributed to the first
+    message that happened to arrive and re-sent under its name — an invoice
+    publishing itself. Serve drains the array as it publishes.
+
+`mdy bus` remains, and is what you deploy: no watch, no live reload, no
+page serving, and it never runs the entry document — a worker rather than a
+dev server.
+
 ## Phases
 
 ### Phase 0 — `$.publish` through `options.natives` (no core change) ✅
@@ -462,9 +499,6 @@ indistinguishable from the same message being delivered twice.
   there is no output directory. Either it is an error, or it writes somewhere
   the runtime names — and "somewhere the runtime names" is a convention core
   would be inventing, which is the thing this design has otherwise avoided.
-- **Is `mdy bus` a separate process at all?** The receiving set and the site
-  set are the same set. If they stay the same, `mdy serve --bus` may beat a
-  third command.
 - **Publishing is not idempotent, and a rebuild resends everything.** Running
   Phase 1 made this obvious: `mdy build --publish` twice publishes every
   message twice, because `$.publish` has no dedup key and each send gets a

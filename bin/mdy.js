@@ -127,13 +127,105 @@ const siteFail = (message) => {
   process.exit(1);
 };
 
+/*
+ * `mdy serve`'s messaging half: the same loop `mdy build --publish` and
+ * `mdy bus` make between them, in one process.
+ *
+ * Both halves, because half of it is not a loop: a dev server that
+ * delivered but never published would still need a second terminal to make
+ * a message exist, and one that published but never delivered would give
+ * nothing to look at. Editing a page changes what the next message renders,
+ * because serve already rebuilds on save and the bus is handed the new set.
+ *
+ * Publishing from a rebuild is the thing src/publish.js warns about — there
+ * is no incremental cache, so every keystroke reruns the entry and would
+ * re-send everything it publishes. So a message is sent at most ONCE PER
+ * RUN: a fingerprint of name and data is remembered, and a rebuild only
+ * sends what this process has not already sent. That is deliberately
+ * per-process and not a broker-level dedup key — it needs no decision about
+ * where a durable id would come from (see docs/messaging-plan.md's open
+ * questions), and restarting serve resending is the right behaviour for a
+ * dev loop anyway.
+ *
+ * Absent a broker this is all skipped and serve behaves exactly as before,
+ * holding messages and saying so. Which is why there is no flag: a broker
+ * on the other end is the only thing that makes delivery meaningful, and
+ * that is a fact to discover rather than a mode to select.
+ */
+async function connectServeMessaging(brokerUrl) {
+  const broker = brokerUrl ?? 'http://127.0.0.1:8080';
+  let bus;
+  let publishMessages;
+  try {
+    const mod = await loadBus();
+    publishMessages = mod.publishMessages;
+    // Ask the broker whether it is there before announcing anything: an
+    // unreachable one is the ordinary case (most sites never publish), not
+    // an error worth interrupting a dev server for.
+    const health = await fetch(`${broker.replace(/\/+$/, '')}/health`).catch(() => null);
+    if (!health?.ok) return null;
+    bus = mod.runBus;
+  } catch {
+    return null;
+  }
+
+  const sent = new Set();
+  // The bus prints its own listening banner, which serve has already said
+  // in its own; everything else — deliveries, refusals, deaths — is wanted.
+  const busLog = makeBusLogger({ banner: false });
+  let running = null;
+
+  return {
+    broker,
+    async rebuilt(info) {
+      // The bus is started from the first build's set rather than opening
+      // a second one, so serve and its deliveries can never disagree about
+      // what a page name means.
+      if (!running) {
+        running = await bus(info.site, { broker, onEvent: busLog }).catch((err) => {
+          console.error(`${timestamp()} ${red('[bus]')} ${err.message ?? err}`);
+          return null;
+        });
+      } else {
+        running.setSite(info.site);
+      }
+
+      // DRAIN rather than read. `messages` is one array per built set, and
+      // both halves of this process append to it: the entry document's own
+      // $.publish calls during the rebuild, and a delivered page's while it
+      // renders. The bus flushes whatever it finds there after a render, so
+      // anything left behind here would be attributed to the first message
+      // that happened to arrive — and re-sent under its name. Emptying it
+      // as it is published is what keeps the two halves separate.
+      const produced = info.site.messages.splice(0);
+
+      const fresh = produced.filter((m) => {
+        const fingerprint = `${m.name}\u0000${JSON.stringify(m.data ?? null)}`;
+        if (sent.has(fingerprint)) return false;
+        sent.add(fingerprint);
+        return true;
+      });
+      if (fresh.length === 0) return;
+      try {
+        await publishMessages(fresh, {
+          url: broker,
+          onSend: ({ name, bytes }) => console.log(`${timestamp()} ${magenta('[send]')} ${name} ${dim(`(${bytes} bytes)`)}`),
+        });
+      } catch (err) {
+        console.error(`${timestamp()} ${red('[send]')} ${err.message ?? err}`);
+      }
+    },
+  };
+}
+
 /** vite-style "ready" banner, printed once after the dev server's first build completes. */
-function serveReadyBanner(url, ms) {
+function serveReadyBanner(url, ms, messaging) {
   return [
     '',
     `  ${bold(magenta('MDY'))}  ${dim('ready in')} ${bold(`${ms} ms`)}`,
     '',
     `  ${green('➜')}  ${bold('Local:')}   ${cyan(url)}`,
+    ...(messaging ? [`  ${green('➜')}  ${bold('Broker:')}  ${cyan(messaging.broker)} ${dim('— publishing and delivering')}`] : []),
     `  ${green('➜')}  ${dim('press ctrl+c to stop')}`,
     '',
   ].join('\n');
@@ -153,21 +245,24 @@ function serveReadyBanner(url, ms) {
  * the same reason `[read]` lines are: a site that publishes on every rebuild
  * would otherwise drown out what changed. `mdy build --publish` is what
  * actually sends. */
-function makeServeLogger() {
+function makeServeLogger({ live = false } = {}) {
   const announced = new Set();
   return (info) => {
     const ts = timestamp();
     const held = info.messages ?? [];
-    for (const message of held) {
+    // With a broker on the other end these are sent, and reporting them as
+    // held would be a lie — connectServeMessaging logs each `[send]`
+    // instead.
+    for (const message of live ? [] : held) {
       if (announced.has(message.name)) continue;
       announced.add(message.name);
-      console.log(`${ts} ${dim('[hold]')} ${message.name} ${dim('— serve never publishes; mdy build --publish sends')}`);
+      console.log(`${ts} ${dim('[hold]')} ${message.name} ${dim('— no broker; mdy build --publish sends')}`);
     }
     if (info.ok && info.first) return;
     for (const path of info.changed ?? []) console.log(`${ts} ${tagChange()} ${path}`);
     if (info.ok) {
       const detail = info.reused > 0 ? dim(` (${info.reused} reused, ${info.rebuilt} rebuilt)`) : '';
-      const holding = held.length > 0 ? dim(`, ${held.length} message(s) held`) : '';
+      const holding = held.length > 0 && !live ? dim(`, ${held.length} message(s) held`) : '';
       console.log(`${ts} ${mdyTag()} rendered ${bold(info.pages)} page(s) in ${info.ms}ms${detail}${holding}`);
     } else {
       console.error(`${ts} ${red('[mdy] build failed')} — still serving the last good build\n  ${info.error}`);
@@ -188,7 +283,7 @@ function makeServeLogger() {
  * fails and comes back looks identical to one being delivered twice
  * unless the line says which it is.
  */
-function makeBusLogger() {
+function makeBusLogger({ banner = true } = {}) {
   const attempt = (n, max) => (n > 1 ? ` ${yellow(`attempt ${n}${max ? `/${max}` : ''}`)}` : '');
   let maxAttempts = 0;
 
@@ -196,7 +291,11 @@ function makeBusLogger() {
     const ts = timestamp();
     switch (e.type) {
       case 'registered': {
+        // Recorded even when the banner is suppressed (serve prints its
+        // own): the retry policy is what puts the "/5" on an attempt, and
+        // an attempt count with nothing to compare it to is half a fact.
         maxAttempts = e.policy?.max_attempts ?? 0;
+        if (!banner) break;
         console.log(
           [
             '',
@@ -362,15 +461,20 @@ if (process.argv[2] === 'dead') {
       break;
     }
     case 'serve': {
-      const { root, ...opts } = parseSiteArgs(siteRest);
+      const { root, broker, ...opts } = parseSiteArgs(siteRest);
       try {
         const started = Date.now();
+        const messaging = await connectServeMessaging(broker);
+        const logger = makeServeLogger({ live: messaging !== null });
         const { url } = await serveSite(root, {
           ...opts,
           onSource: makeSourceLogger(),
-          onRebuild: makeServeLogger(),
+          onRebuild: (info) => {
+            logger(info);
+            if (info.ok && messaging) messaging.rebuilt(info);
+          },
         });
-        console.log(serveReadyBanner(url, Date.now() - started));
+        console.log(serveReadyBanner(url, Date.now() - started, messaging));
       } catch (err) {
         siteFail(err.message ?? err);
       }

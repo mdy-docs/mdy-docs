@@ -60,7 +60,7 @@ export async function renderSite(root, options = {}) {
   const fs = options.fs ?? nodeFsProvider();
   const entry = options.entry ?? 'main.mdy';
 
-  const { outputs, binaryOutputs, messages, roots } = await renderScriptSite(root, {
+  const { outputs, binaryOutputs, messages, roots, set, pages } = await renderScriptSite(root, {
     fs,
     entry,
     now: options.now,
@@ -73,6 +73,8 @@ export async function renderSite(root, options = {}) {
     binaryOutputs,
     messages,
     roots,
+    set,
+    pages,
     stats: { reused: [], rebuilt: [...outputs.keys(), ...binaryOutputs.keys()] },
   };
 }

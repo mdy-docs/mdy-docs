@@ -175,6 +175,11 @@ export async function serveSite(root, options = {}) {
         // a word made $.publish look like it did nothing at all, which is
         // the one thing it must not look like.
         messages: rendered.messages,
+        // The set this rebuild produced. A caller that also delivers
+        // messages to pages needs to swap to it, so that editing a page
+        // changes what the next message renders — the whole reason this
+        // is one process and not two.
+        site: { set: rendered.set, pages: rendered.pages, messages: rendered.messages },
       });
       return true;
     } catch (err) {
