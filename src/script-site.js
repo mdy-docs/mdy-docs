@@ -2,7 +2,7 @@ import { nodeFsProvider } from './fs-provider.js';
 import { toHtml } from './mdy.js';
 import { normalizeDate, rfc822 } from './format.js';
 import { createResizeNative } from './images.js';
-import { createPublishNative, messageName, nameProblem } from './publish.js';
+import { messageName } from './publish.js';
 import { tokenize } from './search.js';
 import { buildImportGraph } from './imports.js';
 
@@ -121,7 +121,7 @@ export async function renderScriptSite(root, options = {}) {
  * renderScriptSite is this plus "now render the entry", which is what a
  * build wants. What wants the other half is a long-running process that
  * renders pages on demand rather than once: `mdy bus` renders whichever
- * page a delivered message is addressed to (see bin/bus.js), and never
+ * page a delivered message is addressed to (@mdy-docs/mdy-bus), and never
  * runs the entry at all, because nothing in this design registers
  * anything — a page is addressable because it exists.
  *
@@ -140,24 +140,15 @@ export async function openScriptSite(root, options = {}) {
 
   const binaryOutputs = new Map();
 
-  // $.publish's name -> document(s) index, filled in AFTER the graph is
-  // built. Natives are constructed per directory while the graph is still
-  // being walked, so there is no set to resolve against yet — but a native
-  // is only ever CALLED during a render, which is strictly later, so a
-  // late binding is enough. An array per name, not one document: two paths
-  // can collapse to the same name (a/b/c.mdy and a.b/c.mdy both make
-  // a.b.c), and that is worth a clear error at publish rather than a
-  // silent last-one-wins.
+  // Every $.publish this site makes, in call order, unsent. Collected
+  // rather than sent for the reason src/publish.js gives: a script-defined
+  // site is rebuilt from scratch on every save, so anything that went out
+  // mid-render would re-fire on every keystroke. The caller flushes.
   const messages = [];
-  let pages = new Map();
   const buildNatives = (absDir) => ({
     resize: createResizeNative({ fs, root: absDir, registerBinaryOutput: (path, bytes) => binaryOutputs.set(path, bytes) }),
     tokenize,
     rfc822,
-    publish: createPublishNative({
-      resolveName: (name) => pages.get(name) ?? [],
-      registerMessage: (message) => messages.push(message),
-    }),
   });
 
   const outputs = new Map();
@@ -166,24 +157,19 @@ export async function openScriptSite(root, options = {}) {
     fs,
     buildNatives,
     onEmit: ({ path, content }) => outputs.set(path, typeof content === 'string' ? content : JSON.stringify(content)),
+    // `fromName` says which PAGE published, where core's hook says which
+    // index — a message that outlives the process it was made in should
+    // describe its sender the same way it describes its addressee. `set`
+    // is not assigned yet here, but this only ever runs during a render,
+    // which is strictly later.
+    onPublish: ({ name, data, docIndex }) => {
+      const from = set.docs.find((d) => d.index === docIndex);
+      messages.push({ name, data, fromIndex: docIndex, fromName: from ? messageName(from.data) : null });
+    },
     onSource: options.onSource,
     cache: new Map(),
     roots,
   });
 
-  // Only documents that can actually RENDER are addressable: a message
-  // delivered to a page renders it, and a .png or a .yaml record has
-  // nothing to run. Restricting the index this way also keeps most name
-  // collisions from ever existing — static/logo.png and static/logo.jpg
-  // would both derive static.logo, and neither is a message endpoint.
-  for (const doc of set.docs) {
-    const ext = String(doc.data?.ext ?? '').toLowerCase();
-    if (ext !== '.mdy' && ext !== '.md') continue;
-    const name = messageName(doc.data);
-    if (name === null || nameProblem(name) !== null) continue;
-    if (pages.has(name)) pages.get(name).push(doc);
-    else pages.set(name, [doc]);
-  }
-
-  return { set, pages, messages, outputs, binaryOutputs, roots, root };
+  return { set, pages: set.messagePages, messages, outputs, binaryOutputs, roots, root };
 }

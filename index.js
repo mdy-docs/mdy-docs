@@ -43,4 +43,4 @@ export { serveSite } from './src/serve.js';
 export { slugify, normalizeDate, rfc822 } from './src/format.js';
 export { tokenize } from './src/search.js';
 export { createResizeNative } from './src/images.js';
-export { renderScriptSite } from './src/script-site.js';
+export { renderScriptSite, openScriptSite } from './src/script-site.js';

@@ -126,7 +126,7 @@ export function extractImports(text) {
  * `ctx.buildNatives(absDir)` — the natives every document set needs
  * regardless of imports (script-site.js's resize/tokenize/rfc822/markdown),
  * built per-directory since `resize` reads real files relative to `absDir`.
- * `ctx.onEmit`/`ctx.onSource` — passed straight through to every level's
+ * `ctx.onEmit`/`ctx.onPublish`/`ctx.onSource` — passed straight through to every level's
  * own openDocumentSet, so a $.emit from an IMPORTED package's own code
  * contributes to the same outputs as the top-level site, and every file
  * under every resolved import is reported through the same onSource hook
@@ -159,6 +159,7 @@ export function extractImports(text) {
  *   fs: import('./fs-provider.js').FsProvider,
  *   buildNatives: (absDir: string) => Record<string, Function>,
  *   onEmit?: Function,
+ *   onPublish?: Function,
  *   onSource?: (meta: object) => void,
  *   cache: Map<string, Promise<any>>,
  *   roots: string[],
@@ -167,7 +168,7 @@ export function extractImports(text) {
  * @returns {Promise<{ docs, find, findOne, render, resize, root: string }>}
  */
 export async function buildImportGraph(absDir, ctx, ancestors = new Set()) {
-  const { fs, buildNatives, onEmit, onSource, cache, roots } = ctx;
+  const { fs, buildNatives, onEmit, onPublish, onSource, cache, roots } = ctx;
 
   if (ancestors.has(absDir)) {
     throw new Error(`mdy: import cycle detected — ${[...ancestors, absDir].join(' -> ')}`);
@@ -262,7 +263,7 @@ export async function buildImportGraph(absDir, ctx, ancestors = new Set()) {
       }
     };
 
-    const set = await openDocumentSet(sources, { natives: extraNatives, onEmit, loadModule, canonicalizeModule });
+    const set = await openDocumentSet(sources, { natives: extraNatives, onEmit, onPublish, loadModule, canonicalizeModule });
     roots.push(absDir);
     return { ...set, resize: extraNatives.resize, root: absDir };
   })();

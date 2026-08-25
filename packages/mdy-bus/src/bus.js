@@ -21,16 +21,15 @@
  * matches round-robin so no page starves behind a busy one. The extra
  * machinery would have bought nothing.
  *
- * Lives in bin/ rather than src/ for the reason src/publish.js gives:
- * this package is bundled for the browser, and the transport does not
- * belong in it. Phase 2 moves this to packages/mdy-bus.
+ * Lives outside mdy-docs for the reason its src/publish.js gives: core
+ * resolves a name and hands the message to `onPublish`, and a broker
+ * client cannot live in a package that is bundled for the browser.
  */
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { randomBytes } from 'node:crypto';
 
-import { openScriptSite } from '../src/script-site.js';
-import { publishMessages } from './sukkal.js';
+import { publishMessages } from './publish.js';
 
 const MEDIA_TYPE = 'application/binjson';
 
@@ -149,7 +148,7 @@ export function createDeliveryHandler({ site, flush, onEvent }) {
  * and its README records both its Node and Python clients hitting this.)
  * Only the query is escaped, which the broker does decode.
  *
- * bin/sukkal.js can use fetch quite safely for the same broker, because a
+ * publish.js can use fetch quite safely for the same broker, because a
  * publish addresses a NAME and every character a name may contain is
  * URL-safe. Only patterns have this problem.
  */
@@ -204,7 +203,14 @@ function localAddressFor(brokerUrl) {
 /**
  * Run the bus until stopped.
  *
- *   root              the site directory
+ *   site              an OPEN document set — mdy-docs' `openScriptSite`
+ *                     return value, or anything with the same three
+ *                     fields: `set.renderResult(index, data)`,
+ *                     `pages` (Map<name, doc[]>), and the `messages`
+ *                     array $.publish appends to. Passed in rather than
+ *                     built here: this package is a transport over
+ *                     something that renders pages by name, and does not
+ *                     need to know what a site directory is.
  *   options.broker    broker URL (default http://127.0.0.1:8080)
  *   options.port      port to receive deliveries on (default 0 — any free one)
  *   options.consumer  durable consumer name (default 'mdy-bus'). Naming it
@@ -215,16 +221,14 @@ function localAddressFor(brokerUrl) {
  *
  * Returns `{ url, consumer, pages, close }`.
  */
-export async function runBus(root, options = {}) {
+export async function runBus(site, options = {}) {
   const broker = (options.broker ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
   const consumer = options.consumer ?? 'mdy-bus';
   const onEvent = options.onEvent;
   const token = randomBytes(16).toString('hex');
 
-  const { ready, encode, decode } = await import('@mdy-docs/nisaba-db/wasm');
+  const { ready, decode } = await import('@mdy-docs/nisaba-db/wasm');
   await ready();
-
-  const site = await openScriptSite(root, { onSource: options.onSource });
 
   // Deliveries for different subjects arrive as separate concurrent POSTs
   // (the broker walks its matches round-robin), and they share one
@@ -310,7 +314,7 @@ export async function runBus(root, options = {}) {
     });
   };
 
-  return { url: callback, consumer, broker, pages: site.pages, close, encode };
+  return { url: callback, consumer, broker, pages: site.pages, close };
 }
 
 export { MEDIA_TYPE };

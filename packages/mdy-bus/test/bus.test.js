@@ -1,17 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { memoryFsProvider } from '../index.js';
-import { openScriptSite } from '../src/script-site.js';
-import { createDeliveryHandler, parseDelivery } from '../bin/bus.js';
+import { memoryFsProvider, openScriptSite } from 'mdy-docs';
+import { createDeliveryHandler, parseDelivery } from '../src/index.js';
 
-// `mdy bus` — pages as endpoints (bin/bus.js, docs/messaging-plan.md).
+// `mdy bus` — pages as endpoints (src/bus.js; mdy-docs' docs/messaging-plan.md).
 //
 // The runtime is deliberately split so the part with the decisions in it
 // has neither HTTP nor a broker in it: createDeliveryHandler takes an
 // already-parsed batch and returns how far it got. That is what is tested
 // here. The socket half is exercised end to end against a real broker by
-// examples/messaging, which needs a built sukkal binary and so does not
+// mdy-docs' examples/messaging, which needs a built sukkal binary and so does not
 // belong in this suite.
 
 const open = (files) => openScriptSite('/', { fs: memoryFsProvider(new Map(files)) });

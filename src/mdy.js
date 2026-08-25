@@ -8,6 +8,7 @@ import { fillTokens, heldTree, hold, holdToc, splice, spliceToc } from './compos
 import { markdownToHast } from './markdown.js';
 import { fromMdy } from './parse/block.js';
 import { compileScript, scriptLines, scriptOutput } from './parse/script.js';
+import { messageName, nameProblem } from './publish.js';
 import { runProgram } from './vm.js';
 
 /**
@@ -517,11 +518,21 @@ const h = (selector, properties, ...rest) => {
  * document's own scope.
  *
  * `$` methods that need the host (find / findOne / render / text / emit /
- * parse / markdown / html / table / toc, and any `extraNativeNames`) call the
+ * publish / parse / markdown / html / table / toc, and any
+ * `extraNativeNames`) call the
  * engine's `__hostcall` native: the VM suspends while the host's async native
  * runs, then resumes with the result — a synchronous-looking call from the
  * document's point of view. `$.documents` / `$.count` / `$.data` are
  * preloaded — no host round-trip.
+ *
+ * `$.publish(name, data)` is `$.render(name, data)` in the other tense: the
+ * same call, deferred and handed to whatever transport the embedder has, so
+ * a page can be given work to do later instead of rendered now. Core resolves
+ * the name and validates it — a name resolves to a page or it doesn't, which
+ * is why there is no `$.subscribe` and nothing to register — and then does
+ * exactly what `$.emit` does with an output: hands it to a hook and forms no
+ * opinion about what happens next. It returns null, never a broker's message
+ * id, because at call time nothing has been sent.
  *
  * `$.emit(path, content)` is the generic "produce a named output" native —
  * see buildDocumentSet's `options.onEmit` doc comment for the whole
@@ -557,6 +568,7 @@ const $ = {
   render: (target, data) => __call("render", [target, data === undefined ? {} : data]),
   text: (target, data) => __call("text", [target, data === undefined ? {} : data]),
   emit: (path, content) => __call("emit", [path, content]),
+  publish: (name, data) => __call("publish", [name, data === undefined ? {} : data]),
   parse: (source) => __call("parse", [source]),
   markdown: (source) => __call("markdown", [source]),
   node: (tree) => __call("node", [tree]),
@@ -647,6 +659,16 @@ const fillHtml = (value) =>
  * no opinion on what "producing" an output means. Without the option,
  * `$.emit` is a harmless no-op.
  *
+ * `options.onPublish({ name, data, docIndex })` fires for every
+ * `$.publish(name, data)` a document calls — a FIXED native, like `$.emit`,
+ * and for the same reason: "hand this page some work for later" is generic to
+ * any mdy-docs consumer, and mdy has no opinion on what sending means. Core
+ * resolves the name against this set first, so the hook only ever sees
+ * messages addressed to a page that exists; an unknown or ambiguous name
+ * throws inside the document, the way `$.render`'s does. Without the option,
+ * `$.publish` still resolves (so a typo is still an error) and is otherwise a
+ * no-op.
+ *
  * `options.loadModule(specifier, referrer, docIndex, docData)` enables
  * guest-side dynamic `import()`: document code may `await import("…")` a real
  * ES module, and every module in the resulting graph is fetched through this
@@ -661,13 +683,14 @@ const fillHtml = (value) =>
  * @param {{
  *   onQuery?: (info: { query: object, docIndex: number | null }) => void,
  *   onEmit?: (info: { path: string, content: any, docIndex: number | null }) => void,
+ *   onPublish?: (info: { name: string, data: any, docIndex: number | null }) => void,
  *   natives?: Record<string, (...args: any[]) => any>,
  *   loadModule?: (specifier: string, referrer: string, docIndex: number, docData: object) => string | Promise<string>,
  *   canonicalizeModule?: (specifier: string, referrer: string, docIndex: number, docData: object) => string,
  * }} [options]
  */
 async function buildDocumentSet(source, options = {}) {
-  const { onQuery, onEmit, natives: extraNatives = {}, loadModule, canonicalizeModule } = options;
+  const { onQuery, onEmit, onPublish, natives: extraNatives = {}, loadModule, canonicalizeModule } = options;
   const extraNativeNames = Object.keys(extraNatives);
   const docs = parseDocuments(source).map(({ data, content, format }, index) => ({
     index,
@@ -679,6 +702,29 @@ async function buildDocumentSet(source, options = {}) {
     content,
   }));
   const documents = docs.map(({ index, data }) => ({ index, data }));
+
+  // $.publish's address book: message name -> the documents deriving it.
+  // An array rather than one document because two paths can collapse to the
+  // same name (a/b/c.mdy and a.b/c.mdy both make a.b.c), and delivering
+  // somebody's messages to whichever of them was indexed last would be worse
+  // than an error.
+  //
+  // A document carrying an `ext` that is not .mdy/.md is skipped: a set built
+  // from a directory holds raw records too (a .yaml of data, a .png), and a
+  // message renders the page it names, so a record with nothing to run is not
+  // an endpoint. That also stops static/logo.png and static/logo.jpg from
+  // colliding on static.logo before either could be published to. Reading one
+  // data field is not the same as knowing about vaults: a set built from a
+  // string has no `ext` at all, and every document in it stays addressable.
+  const messagePages = new Map();
+  for (const doc of documents) {
+    const ext = doc.data?.ext;
+    if (typeof ext === 'string' && !/^\.(mdy|md)$/i.test(ext)) continue;
+    const name = messageName(doc.data);
+    if (name === null || nameProblem(name) !== null) continue;
+    if (messagePages.has(name)) messagePages.get(name).push(doc);
+    else messagePages.set(name, [doc]);
+  }
 
   const db = await connect(new MemoryStorageProvider());
   const collection = await db.collection('documents');
@@ -799,6 +845,23 @@ async function buildDocumentSet(source, options = {}) {
         onEmit?.({ path, content: typeof content === 'string' ? fillHtml(content) : content, docIndex: i });
         return null;
       },
+      // $.render's other tense. Core's whole job is deciding that the name
+      // means a page of this set — after which the message is the
+      // embedder's, exactly as an emitted output is.
+      publish: (name, data) => {
+        const problem = nameProblem(name);
+        if (problem !== null) throw new Error(`mdy: publish: a message name ${problem}`);
+        const targets = messagePages.get(name) ?? [];
+        if (targets.length === 0) {
+          throw new Error(`mdy: publish: no document is named ${JSON.stringify(name)} (a page's name is its path without the extension, "/" written as ".")`);
+        }
+        if (targets.length > 1) {
+          const paths = targets.map((d) => d.data?.path ?? '?').join(', ');
+          throw new Error(`mdy: publish: ${JSON.stringify(name)} is ambiguous — ${targets.length} documents share it (${paths}); give one of them a messageName`);
+        }
+        onPublish?.({ name, data, docIndex: i });
+        return null;
+      },
       // MDY text → hast, the same front end the document itself came through,
       // so a tree a document inspects is the tree its own output would make.
       parse: (source) => splice(fromMdy(String(source ?? ''), PARSE)),
@@ -892,7 +955,7 @@ async function buildDocumentSet(source, options = {}) {
       : finish(envelope.out, undefined, undefined);
   };
 
-  return { docs: documents, runDoc, hostFind, resolveIndex, trackedFind };
+  return { docs: documents, messagePages, runDoc, hostFind, resolveIndex, trackedFind };
 }
 
 /**
@@ -1013,10 +1076,14 @@ function textOf(node) {
  * @param {object} [options]
  */
 export async function openDocumentSet(source, options = {}) {
-  const { docs, runDoc, resolveIndex, trackedFind } = await buildDocumentSet(source, options);
+  const { docs, messagePages, runDoc, resolveIndex, trackedFind } = await buildDocumentSet(source, options);
   const renderResult = async (target, ctx = {}) => runDoc(await resolveIndex(target, null), ctx, 0);
   return {
     docs,
+    // Message name -> the document(s) of that name. A host that delivers
+    // messages needs the same address book $.publish resolves against, or
+    // the two disagree about what a name means.
+    messagePages,
     find: (query) => trackedFind(query, null),
     findOne: async (query) => (await trackedFind(query, null))[0] ?? null,
     render: async (target, ctx = {}) => toHtml((await renderResult(target, ctx)).tree),

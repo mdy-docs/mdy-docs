@@ -28,7 +28,8 @@
     "mdy-web": "node packages/mdy-web/bin/mdy-web.js examples/blog",
     "live-preview": "npm --prefix packages/mdy-live-preview run dev",
     "test:mdy-site": "npm --prefix packages/mdy-site test",
-    "mdy-site": "npm --prefix packages/mdy-site run dev"
+    "mdy-site": "npm --prefix packages/mdy-site run dev",
+    "test:mdy-bus": "npm --prefix packages/mdy-bus test"
   },
   "dependencies": {
     "@jsquash/jpeg": "^1.6.0",
@@ -55,7 +56,8 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "playwright": "^1.61.1"
+    "playwright": "^1.61.1",
+    "@mdy-docs/mdy-bus": "file:packages/mdy-bus"
   },
   "exports": {
     ".": "./index.js",

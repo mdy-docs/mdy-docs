@@ -304,7 +304,7 @@ frozen.
 and collects messages; [../src/script-site.js](../src/script-site.js) wires
 the native and returns `messages` alongside `outputs`; `buildSite` hands them
 back after every write has succeeded; `mdy build --publish [--broker <url>]`
-sends them from [../bin/sukkal.js](../bin/sukkal.js) — outside `src/`, so no
+sends them from `@mdy-docs/mdy-bus` — outside `src/`, so no
 transport reaches the browser bundle. binjson comes from nisaba's own codec,
 which mdy already depends on, so no broker client library was needed:
 a publish is one POST. See [../examples/messaging](../examples/messaging),
@@ -327,7 +327,7 @@ Catch-all registration, render-per-message, ack-by-reply. Exit: two pages, one
 publishing to the other across a broker restart, with nothing in either page's
 front matter but its name.
 
-**Done.** [../bin/bus.js](../bin/bus.js) is the runtime and `mdy bus` runs it;
+**Done.** [../packages/mdy-bus](../packages/mdy-bus) is the runtime and `mdy bus` runs it;
 [../src/script-site.js](../src/script-site.js) gained `openScriptSite` — a
 site built but not run, which is what a process that renders on demand needs
 and a build does not. The entry document is never rendered by the bus, because
@@ -346,7 +346,7 @@ What the implementation settled:
     `PUT /push/>` arrives as `/push/%3E` and is refused as a bad pattern. The
     registration builds its path by hand over `node:http`; sukkal's own client
     carries the same note, and its README records both its clients hitting
-    this. `bin/sukkal.js` may keep using `fetch`, because a publish addresses
+    this. The publish side may keep using `fetch`, because a publish addresses
     a *name* and every character a name may contain is URL-safe.
   - **An undeliverable message is acked and dropped, not refused.** Refusing
     would redeliver it forever. A name this set has no page for — or has two
@@ -357,12 +357,38 @@ What the implementation settled:
     `{ name, index, attempts }` — which is what a page needs to dedupe or to
     notice it is being retried.
 
-### Phase 2 — promote to a fixed native
+### Phase 2 — promote to a fixed native ✅
 
 `publish` becomes a fixed native with an `onPublish` hook, name resolution moves
 into core beside `resolveIndex`, adapter moves to `packages/mdy-bus`. Exit:
 core has the primitive and no network dependency, and the browser bundle still
 builds.
+
+**Done.** `$.publish` is a fixed native in [../src/mdy.js](../src/mdy.js)
+beside `$.emit`, with the address book — message name → document — built where
+the documents are and exposed as `set.messagePages`, so a host that delivers
+messages resolves names exactly the way `$.publish` does rather than keeping a
+second opinion. [../src/publish.js](../src/publish.js) keeps the naming rules
+and nothing else. The transport is `@mdy-docs/mdy-bus`.
+
+Exit criterion met on both counts: nothing under `src/` reaches a broker, and
+`packages/mdy-site`'s vite build still produces a browser bundle.
+
+What the implementation settled:
+
+  - **`runBus` takes an open document set, not a directory.** Had the package
+    imported `openScriptSite`, mdy-docs and mdy-bus would each depend on the
+    other. Injecting the site removes the cycle and is the better contract
+    anyway: the bus is a transport over *something that renders pages by
+    name*, and has no business knowing what a site directory is.
+  - **`onPublish` had to be threaded through the import graph** beside
+    `onEmit` ([../src/imports.js](../src/imports.js)). An imported package's
+    documents run in their own set, and a hook the graph does not forward is
+    a hook half the documents cannot reach.
+  - **Core's hook reports `docIndex`, not a name.** Which document published
+    is core's to know; what that document is *called* is the same derivation
+    the address book already does, so script-site adds `fromName` on the way
+    past rather than core computing it twice.
 
 ### Phase 3 — retries, dead letters, and looking at them
 

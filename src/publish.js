@@ -15,23 +15,27 @@
  * the transport. Nothing registers anything; a name resolves to a page or
  * it doesn't. See docs/messaging-plan.md for the whole argument.
  *
- * Nothing here is a broker client, deliberately. src/serve.js already
- * records that this package is bundled for the browser and that Rollup
- * statically rejects a Node builtin merely REACHED by the bundle, so a
- * transport in src/ breaks it. This module resolves and validates, then
- * hands the message to `registerMessage`; who sends it, where, and
- * whether at all belongs to the caller — the same split $.emit already
- * has with onEmit/outputs, for the same reason (mdy has no opinion on
- * what "produce an output" means, and none on what "send" means either).
+ * This module is the NAMING half: what a page is called, and what a legal
+ * name is. The native itself is fixed in ./mdy.js beside $.emit, which is
+ * where the address book lives because that is where the documents are.
+ *
+ * Nothing here or there is a broker client, deliberately. src/serve.js
+ * already records that this package is bundled for the browser and that
+ * Rollup statically rejects a Node builtin merely REACHED by the bundle,
+ * so a transport in src/ breaks it. Core resolves a name and hands the
+ * message to `onPublish`; who sends it, where, and whether at all belongs
+ * to the embedder — the same split $.emit has with onEmit, for the same
+ * reason (mdy has no opinion on what "produce an output" means, and none
+ * on what "send" means either). @mdy-docs/mdy-bus is one such embedder.
  *
  * Publishes are DEFERRED, which is not fastidiousness. A script-defined
  * site has no incremental cache (script-site.js), so `mdy serve` reruns
  * the entry from scratch on every save; a publish that went out during
- * the render would re-fire on every keystroke. $.publish only ever
- * appends to a list, and the caller flushes it once the whole build has
- * succeeded. That is also why it returns null instead of the message's
- * index in the log: at call time there is no index yet, because nothing
- * has been sent.
+ * the render would re-fire on every keystroke. The hook only ever
+ * collects, and the caller flushes once the whole build has succeeded.
+ * That is also why $.publish returns null instead of the message's index
+ * in the log: at call time there is no index yet, because nothing has
+ * been sent.
  */
 
 /*
@@ -85,62 +89,4 @@ export function nameProblem(name) {
   if (name.startsWith('.') || name.endsWith('.')) return 'must not start or end with "."';
   if (name.includes('..')) return 'must not contain ".."';
   return null;
-}
-
-/**
- * Build the `$.publish(name, data)` native.
- *
- *   resolveName(name)      → the documents whose message name is `name`,
- *                            as an array (empty when nothing matches, more
- *                            than one when two paths collapse to the same
- *                            name — see script-site.js)
- *   registerMessage(msg)   ← called once per publish, with
- *                            { name, data, fromIndex, fromName }
- *
- * @param {{ resolveName: (name: string) => object[], registerMessage: (msg: object) => void }} deps
- */
-export function createPublishNative({ resolveName, registerMessage }) {
-  /*
-   * Read the document's own arguments off the FRONT and mdy's off the
-   * BACK, rather than declaring publish(name, data, docIndex, docData).
-   *
-   * mdy appends (docIndex, docData) to whatever the document passed —
-   * `(...args) => fn(...args, i, doc.data)` in buildDocumentSet — so the
-   * two trailing arguments only land in their declared positions when the
-   * caller passed exactly two of its own. `$.publish("h")` would otherwise
-   * bind `data` to the document index, and quietly publish the number 0.
-   */
-  return function publish(...args) {
-    const docData = args[args.length - 1];
-    const docIndex = args[args.length - 2];
-    const [name, data] = args.slice(0, -2);
-    const problem = nameProblem(name);
-    if (problem !== null) throw new Error(`publish: a message name ${problem}`);
-
-    // An unresolvable name throws, matching $.render's own "no document
-    // matches" rather than queueing a message that can only die later.
-    // Within one document set the set IS the world, so a typo is a bug the
-    // publisher should hear about at once. (The day two separately
-    // deployed sets talk to each other, this check has to become
-    // opt-out — see docs/messaging-plan.md's open questions.)
-    const targets = resolveName(name);
-    if (targets.length === 0) {
-      throw new Error(`publish: no document is named ${JSON.stringify(name)} (a page's name is its path without the extension, "/" written as ".")`);
-    }
-    if (targets.length > 1) {
-      const paths = targets.map((d) => d.data?.path ?? '?').join(', ');
-      throw new Error(`publish: ${JSON.stringify(name)} is ambiguous — ${targets.length} documents share it (${paths}); give one of them a messageName`);
-    }
-
-    registerMessage({
-      name,
-      // undefined would vanish through JSON on the way to a transport, and
-      // "published with no data" is a real thing to do, so it is {} here.
-      data: data === undefined ? {} : data,
-      fromIndex: docIndex,
-      fromName: messageName(docData),
-    });
-
-    return null;
-  };
 }

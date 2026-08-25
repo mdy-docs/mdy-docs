@@ -95,6 +95,25 @@ function parseSiteArgs(args) {
   return opts;
 }
 
+/*
+ * The transport is a separate package, so that mdy-docs itself has no
+ * network dependency and its browser bundle stays buildable (see
+ * src/publish.js). Loaded only when a command actually needs to talk to a
+ * broker, and reported honestly when it is not installed rather than
+ * failing with a bare module-not-found.
+ */
+async function loadBus() {
+  try {
+    return await import('@mdy-docs/mdy-bus');
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND') throw err;
+    throw new Error(
+      'this needs the messaging transport: npm install @mdy-docs/mdy-bus\n' +
+        '  (mdy itself collects messages and sends nothing — see docs/messaging-plan.md)'
+    );
+  }
+}
+
 const siteFail = (message) => {
   console.error(red(String(message)));
   process.exit(1);
@@ -169,7 +188,7 @@ if (['build', 'serve', 'bus'].includes(process.argv[2])) {
         // formatting choice.
         if (messages.length > 0) {
           if (publish) {
-            const { publishMessages } = await import('./sukkal.js');
+            const { publishMessages } = await loadBus();
             const { sent } = await publishMessages(messages, {
               url: broker,
               onSend: ({ name, bytes }) => console.log(`${tagSend()} ${name} ${dim(`(${bytes} bytes)`)}`),
@@ -190,12 +209,17 @@ if (['build', 'serve', 'bus'].includes(process.argv[2])) {
     case 'bus': {
       const { root, broker, port, consumer } = parseSiteArgs(siteRest);
       try {
-        const { runBus } = await import('./bus.js');
-        const bus = await runBus(root, {
+        const { runBus } = await loadBus();
+        const { openScriptSite } = await import('../src/script-site.js');
+        // The bus is handed an OPEN site rather than a directory: it is a
+        // transport over something that renders pages by name, and knows
+        // nothing about site directories. Which is also what keeps
+        // mdy-docs and @mdy-docs/mdy-bus from depending on each other.
+        const site = await openScriptSite(root, { onSource: makeSourceLogger() });
+        const bus = await runBus(site, {
           broker,
           port,
           consumer,
-          onSource: makeSourceLogger(),
           onEvent: (e) => {
             const ts = timestamp();
             if (e.type === 'registered') {

@@ -1,0 +1,24 @@
+{
+  "name": "@mdy-docs/mdy-bus",
+  "version": "0.1.0",
+  "description": "Deliver messages to mdy pages — the sukkal adapter for $.publish, and the runtime that renders whichever page a message names",
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@mdy-docs/nisaba-db": "file:../../third_party/nisaba-db"
+  },
+  "devDependencies": {
+    "mdy-docs": "file:../.."
+  }
+}

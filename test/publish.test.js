@@ -10,7 +10,7 @@ import { messageName, nameProblem } from '../src/publish.js';
 // of the design is that mdy collects messages and has no opinion on what
 // sending one means, so what is testable in this package is the collecting
 // — name derivation, resolution, and the deferral itself. The transport
-// lives in bin/sukkal.js, and examples/messaging exercises it end to end.
+// lives in @mdy-docs/mdy-bus, and examples/messaging exercises it end to end.
 
 const site = (files) => renderSite('/', { fs: memoryFsProvider(new Map(files)) });
 
