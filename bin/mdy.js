@@ -53,6 +53,8 @@ Usage:
       render the site (default dir: ., out: <site-dir>/dist)
   mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
       dev server: watch, rebuild, live reload (default port: 4321)
+  mdy bus [site-dir] [--broker <url>] [--port <n>] [--consumer <name>]
+      deliver messages to pages: render whichever page each one names
 
 Every site is a script-defined site: site-dir's entry document (main.mdy,
 or --entry <path>) decides everything itself — content, URLs, layouts,
@@ -66,6 +68,13 @@ sent only once it has fully succeeded, so a failed build publishes
 nothing and a watch-mode rebuild does not re-fire what the last one sent.
 Without --publish they are reported and dropped; with it they go to a
 sukkal broker (--broker, default http://127.0.0.1:8080).
+
+\`mdy bus\` is the other end: it renders whichever page a delivered message
+is addressed to, with the message bound as \`req\`. Nothing subscribes and
+no front matter marks a page as a handler — a page is addressable because
+it exists, and its name is its path without the extension, "/" written as
+".". A render that throws does not acknowledge, so the message comes back;
+pages reached this way have to be idempotent.
 `;
 
 /** Shared flag parsing for build/serve: positional root + options. */
@@ -79,6 +88,7 @@ function parseSiteArgs(args) {
     else if (a === '--future') opts.future = true;
     else if (a === '--entry') opts.entry = args[++i];
     else if (a === '--publish') opts.publish = true;
+    else if (a === '--consumer') opts.consumer = args[++i];
     else if (a === '--broker') opts.broker = args[++i];
     else opts.root = a;
   }
@@ -135,7 +145,7 @@ function makeSourceLogger() {
   };
 }
 
-if (['build', 'serve'].includes(process.argv[2])) {
+if (['build', 'serve', 'bus'].includes(process.argv[2])) {
   const [siteCmd, ...siteRest] = process.argv.slice(2);
   if (siteRest.includes('--help') || siteRest.includes('-h')) {
     process.stdout.write(SITE_USAGE);
@@ -172,6 +182,49 @@ if (['build', 'serve'].includes(process.argv[2])) {
             );
           }
         }
+      } catch (err) {
+        siteFail(err.message ?? err);
+      }
+      break;
+    }
+    case 'bus': {
+      const { root, broker, port, consumer } = parseSiteArgs(siteRest);
+      try {
+        const { runBus } = await import('./bus.js');
+        const bus = await runBus(root, {
+          broker,
+          port,
+          consumer,
+          onSource: makeSourceLogger(),
+          onEvent: (e) => {
+            const ts = timestamp();
+            if (e.type === 'registered') {
+              console.log(
+                [
+                  '',
+                  `  ${bold(magenta('MDY'))}  ${dim('bus listening')}`,
+                  '',
+                  `  ${green('➜')}  ${bold('Broker:')}    ${cyan(e.broker)}`,
+                  `  ${green('➜')}  ${bold('Callback:')}  ${cyan(e.callback)}`,
+                  `  ${green('➜')}  ${dim(`consumer ${e.consumer} — press ctrl+c to stop`)}`,
+                  '',
+                ].join('\n')
+              );
+            } else if (e.type === 'delivered') {
+              const also = e.published > 0 ? dim(` → published ${e.published}`) : '';
+              console.log(`${ts} ${green('[deliver]')} ${e.subject} ${dim(`#${e.index}`)}${also}`);
+            } else if (e.type === 'undeliverable') {
+              console.error(`${ts} ${yellow('[drop]')} ${e.subject} ${dim(`(${e.why})`)} — ${e.count} message(s) acknowledged and discarded`);
+            } else if (e.type === 'failed') {
+              console.error(`${ts} ${red('[refuse]')} ${e.subject} ${dim(`#${e.index}`)} — ${e.error?.message ?? e.error}\n  ${dim('not acknowledged; the broker will send it again')}`);
+            } else if (e.type === 'error') {
+              console.error(`${ts} ${red('[bus]')} ${e.error?.message ?? e.error}`);
+            }
+          },
+        });
+        const stop = () => bus.close().then(() => process.exit(0), () => process.exit(1));
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
       } catch (err) {
         siteFail(err.message ?? err);
       }

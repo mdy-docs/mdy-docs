@@ -223,22 +223,26 @@ patterns, no `>` wildcards, no per-subscriber groups in document code. Names
 are exact and one-to-one. That is a smaller contract to keep working than the
 one sukkal currently offers, which is the right direction for a dependency.
 
-## Registration is the runtime's business, and it should be lazy
+## Registration is the runtime's business, and it is one line ✅
 
 Nothing declares itself, so the runtime cannot enumerate "the pages that
 receive" — every page is addressable in principle, and registering a sukkal
 consumer for all N pages of a site would be absurd.
 
-The resolution is **lazy per-name consumers**: the runtime holds one catch-all
-push registration for discovery, and the first time a message actually arrives
-for a name, it creates that name's durable consumer and routes to it from then
-on. The set of live endpoints is discovered from traffic rather than declared.
+This plan proposed **lazy per-name consumers** to get around that: a catch-all
+for discovery, and a durable consumer created per name on first traffic.
+Building it showed that was solving a problem sukkal does not have. Receipts
+there are keyed `<subject>/<consumer>`, so one catch-all registration —
+`PUT /push/>` — is *already* "N ordinary subscriptions discovered by pattern
+instead of by name". Each page gets its own receipt, its own lag and its own
+retry, and the broker walks its matches round-robin so no page starves behind
+a busy one. The lazy machinery would have bought precisely nothing.
 
-The alternative — route everything through the single catch-all and keep
-receipts host-side — is simpler but couples every page's retry and lag into
-one ordered stream, where one poisoned message stalls unrelated work. The lazy
-form keeps sukkal's per-consumer receipts, independent retry and per-name lag,
-at no cost in document-side API. Take the lazy form.
+So registration is one `PUT` at startup, re-asserted on a timer. The
+heartbeat is not a poll — it carries no cursor and asks for nothing, it only
+re-states where to deliver — and it exists because a broker that came back on
+a rebuilt store has no record of the subscription, which from the runtime's
+side is indistinguishable from having nothing to send.
 
 ## Publishes are deferred and flushed on success
 
@@ -317,11 +321,41 @@ Three things the implementation settled that the plan had guessed at:
     `a/b/c.mdy` and `a.b/c.mdy` both derive `a.b.c`, and silently choosing
     one would deliver somebody's messages to the wrong page.
 
-### Phase 1 — `mdy bus`, pages as endpoints
+### Phase 1 — `mdy bus`, pages as endpoints ✅
 
-Catch-all registration, lazy per-name consumers, render-per-message,
-ack-by-reply. Exit: two pages, one publishing to the other across a broker
-restart, with nothing in either page's front matter but its name.
+Catch-all registration, render-per-message, ack-by-reply. Exit: two pages, one
+publishing to the other across a broker restart, with nothing in either page's
+front matter but its name.
+
+**Done.** [../bin/bus.js](../bin/bus.js) is the runtime and `mdy bus` runs it;
+[../src/script-site.js](../src/script-site.js) gained `openScriptSite` — a
+site built but not run, which is what a process that renders on demand needs
+and a build does not. The entry document is never rendered by the bus, because
+nothing in this design registers anything.
+
+Verified against a real broker: `mdy build --publish` sends two orders,
+each delivery renders `handlers/invoice.mdy`, which publishes onward to
+`handlers/mailer.mdy`, which is delivered in turn. The broker was then killed
+and restarted on its store: delivery resumed with **no replay** of what had
+already been acked (`acked: 5, lag: 0`), which is the receipt doing its job.
+
+What the implementation settled:
+
+  - **Lazy per-name consumers were unnecessary** — see above.
+  - **`fetch` cannot register the catch-all.** It percent-encodes the path, so
+    `PUT /push/>` arrives as `/push/%3E` and is refused as a bad pattern. The
+    registration builds its path by hand over `node:http`; sukkal's own client
+    carries the same note, and its README records both its clients hitting
+    this. `bin/sukkal.js` may keep using `fetch`, because a publish addresses
+    a *name* and every character a name may contain is URL-safe.
+  - **An undeliverable message is acked and dropped, not refused.** Refusing
+    would redeliver it forever. A name this set has no page for — or has two
+    pages for — is logged and discarded, which is the one case that genuinely
+    belongs in a dead-letter channel (Phase 3).
+  - **`req.msg` is the one reserved key.** A delivered page gets the message
+    as `req`, exactly as `$.render(name, data)` binds it, plus `msg` carrying
+    `{ name, index, attempts }` — which is what a page needs to dedupe or to
+    notice it is being retried.
 
 ### Phase 2 — promote to a fixed native
 
@@ -351,6 +385,15 @@ messaging state is just more data.
 - **Is `mdy bus` a separate process at all?** The receiving set and the site
   set are the same set. If they stay the same, `mdy serve --bus` may beat a
   third command.
+- **Publishing is not idempotent, and a rebuild resends everything.** Running
+  Phase 1 made this obvious: `mdy build --publish` twice publishes every
+  message twice, because `$.publish` has no dedup key and each send gets a
+  fresh index. sukkal already supports `POST /pub/<subject>?id=<key>` and
+  collapses a repeat, so the mechanism exists — what is missing is a decision
+  about where the key comes from. Nothing in a document is naturally unique,
+  so it probably has to be the publisher's to supply:
+  `$.publish(name, data, { id })`. Until then, pages reached by a rebuild must
+  be idempotent themselves.
 - **Binjson across `__call`.** Worth doing for messaging alone? Probably not.
   Worth doing for `$.find` returning real dates? Different question, same
   change — decide them together.

@@ -1,0 +1,7 @@
+title: Mail
++++
+% // The end of the chain: reached only because handlers/invoice.mdy
+% // published to it while being delivered itself.
+= Mail to {{ req.to }}
+
+Re: order {{ req.about }} (delivery #{{ req.msg.index }}).

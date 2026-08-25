@@ -92,6 +92,49 @@ import { buildImportGraph } from './imports.js';
  * renderSite/buildSite's own split.
  */
 export async function renderScriptSite(root, options = {}) {
+  const site = await openScriptSite(root, options);
+  const { set, outputs, binaryOutputs, messages, roots } = site;
+
+  const entryPath = options.entry ?? 'main.mdy';
+  const entryIndex = set.docs.find((d) => d.data.path === entryPath)?.index;
+  if (entryIndex === undefined) {
+    throw new Error(`renderScriptSite: entry script not found at ${JSON.stringify(entryPath)} (looked among ${set.docs.length} document(s) under ${site.root})`);
+  }
+
+  const today = normalizeDate(options.now ?? new Date());
+  const context = { today, ...options.context };
+  // Both readings of "what the entry itself produced": the finished document,
+  // and the text its own code wrote. An entry script is usually run for its
+  // $.emit side effects and neither is used at all, but the CLI shows one or
+  // the other and they are not the same thing — one document in three here
+  // deliberately is not markup.
+  const result = await set.renderResult(entryIndex, context);
+
+  return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, messages, roots };
+}
+
+/**
+ * A script-defined site OPENED but not run: the whole import graph built,
+ * every native wired, every page's message name resolved — and no entry
+ * document rendered.
+ *
+ * renderScriptSite is this plus "now render the entry", which is what a
+ * build wants. What wants the other half is a long-running process that
+ * renders pages on demand rather than once: `mdy bus` renders whichever
+ * page a delivered message is addressed to (see bin/bus.js), and never
+ * runs the entry at all, because nothing in this design registers
+ * anything — a page is addressable because it exists.
+ *
+ * Returns `{ set, pages, messages, outputs, binaryOutputs, roots, root }`.
+ * `pages` is `Map<messageName, doc[]>` — an array per name because two
+ * paths can collapse to one (see below), which is an error worth
+ * reporting at publish rather than resolving silently. `set.renderResult(
+ * index, data)` renders any of them.
+ *
+ * @param {string} root
+ * @param {object} [options] as renderScriptSite's, minus `entry`/`now`/`context`
+ */
+export async function openScriptSite(root, options = {}) {
   const fs = options.fs ?? nodeFsProvider();
   if (!options.fs) root = (await import('node:path')).resolve(root);
 
@@ -142,20 +185,5 @@ export async function renderScriptSite(root, options = {}) {
     else pages.set(name, [doc]);
   }
 
-  const entryPath = options.entry ?? 'main.mdy';
-  const entryIndex = set.docs.find((d) => d.data.path === entryPath)?.index;
-  if (entryIndex === undefined) {
-    throw new Error(`renderScriptSite: entry script not found at ${JSON.stringify(entryPath)} (looked among ${set.docs.length} document(s) under ${root})`);
-  }
-
-  const today = normalizeDate(options.now ?? new Date());
-  const context = { today, ...options.context };
-  // Both readings of "what the entry itself produced": the finished document,
-  // and the text its own code wrote. An entry script is usually run for its
-  // $.emit side effects and neither is used at all, but the CLI shows one or
-  // the other and they are not the same thing — one document in three here
-  // deliberately is not markup.
-  const result = await set.renderResult(entryIndex, context);
-
-  return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, messages, roots };
+  return { set, pages, messages, outputs, binaryOutputs, roots, root };
 }
