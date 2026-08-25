@@ -1,0 +1,11 @@
+% // An ordinary layout: rendered by reference with data bound as `req`.
+<html
+  <head
+    <title
+      {{ req.title }}
+  <body
+= {{ req.title }}
+
+% for (const order of req.orders) {
+- **{{ order.customer }}** — {{ order.item }} (${{ order.total }})
+% }

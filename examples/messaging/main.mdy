@@ -1,0 +1,24 @@
+title: Order intake
++++
+% // A script-defined site that also SENDS. Everything here is ordinary
+% // mdy — $.find to select, $.render to compose, $.emit to write a page —
+% // with one addition: $.publish hands a page a job to do later.
+% //
+% // $.render(name, data) and $.publish(name, data) are the same call in
+% // two tenses. The first renders the page now and gives back its tree;
+% // the second queues it, durably, for a process that renders it later.
+% // So there is nothing to subscribe to and no handler to register:
+% // handlers/invoice.mdy is addressable because it exists.
+%
+% const orders = $.find({ ext: ".yaml" }).filter((d) => d.path.indexOf("orders/") === 0)
+%
+% $.emit("index.html", $.render({ path: "layouts/orders.mdy" }, { title: res.data.title, orders: orders }))
+%
+% // One message per order, addressed to the page that will do the work.
+% // Nothing is sent here: $.publish only queues. The build has to finish
+% // successfully before anything leaves (src/publish.js), which is why a
+% // broken template never publishes half a batch, and why saving this
+% // file in watch mode does not re-send yesterday's orders.
+% for (const order of orders) {
+%   $.publish("handlers.invoice", { id: order.id, customer: order.customer, total: order.total })
+% }

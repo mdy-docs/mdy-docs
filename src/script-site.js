@@ -2,6 +2,7 @@ import { nodeFsProvider } from './fs-provider.js';
 import { toHtml } from './mdy.js';
 import { normalizeDate, rfc822 } from './format.js';
 import { createResizeNative } from './images.js';
+import { createPublishNative, messageName, nameProblem } from './publish.js';
 import { tokenize } from './search.js';
 import { buildImportGraph } from './imports.js';
 
@@ -73,13 +74,17 @@ import { buildImportGraph } from './imports.js';
  *                   e.g. the CLI's own "[read] <path>" logging; see
  *                   bin/mdy.js)
  *
- * Returns `{ output, text, outputs, binaryOutputs, roots }` — `output` is
+ * Returns `{ output, text, outputs, binaryOutputs, messages, roots }` —
+ * `output` is
  * the entry script's own rendered HTML and `text` the text its code wrote
  * (its own normal return values, same as any `$.render` / `$.text`);
  * `outputs` is a `Map<path, content>` of
  * everything it (or anything it `$.render`s or imports along the way)
  * produced via `$.emit`; `binaryOutputs` is a `Map<path, Uint8Array>` of
- * everything it produced via `$.resize`; `roots` is every resolved
+ * everything it produced via `$.resize`; `messages` is an array of
+ * `{ name, data, fromIndex, fromName }`, one per `$.publish`, in call
+ * order and NOT sent anywhere — this function has no transport and does
+ * not want one (see ./publish.js); `roots` is every resolved
  * directory in the import graph, `root` itself last (build.js/serve.js's
  * static/ passthrough copies in this order, so `root`'s own static/ wins
  * any filename collision against something it imports). Nothing is
@@ -91,10 +96,25 @@ export async function renderScriptSite(root, options = {}) {
   if (!options.fs) root = (await import('node:path')).resolve(root);
 
   const binaryOutputs = new Map();
+
+  // $.publish's name -> document(s) index, filled in AFTER the graph is
+  // built. Natives are constructed per directory while the graph is still
+  // being walked, so there is no set to resolve against yet — but a native
+  // is only ever CALLED during a render, which is strictly later, so a
+  // late binding is enough. An array per name, not one document: two paths
+  // can collapse to the same name (a/b/c.mdy and a.b/c.mdy both make
+  // a.b.c), and that is worth a clear error at publish rather than a
+  // silent last-one-wins.
+  const messages = [];
+  let pages = new Map();
   const buildNatives = (absDir) => ({
     resize: createResizeNative({ fs, root: absDir, registerBinaryOutput: (path, bytes) => binaryOutputs.set(path, bytes) }),
     tokenize,
     rfc822,
+    publish: createPublishNative({
+      resolveName: (name) => pages.get(name) ?? [],
+      registerMessage: (message) => messages.push(message),
+    }),
   });
 
   const outputs = new Map();
@@ -107,6 +127,20 @@ export async function renderScriptSite(root, options = {}) {
     cache: new Map(),
     roots,
   });
+
+  // Only documents that can actually RENDER are addressable: a message
+  // delivered to a page renders it, and a .png or a .yaml record has
+  // nothing to run. Restricting the index this way also keeps most name
+  // collisions from ever existing — static/logo.png and static/logo.jpg
+  // would both derive static.logo, and neither is a message endpoint.
+  for (const doc of set.docs) {
+    const ext = String(doc.data?.ext ?? '').toLowerCase();
+    if (ext !== '.mdy' && ext !== '.md') continue;
+    const name = messageName(doc.data);
+    if (name === null || nameProblem(name) !== null) continue;
+    if (pages.has(name)) pages.get(name).push(doc);
+    else pages.set(name, [doc]);
+  }
 
   const entryPath = options.entry ?? 'main.mdy';
   const entryIndex = set.docs.find((d) => d.data.path === entryPath)?.index;
@@ -123,5 +157,5 @@ export async function renderScriptSite(root, options = {}) {
   // deliberately is not markup.
   const result = await set.renderResult(entryIndex, context);
 
-  return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, roots };
+  return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, messages, roots };
 }

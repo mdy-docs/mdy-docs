@@ -60,7 +60,7 @@ export async function renderSite(root, options = {}) {
   const fs = options.fs ?? nodeFsProvider();
   const entry = options.entry ?? 'main.mdy';
 
-  const { outputs, binaryOutputs, roots } = await renderScriptSite(root, {
+  const { outputs, binaryOutputs, messages, roots } = await renderScriptSite(root, {
     fs,
     entry,
     now: options.now,
@@ -71,6 +71,7 @@ export async function renderSite(root, options = {}) {
   return {
     outputs,
     binaryOutputs,
+    messages,
     roots,
     stats: { reused: [], rebuilt: [...outputs.keys(), ...binaryOutputs.keys()] },
   };
@@ -83,7 +84,8 @@ export async function renderSite(root, options = {}) {
  * once per file actually written under outDir — a page/binary output or a
  * static/ passthrough — dist-relative path, in write order (a hook, not
  * policy — e.g. the CLI's own "[write] <path>" logging; see bin/mdy.js).
- * Returns { pages, outDir }.
+ * Returns { pages, outDir, messages } — `messages` is every $.publish the
+ * build made, in call order, unsent (see src/publish.js).
  */
 export async function buildSite(root, options = {}) {
   const { dirname, join, resolve } = await import('node:path');
@@ -93,7 +95,7 @@ export async function buildSite(root, options = {}) {
 
   root = resolve(root);
   const outDir = resolve(options.outDir ?? join(root, 'dist'));
-  const { outputs, binaryOutputs, roots } = await renderSite(root, options);
+  const { outputs, binaryOutputs, messages, roots } = await renderSite(root, options);
   const onWrite = options.onWrite;
 
   for (const [file, html] of outputs) {
@@ -141,5 +143,11 @@ export async function buildSite(root, options = {}) {
     await cp(staticDir, outDir, { recursive: true, filter: notSidecar });
   }
 
-  return { pages: outputs.size, outDir };
+  // Messages are handed back rather than sent: they are the build's
+  // OUTPUT, exactly like outputs/binaryOutputs, and this function's job
+  // ends at the filesystem. Flushing them only now — after every write
+  // above has succeeded — is the deferred half of $.publish (see
+  // src/publish.js); a build that throws on its way here never publishes
+  // anything, which is the point.
+  return { pages: outputs.size, outDir, messages };
 }

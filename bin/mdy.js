@@ -39,6 +39,7 @@ const timestamp = () => dim(new Date().toLocaleTimeString());
 const tagRead = () => blue('[read]');
 const tagWrite = () => green('[write]');
 const tagChange = () => yellow('[change]');
+const tagSend = () => magenta('[send]');
 
 // `mdy build`/`mdy serve` — the static-site layer. Handled first and
 // unconditionally: a bare `mdy [input...]` treats every positional as a
@@ -48,6 +49,7 @@ const SITE_USAGE = `mdy — build sites from mdy documents.
 
 Usage:
   mdy build [site-dir] [--out <dir>] [--drafts] [--future] [--entry <path>]
+            [--publish [--broker <url>]]
       render the site (default dir: ., out: <site-dir>/dist)
   mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
       dev server: watch, rebuild, live reload (default port: 4321)
@@ -57,6 +59,13 @@ or --entry <path>) decides everything itself — content, URLs, layouts,
 output shape — via $/$.find/$.render/$.emit. --drafts/--future are
 threaded through as plain context booleans for it to interpret, not
 filtered here.
+
+$.publish(name, data) queues a message for another page — $.render
+deferred and made durable. Messages are collected during the build and
+sent only once it has fully succeeded, so a failed build publishes
+nothing and a watch-mode rebuild does not re-fire what the last one sent.
+Without --publish they are reported and dropped; with it they go to a
+sukkal broker (--broker, default http://127.0.0.1:8080).
 `;
 
 /** Shared flag parsing for build/serve: positional root + options. */
@@ -69,6 +78,8 @@ function parseSiteArgs(args) {
     else if (a === '--drafts') opts.drafts = true;
     else if (a === '--future') opts.future = true;
     else if (a === '--entry') opts.entry = args[++i];
+    else if (a === '--publish') opts.publish = true;
+    else if (a === '--broker') opts.broker = args[++i];
     else opts.root = a;
   }
   return opts;
@@ -132,10 +143,10 @@ if (['build', 'serve'].includes(process.argv[2])) {
   }
   switch (siteCmd) {
     case 'build': {
-      const { root, ...opts } = parseSiteArgs(siteRest);
+      const { root, publish, broker, ...opts } = parseSiteArgs(siteRest);
       try {
         const started = Date.now();
-        const { pages, outDir } = await buildSite(root, {
+        const { pages, outDir, messages } = await buildSite(root, {
           ...opts,
           onSource: (meta) => console.log(`${tagRead()} ${meta.path}`),
           onWrite: (file) => console.log(`${tagWrite()} ${file}`),
@@ -143,6 +154,24 @@ if (['build', 'serve'].includes(process.argv[2])) {
         console.log(
           `${green('✓')} built ${bold(pages)} page(s) → ${cyan(outDir)} ${dim(`(${Date.now() - started}ms)`)}`
         );
+        // Strictly after the build reported success — that ordering IS
+        // the deferred half of $.publish (src/publish.js), not a
+        // formatting choice.
+        if (messages.length > 0) {
+          if (publish) {
+            const { publishMessages } = await import('./sukkal.js');
+            const { sent } = await publishMessages(messages, {
+              url: broker,
+              onSend: ({ name, bytes }) => console.log(`${tagSend()} ${name} ${dim(`(${bytes} bytes)`)}`),
+            });
+            console.log(`${green('✓')} published ${bold(sent)} message(s)`);
+          } else {
+            for (const m of messages) console.log(`${dim('[hold]')} ${m.name}`);
+            console.log(
+              dim(`  ${messages.length} message(s) not sent — pass --publish to send them to a sukkal broker`)
+            );
+          }
+        }
       } catch (err) {
         siteFail(err.message ?? err);
       }

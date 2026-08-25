@@ -1,0 +1,13 @@
+title: Invoice
++++
+% // A page a message is addressed to. Its name is its path without the
+% // extension, "/" written as ".", so this is `handlers.invoice` — no
+% // front matter declares it and nothing registers it.
+% //
+% // Delivered, it renders with the message as `req`, exactly as it would
+% // under $.render(name, data). Whether the caller waited for the answer
+% // is not this page's business: rendered inline it returns a tree,
+% // delivered from a queue it runs for its effects.
+= Invoice for {{ req.customer }}
+
+Order {{ req.id }} — ${{ req.total }} due.

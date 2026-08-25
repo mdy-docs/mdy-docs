@@ -52,7 +52,13 @@ inside one build is not an address.
 
 A message target is therefore a **name**: a stable string, derived by default
 from the document's `data.path` with the extension dropped and `/` mapped to
-`.`, overridable by `name:` in front matter.
+`.`, overridable by `messageName:` in front matter.
+
+Not `name:`, which is the obvious spelling and is already taken twice
+over: every raw source carries `name` as its file's base name
+(`walkRawSources` in [../src/vault.js](../src/vault.js)), and a YAML data
+record commonly declares its own — a person's name, a product's. Honouring
+it would let an author's data silently readdress their messages.
 
 ```
 handlers/invoice.mdy   →  handlers.invoice
@@ -114,7 +120,7 @@ A delivered message renders the named page with the message as `req`. That is
 type, no lifecycle, no registration:
 
 ```yaml
-name: handlers.invoice
+messageName: handlers.invoice
 +++
 % const order = req.data
 % $.publish('handlers.mailer', { to: order.email, total: order.total })
@@ -170,7 +176,7 @@ caller passed in. That is worth naming precisely, because it looks like reply
 and isn't:
 
 ```yaml
-name: handlers.invoice
+messageName: handlers.invoice
 +++
 % $.publish('handlers.mailer', { invoice: id })
 ```
@@ -279,7 +285,7 @@ Step 4 is where reliability comes from and where the sharp edges live:
 
 ## Phases
 
-### Phase 0 — `$.publish` through `options.natives` (no core change)
+### Phase 0 — `$.publish` through `options.natives` (no core change) ✅
 
 `options.natives` already merges any `{ name: fn }` into every render *and*
 wires `$.<name>(...)` into the generated program (`buildDocumentSet` in
@@ -289,6 +295,27 @@ while the guest sees an ordinary call. So `$.publish` is one entry in
 resolution and the deferred flush. Exit: a document in `examples/` publishes on
 build with `--publish`, and the ergonomics have been felt before anything is
 frozen.
+
+**Done.** [../src/publish.js](../src/publish.js) derives and validates names
+and collects messages; [../src/script-site.js](../src/script-site.js) wires
+the native and returns `messages` alongside `outputs`; `buildSite` hands them
+back after every write has succeeded; `mdy build --publish [--broker <url>]`
+sends them from [../bin/sukkal.js](../bin/sukkal.js) — outside `src/`, so no
+transport reaches the browser bundle. binjson comes from nisaba's own codec,
+which mdy already depends on, so no broker client library was needed:
+a publish is one POST. See [../examples/messaging](../examples/messaging),
+verified end to end against a real broker.
+
+Three things the implementation settled that the plan had guessed at:
+
+  - `name:` had to become `messageName:`, above.
+  - Only `.mdy`/`.md` documents are addressable. A message renders a page,
+    and a `.yaml` record or a `.png` has nothing to run — and indexing every
+    file would make `static/logo.png` and `static/logo.jpg` collide on
+    `static.logo` before either could be published to.
+  - Colliding names are an error at publish rather than last-one-wins:
+    `a/b/c.mdy` and `a.b/c.mdy` both derive `a.b.c`, and silently choosing
+    one would deliver somebody's messages to the wrong page.
 
 ### Phase 1 — `mdy bus`, pages as endpoints
 
