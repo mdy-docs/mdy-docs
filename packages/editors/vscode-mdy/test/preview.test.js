@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -121,6 +121,13 @@ test('other packages and unparseable package.json files are walked past; nothing
 });
 
 test('this repo resolves to itself, and engineEntry prefers src/mdy.js', () => {
+  // Against the REAL filesystem, so the walk has to survive however npm
+  // laid this workspace out. It comes back through a symlink here: the
+  // root carries node_modules/mdy-docs -> . , hoisted from the file:
+  // dependency the sub-packages declare on the repo, and nearest
+  // node_modules wins. That spelling is npm's business and changes with
+  // an install, so what is pinned is the package REACHED, not the path
+  // taken to it.
   const io = {
     isFile: (p) => {
       try {
@@ -131,9 +138,12 @@ test('this repo resolves to itself, and engineEntry prefers src/mdy.js', () => {
     },
     readText: (p) => readFileSync(p, 'utf8'),
   };
+  const repo = join(here, '..', '..', '..', '..');
   const pkg = resolveEnginePackage(here, io);
-  assert.equal(pkg, join(here, '..', '..', '..', '..'));
+  assert.equal(realpathSync(pkg), realpathSync(repo));
+  // src/mdy.js, not index.js — and it is really there, through the link.
   assert.equal(engineEntry(pkg, io), join(pkg, 'src', 'mdy.js'));
+  assert.equal(realpathSync(engineEntry(pkg, io)), join(realpathSync(repo), 'src', 'mdy.js'));
 });
 
 // --- rewriteResourceUrls
