@@ -142,3 +142,7 @@ dist
 
 # packaged VSCode extension (packages/editors/vscode-mdy)
 *.vsix
+
+# sukkal broker store — `sukkal serve` defaults to ./sukkal-data, so it
+# lands here whenever the broker is started from the repo root.
+sukkal-data/

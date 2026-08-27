@@ -38,8 +38,8 @@ make -C sukkal-msg
 Then two terminals, both on defaults — no flags, no configuration:
 
 ```sh
-# 1. the broker
-sukkal-msg/bin/sukkal serve
+# 1. the broker — --dir keeps its store out of wherever you started it
+sukkal-msg/bin/sukkal serve --dir /tmp/sukkal
 
 # 2. everything else
 mdy dev examples/messaging
