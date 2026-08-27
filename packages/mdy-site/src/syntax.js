@@ -249,26 +249,45 @@ export function blockRegions(source) {
  * @returns {number}
  */
 function matter(lines, out) {
+  /*
+   * Two spellings, both real, in two different layers.
+   *
+   * The LANGUAGE takes a fenced block: `+++`, YAML, `+++` (docs/language.md
+   * §11, extractMatter in src/parse/matter.js). A DOCUMENT SET splits each
+   * document on its first bare `+++` instead, everything above it being the
+   * YAML (the README, parseDocument in src/mdy.js) — which is how every
+   * example in the repo and the live-preview editor writes it.
+   *
+   * Which one a line opens is decided by the first line: `+++` at the top
+   * can only be the fenced form, and it has to close or it is prose. A
+   * document that opens with anything else is the split form, and its
+   * separator is the first bare `+++` there is.
+   */
   let start = 0
-
   while (start < lines.length && !lines[start].trim()) start += 1
-  if (lines[start]?.trim() !== '+++') return 0
 
-  let end = start + 1
+  if (lines[start]?.trim() === '+++') {
+    let end = start + 1
+    while (end < lines.length && lines[end].trim() !== '+++') end += 1
+    if (end >= lines.length) return 0
 
-  while (end < lines.length && lines[end].trim() !== '+++') end += 1
-  if (end >= lines.length) return 0
-
-  for (let index = 0; index < start; index += 1) out.push('')
-
-  out.push(span('mdy-matter-fence', lines[start]))
-  if (end > start + 1) {
-    out.push(embed(lines.slice(start + 1, end).join('\n'), 'yaml'))
+    for (let index = 0; index < start; index += 1) out.push('')
+    out.push(span('mdy-matter-fence', lines[start]))
+    if (end > start + 1) {
+      out.push(embed(lines.slice(start + 1, end).join('\n'), 'yaml'))
+    }
+    out.push(span('mdy-matter-fence', lines[end]))
+    return end + 1
   }
-  out.push(span('mdy-matter-fence', lines[end]))
 
-  return end + 1
+  const separator = lines.findIndex((line) => /^\+\+\+[ \t]*$/.test(line))
+  if (separator === -1) return 0
+
+  out.push(embed(lines.slice(0, separator).join('\n'), 'yaml'))
+  out.push(span('mdy-matter-fence', lines[separator]))
+  return separator + 1
 }
+
 
 /**
  * Paint a fenced block, opener to closer, and say which line to read next.
