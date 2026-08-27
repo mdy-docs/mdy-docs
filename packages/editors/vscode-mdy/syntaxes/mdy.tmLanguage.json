@@ -2,10 +2,13 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "mdy",
   "scopeName": "text.html.markdown.mdy",
-  "comment": "MDY is not Markdown, and this grammar no longer borrows Markdown's. It used to `include: text.html.markdown` and inject template tags into it, which needed an `injections` entry with priority to reach inside the contexts that grammar opens for headings, lists and emphasis. None of that is here any more: every MDY block rule is anchored to the start of its own line, so the whole language is a flat list of line patterns and there is nothing to inject into. The reference implementation is the demo editor's own highlighter (packages/mdy-site/src/syntax.js), which walks the source with the parser's own lexical rules; where this file cannot match it \u2014 a TextMate grammar sees one line at a time and cannot count brackets \u2014 the approximation is written down in the rule that makes it.",
+  "comment": "MDY is not Markdown, and this grammar no longer borrows Markdown's. It used to `include: text.html.markdown` and inject template tags into it, which needed an `injections` entry with priority to reach inside the contexts that grammar opens for headings, lists and emphasis. None of that is here any more: every MDY block rule is anchored to the start of its own line, so the whole language is a flat list of line patterns and there is nothing to inject into. The reference implementation is the demo editor's own highlighter (packages/mdy-site/src/syntax.js), which walks the source with the parser's own lexical rules; where this file cannot match it — a TextMate grammar sees one line at a time and cannot count brackets — the approximation is written down in the rule that makes it.",
   "patterns": [
     {
       "include": "#frontmatter-start"
+    },
+    {
+      "include": "#blank-document-start"
     },
     {
       "include": "#document-separator"
@@ -57,10 +60,15 @@
       ]
     },
     "frontmatter-start": {
-      "comment": "YAML front matter at the very start of the file. A TextMate grammar tokenizes one line at a time, so a begin pattern can never look ahead to confirm a later line is a bare +++ (the real, only rule src/mdy.js uses \u2014 see FRONT_MATTER_SEPARATOR/parseDocument). This approximates it from the one line we CAN see: front matter starts where the first line looks like a YAML `key:` mapping entry, or is +++ itself (an empty front-matter block, which parseDocument explicitly allows). A document whose body happens to open with `Word: text` is the one (rare) case this over-triggers on.",
+      "comment": "YAML front matter at the very start of the file: `+++`, YAML, `+++` (docs/language.md §11, and extractMatter/parseDocument in src/). The opening fence is CONSUMED by `begin` rather than looked ahead to. It used to be a zero-width `\\A` lookahead, which put the scanner at offset 0 of line 1 with `end` still to try there — and `^\\+\\+\\+[ \\t]*$` matched that very same opening fence, so the region closed on the line it opened, the opener was painted as the closer, and the YAML body and the real closing fence got nothing at all. Every fenced document in the repo hit it. Two approximations remain, both from tokenizing one line at a time. An opener with no closer paints as front matter, where the parser leaves it as prose — nothing here can look ahead to know; `end` also breaks on a `---` so that costs one document rather than the file. And blank lines before the opener, which parseDocument skips over, are not skipped here: `\\A` is the first line or nothing.",
       "name": "meta.frontmatter.mdy",
-      "begin": "\\A(?=[A-Za-z_][\\w.-]*[ \\t]*:([ \\t]|$)|\\+\\+\\+[ \\t]*$)",
-      "end": "^\\+\\+\\+[ \\t]*$",
+      "begin": "\\A\\+\\+\\+[ \\t]*$",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy"
+        }
+      },
+      "end": "^\\+\\+\\+[ \\t]*$|^(?=---[ \\t]*$)",
       "endCaptures": {
         "0": {
           "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy"
@@ -73,7 +81,7 @@
       ]
     },
     "document-separator": {
-      "comment": "A bare --- line splits a source into multiple documents (splitDocuments). Each new document may have its own front matter, checked the same heuristic way as frontmatter-start, against the line immediately following the separator; otherwise this --- is just a plain separator and what follows is body. `end` is a zero-width lookahead for any real (non-newline) character, deliberately NOT [\\s\\S]: vscode-textmate appends a synthetic trailing newline to every tokenized line (so $ anchors work), and [\\s\\S] would match THAT, closing this region one line too early \u2014 before the nested front-matter pattern below ever gets a look at the real next line. The separator carries markup.heading.* IN ADDITION to its punctuation scope (space-separated names push both onto the token's scope stack, deeper one last): a bare --- is the file's most structural line \u2014 it starts a whole new document \u2014 and plain punctuation scopes render dim in most themes. Same treatment for the +++ front-matter fences.",
+      "comment": "A bare --- line splits a source into multiple documents (splitDocuments). Each new document may open front matter of its own, so that rule is nested here against the lines that follow the separator. `end` is a zero-width lookahead for any real (non-newline) character, deliberately NOT [\\s\\S]: vscode-textmate appends a synthetic trailing newline to every tokenized line (so $ anchors work), and [\\s\\S] would match THAT, closing this region one line too early — before the nested front-matter pattern below ever gets a look at the real next line. Blank lines are not \"real\" by that test, which is what lets front matter open a line or two below the separator, the way parseDocument allows. The separator carries markup.heading.* IN ADDITION to its punctuation scope (space-separated names push both onto the token's scope stack, deeper one last): a bare --- is the file's most structural line — it starts a whole new document — and plain punctuation scopes render dim in most themes. Same treatment for the +++ front-matter fences.",
       "name": "meta.after-document-separator.mdy",
       "begin": "^---[ \\t]*$",
       "beginCaptures": {
@@ -86,8 +94,13 @@
       "patterns": [
         {
           "name": "meta.frontmatter.mdy",
-          "begin": "(?=[A-Za-z_][\\w.-]*[ \\t]*:([ \\t]|$)|\\+\\+\\+[ \\t]*$)",
-          "end": "^\\+\\+\\+[ \\t]*$",
+          "begin": "^\\+\\+\\+[ \\t]*$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy"
+            }
+          },
+          "end": "^\\+\\+\\+[ \\t]*$|^(?=---[ \\t]*$)",
           "endCaptures": {
             "0": {
               "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy"
@@ -119,7 +132,7 @@
       ]
     },
     "script-line": {
-      "comment": "One `%` line is one line of code. What it leaves open encloses the markup under it \u2014 which is how a loop is written \u2014 so its brackets are deliberately not counted and the region is exactly this line. Leading space carries no meaning: the parser lifts a `%` line out before it counts a single column, so how far in the author writes their code is their own business. `\\%` at the start of a line is the literal character instead, handled by #escape and matched one column earlier, so it wins.",
+      "comment": "One `%` line is one line of code. What it leaves open encloses the markup under it — which is how a loop is written — so its brackets are deliberately not counted and the region is exactly this line. Leading space carries no meaning: the parser lifts a `%` line out before it counts a single column, so how far in the author writes their code is their own business. `\\%` at the start of a line is the literal character instead, handled by #escape and matched one column earlier, so it wins.",
       "name": "meta.embedded.line.mdy",
       "begin": "^[ \\t]*(%)(?!%)",
       "beginCaptures": {
@@ -135,7 +148,7 @@
       ]
     },
     "fence": {
-      "comment": "Three or more backticks or tildes fence a block of code. Everything up to the closing fence is content, whatever it looks like \u2014 the first word after the opener names the language. \\1 makes the closer match the opener's own run, so a longer fence holds a shorter one and a tilde fence holds backticks.",
+      "comment": "Three or more backticks or tildes fence a block of code. Everything up to the closing fence is content, whatever it looks like — the first word after the opener names the language. \\1 makes the closer match the opener's own run, so a longer fence holds a shorter one and a tilde fence holds backticks.",
       "name": "markup.fenced_code.block.mdy",
       "begin": "^[ \\t]*(`{3,}|~{3,})[ \\t]*([^\\s`]*)[^\\n]*$",
       "beginCaptures": {
@@ -207,7 +220,7 @@
       }
     },
     "element": {
-      "comment": "A line starting with `<` opens an element, and everything indented two columns past it is its content \u2014 there is no closing tag to match, so this is a single-line rule and the nesting is the indentation's business, not the grammar's. Space after the `<` means nothing, the closing `>` is optional, and anything after it is inline content.",
+      "comment": "A line starting with `<` opens an element, and everything indented two columns past it is its content — there is no closing tag to match, so this is a single-line rule and the nesting is the indentation's business, not the grammar's. Space after the `<` means nothing, the closing `>` is optional, and anything after it is inline content.",
       "begin": "^[ \\t]*(<)[ \\t]*([A-Za-z][A-Za-z0-9-]*)?",
       "beginCaptures": {
         "1": {
@@ -351,12 +364,12 @@
       ]
     },
     "escape": {
-      "comment": "A backslash before `{{` opts a line out of interpolation, and a backslash before the `%` a line opens with does the same for a code line \u2014 both come off in the output. Listed before every rule they could collide with; at the same position it is not even needed, since the escape's match starts one column earlier and leftmost always wins.",
+      "comment": "A backslash before `{{` opts a line out of interpolation, and a backslash before the `%` a line opens with does the same for a code line — both come off in the output. Listed before every rule they could collide with; at the same position it is not even needed, since the escape's match starts one column earlier and leftmost always wins.",
       "match": "^([ \\t]*)\\\\%|\\\\\\{\\{",
       "name": "constant.character.escape.mdy"
     },
     "interpolation": {
-      "comment": "`{{ expr }}` in content is a JavaScript expression interpolated into the line. It closes at the FIRST `}}`, matching the compiler (which uses indexOf, not brace counting). contentName, NOT name: meta.embedded.line.mdy is mapped to JavaScript in package.json's embeddedLanguages, and a region's `name` covers its begin/end delimiters too \u2014 which made VSCode treat the braces themselves as JS-language brackets and rainbow-colorize them as nested pairs.",
+      "comment": "`{{ expr }}` in content is a JavaScript expression interpolated into the line. It closes at the FIRST `}}`, matching the compiler (which uses indexOf, not brace counting). contentName, NOT name: meta.embedded.line.mdy is mapped to JavaScript in package.json's embeddedLanguages, and a region's `name` covers its begin/end delimiters too — which made VSCode treat the braces themselves as JS-language brackets and rainbow-colorize them as nested pairs.",
       "name": "meta.template.expression.mdy",
       "contentName": "meta.embedded.line.mdy",
       "begin": "\\{\\{",
@@ -405,12 +418,12 @@
       }
     },
     "autolink": {
-      "comment": "URLs in text become links, found before markers so the `//` in `https://` never opens a run of emphasis. Bare domains are not links \u2014 a two-letter country code is a valid suffix, so matching those would turn README.md and node.js into links.",
+      "comment": "URLs in text become links, found before markers so the `//` in `https://` never opens a run of emphasis. Bare domains are not links — a two-letter country code is a valid suffix, so matching those would turn README.md and node.js into links.",
       "match": "(?:[a-z][a-z0-9+.-]*://|mailto:)[^\\s<>\"'`]+|//[\\w-]+(?:\\.[\\w-]+)+(?:/[^\\s<>\"'`]*)?|[\\w.!#$%&'*+/=?^`{|}~-]+@[\\w-]+(?:\\.[\\w-]+)+",
       "name": "markup.underline.link.mdy"
     },
     "reference": {
-      "comment": "`#tag` and `@user`, each only at the start of a word \u2014 which is what keeps the `#` of a URL fragment and the `@` of an email address out of it. The name starts with a letter or an underscore, never a digit, so `#42` stays the issue number it was written as.",
+      "comment": "`#tag` and `@user`, each only at the start of a word — which is what keeps the `#` of a URL fragment and the `@` of an email address out of it. The name starts with a letter or an underscore, never a digit, so `#42` stays the issue number it was written as.",
       "match": "(?<![\\p{L}\\p{N}_])([#@])([\\p{L}_](?:[\\p{L}\\p{N}_-]*[\\p{L}\\p{N}_])?)",
       "name": "variable.other.reference.mdy",
       "captures": {
@@ -424,7 +437,7 @@
       "name": "constant.character.emoji.mdy"
     },
     "marker": {
-      "comment": "Inline formatting toggles rather than nesting: the first occurrence of a sequence opens the span and the next occurrence of the same sequence closes it. A TextMate grammar has no way to model a toggle, so each sequence is scoped where it appears and the theme colours the marker itself \u2014 the same information, without pretending to a structure the language does not have.",
+      "comment": "Inline formatting toggles rather than nesting: the first occurrence of a sequence opens the span and the next occurrence of the same sequence closes it. A TextMate grammar has no way to model a toggle, so each sequence is scoped where it appears and the theme colours the marker itself — the same information, without pretending to a structure the language does not have.",
       "patterns": [
         {
           "match": "!!|\\*\\*",
@@ -449,7 +462,7 @@
       ]
     },
     "js-in-interpolation": {
-      "comment": "JS highlighting inside `{{ }}`. Strings and comments are guarded against `}}` \u2014 the compiler closes at the first one even inside a string (indexOf knows no JS), so a construct that spanned the closer would both diverge from the compiler and eat the delimiter. Guarded constructs simply stop highlighting at the closer; the plain text that remains is a smaller loss than a swallowed delimiter.",
+      "comment": "JS highlighting inside `{{ }}`. Strings and comments are guarded against `}}` — the compiler closes at the first one even inside a string (indexOf knows no JS), so a construct that spanned the closer would both diverge from the compiler and eat the delimiter. Guarded constructs simply stop highlighting at the closer; the plain text that remains is a smaller loss than a swallowed delimiter.",
       "patterns": [
         {
           "match": "//(?:(?!\\}\\})[^\\n])*",
@@ -511,7 +524,7 @@
       ]
     },
     "js-common": {
-      "comment": "Region-free JS token rules shared by every code context. `$` before a `.` is the document's native-function namespace ($.find, $.render, $.emit, $.resize, \u2026) \u2014 highlighted like a language-provided variable, not a plain identifier; `req`, `res` and `transform` are the three names a document is always handed.",
+      "comment": "Region-free JS token rules shared by every code context. `$` before a `.` is the document's native-function namespace ($.find, $.render, $.emit, $.resize, …) — highlighted like a language-provided variable, not a plain identifier; `req`, `res` and `transform` are the three names a document is always handed.",
       "patterns": [
         {
           "match": "\\$(?=\\s*\\.)",
@@ -552,7 +565,7 @@
       ]
     },
     "typography": {
-      "comment": "The three substitutions the parser makes inside text (docs/language.md, Typography): three dots become an ellipsis, exactly two dashes become an em dash, and the drawn arrows become their characters. Each is written exactly, never as a run \u2014 '....' is four dots and '--->' is a rule, not a longer arrow \u2014 so every pattern is bounded on both sides. Arrows come first because '<-->' and '==>' both contain sequences the em-dash rule would otherwise take a bite out of.",
+      "comment": "The three substitutions the parser makes inside text (docs/language.md, Typography): three dots become an ellipsis, exactly two dashes become an em dash, and the drawn arrows become their characters. Each is written exactly, never as a run — '....' is four dots and '--->' is a rule, not a longer arrow — so every pattern is bounded on both sides. Arrows come first because '<-->' and '==>' both contain sequences the em-dash rule would otherwise take a bite out of.",
       "patterns": [
         {
           "name": "constant.character.arrow.mdy",
@@ -567,6 +580,34 @@
           "name": "constant.character.ellipsis.mdy",
           "comment": "Exactly three, for the same reason.",
           "match": "(?<!\\.)\\.\\.\\.(?!\\.)"
+        }
+      ]
+    },
+    "blank-document-start": {
+      "comment": "parseDocument skips blank lines before the opening fence, and after a `---` the separator's own region already tolerates them. This is the same tolerance at the top of the file, which `\\A` alone cannot give: `\\A` is satisfied on the first line or never, so a fence on line 2 is out of its reach. The begin is guarded to a BLANK first line — the one case #frontmatter-start does not cover — which is also what keeps a zero-width begin safe here: `end` cannot match on a blank line, so the region can never open and close at the same offset and spin.",
+      "begin": "\\A(?=[ \\t]*$)",
+      "end": "(?=[^\\n])",
+      "applyEndPatternLast": true,
+      "patterns": [
+        {
+          "name": "meta.frontmatter.mdy",
+          "begin": "^\\+\\+\\+[ \\t]*$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy"
+            }
+          },
+          "end": "^\\+\\+\\+[ \\t]*$|^(?=---[ \\t]*$)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy"
+            }
+          },
+          "patterns": [
+            {
+              "include": "source.yaml"
+            }
+          ]
         }
       ]
     }

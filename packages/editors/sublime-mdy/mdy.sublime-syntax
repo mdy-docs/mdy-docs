@@ -29,11 +29,19 @@ variables:
 
 contexts:
   main:
-    # YAML front matter at the very start of the file. One-line heuristic
-    # (a line-based engine can't look ahead to a later bare +++): front
-    # matter starts where the first line looks like a YAML `key:` entry,
-    # or is +++ itself (an empty block, which the engine allows).
-    - match: '\A(?=[A-Za-z_][\w.-]*[ \t]*:([ \t]|$)|\+\+\+[ \t]*$)'
+    # YAML front matter at the very start of the file: +++, YAML, +++
+    # (docs/language.md §11, parseDocument). The opening fence is CONSUMED
+    # by this match, not looked ahead to — a zero-width push left the
+    # scanner at the same offset with mdy-frontmatter's own pop rule still
+    # to try there, and `^\+\+\+[ \t]*$` matched the very fence that had
+    # just opened the block, so it popped on the line it pushed. Two
+    # approximations remain, both from reading one line at a time: an
+    # opener with no closer paints as front matter where the parser leaves
+    # it as prose (bounded by the `---` bail-out in mdy-frontmatter, so it
+    # costs one document rather than the file), and blank lines before the
+    # opener, which parseDocument skips, are out of \A's reach.
+    - match: '\A\+\+\+[ \t]*$'
+      scope: punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy
       push: mdy-frontmatter
     - include: mdy-body
 
@@ -95,12 +103,19 @@ contexts:
     - match: '^\+\+\+[ \t]*$'
       scope: punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy
       pop: true
+    # Front matter cannot cross a document separator, so an opener that was
+    # never closed spoils its own document and no more.
+    - match: '(?=^---[ \t]*$)'
+      pop: true
     - include: scope:source.yaml
 
-  # After a separator, the first non-empty line decides: YAML-looking →
-  # new front matter, anything else → back to the body.
+  # After a separator, the first non-empty line decides: a +++ fence opens
+  # the new document's front matter, anything else is body. Blank lines are
+  # neither, which is what lets the fence sit a line or two below the
+  # separator, the way parseDocument allows.
   mdy-after-separator:
-    - match: '(?=[A-Za-z_][\w.-]*[ \t]*:([ \t]|$)|\+\+\+[ \t]*$)'
+    - match: '^\+\+\+[ \t]*$'
+      scope: punctuation.definition.frontmatter.mdy markup.heading.frontmatter.mdy
       set: mdy-frontmatter
     - match: '(?=[^\n])'
       pop: true

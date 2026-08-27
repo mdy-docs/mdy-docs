@@ -23,11 +23,24 @@
 export const CONSTRUCTS = [
   // --- structure ---------------------------------------------------------
   /*
-   * Front matter is everything BEFORE the first bare +++ — the parser's own
-   * answer, checked rather than assumed: openDocumentSet('+++\ntitle: R\n+++\nb')
-   * yields { title: 'R' }, and the fenced +++ … +++ spelling yields {}.
+   * Front matter is a FENCED block — `+++`, YAML, `+++` (docs/language.md
+   * §11, extractMatter and parseDocument). The prose here used to describe
+   * the other spelling, YAML above a bare `+++` with no opener, which the
+   * language dropped.
+   *
+   * The YAML body is marked as well as the fences, and that is the whole
+   * point of this entry rather than a flourish: with only `'+++'` marked,
+   * this construct passed against a grammar that painted the OPENING fence
+   * as if it were the closing one and left the body and the real closer
+   * bare — every fenced document in the repo, unhighlighted, with a green
+   * test. A construct's delimiters are the easy half; what they contain is
+   * what a reader came for.
    */
-  { name: 'front matter', source: '+++\ntitle: Roster\n+++\nbody', marks: ['+++'] },
+  {
+    name: 'front matter',
+    source: '+++\ntitle: Roster\n+++\nbody',
+    marks: ['+++', 'title: Roster'],
+  },
   { name: 'document separator', source: 'one\n---\ntwo', marks: ['---'] },
   { name: 'script line', source: '% const x = 1', marks: ['%'] },
   { name: 'script block', source: '%% const x = 1', marks: ['%%'] },
@@ -81,6 +94,12 @@ export const names = () => CONSTRUCTS.map((c) => c.name);
 /**
  * Where each mark sits in the source, as [start, end) character offsets.
  *
+ * EVERY occurrence of each mark, not just the first. A construct's closing
+ * delimiter is spelled the same as its opening one — `+++`, ```` ``` ````,
+ * `!!` — so marking the first match alone asserted the opener and let a
+ * highlighter lose the closer in silence, which is exactly how the front
+ * matter above stayed broken.
+ *
  * Shared because "is this highlighted" is easy to get wrong in the same way
  * twice: a highlighter is free to split `[x]` into three tokens, so asking
  * whether any ONE token contains the whole mark reports a gap that is not
@@ -90,10 +109,15 @@ export const names = () => CONSTRUCTS.map((c) => c.name);
  * @returns {Array<{ mark: string, start: number, end: number }>}
  */
 export function markRanges({ source, marks }) {
-  return marks.map((mark) => {
-    const start = source.indexOf(mark);
-    if (start < 0) throw new Error(`fixture: ${JSON.stringify(mark)} is not in its own source`);
-    return { mark, start, end: start + mark.length };
+  return marks.flatMap((mark) => {
+    const ranges = [];
+    for (let at = source.indexOf(mark); at >= 0; at = source.indexOf(mark, at + mark.length)) {
+      ranges.push({ mark, start: at, end: at + mark.length });
+    }
+    if (ranges.length === 0) {
+      throw new Error(`fixture: ${JSON.stringify(mark)} is not in its own source`);
+    }
+    return ranges;
   });
 }
 

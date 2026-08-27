@@ -82,11 +82,31 @@ const scopesOf = (line) => line.flatMap((t) => t.scopes);
 
 // --- documents, front matter, separators -----------------------------------
 
-test('front matter at the start of a file is scoped meta.frontmatter.mdy, ending at the bare +++ line', () => {
-  const lines = tokenize('title: Team Roster\n+++\n= {{ res.data.title }}');
-  assert.equal(lines[0][0].scope, 'meta.frontmatter.mdy');
-  assert.equal(lines[1][0].scope, 'markup.heading.frontmatter.mdy'); // top-of-stack; punctuation.definition.frontmatter.mdy sits beneath it
-  assert.ok(!lines[2].some((t) => t.scope.includes('frontmatter')));
+test('front matter at the start of a file is a +++ fence, and the YAML between is scoped meta.frontmatter.mdy', () => {
+  const lines = tokenize('+++\ntitle: Team Roster\n+++\n= {{ res.data.title }}');
+  // Both fences, and the body between them. The opening fence used to be
+  // swallowed as if it were the closing one — `begin` was a zero-width
+  // lookahead, so `end` was tried at the same offset and matched it — which
+  // left the YAML and the real closer with no scope at all.
+  assert.equal(lines[0][0].scope, 'markup.heading.frontmatter.mdy'); // top-of-stack; punctuation.definition.frontmatter.mdy sits beneath it
+  assert.equal(lines[1][0].scope, 'meta.frontmatter.mdy');
+  assert.equal(lines[2][0].scope, 'markup.heading.frontmatter.mdy');
+  assert.ok(!lines[3].some((t) => t.scope.includes('frontmatter')));
+});
+
+test('an opening +++ below a blank line still opens front matter, the way parseDocument skips blanks', () => {
+  const lines = tokenize('\n+++\ntitle: Team Roster\n+++\nbody');
+  assert.equal(lines[1][0].scope, 'markup.heading.frontmatter.mdy');
+  assert.equal(lines[2][0].scope, 'meta.frontmatter.mdy');
+  assert.ok(!lines[4].some((t) => t.scope.includes('frontmatter')));
+});
+
+test('a body that merely opens with a `key:` line is not front matter — that spelling is gone', () => {
+  // The language used to read front matter as everything above the first
+  // bare +++, with no opener, and this grammar guessed at it from the one
+  // line it can see. Nothing opens front matter now except a fence.
+  const lines = tokenize('title: not front matter\nstill body\n+++\nmore body');
+  for (const line of lines) assert.ok(!line.some((t) => t.scope.includes('frontmatter')));
 });
 
 test('a document with no +++ has no front matter at all — a body opening with an element is never mistaken for YAML', () => {
@@ -98,19 +118,20 @@ test('a document with no +++ has no front matter at all — a body opening with 
 
 test('a bare --- line is a document separator, and the next document gets its own front matter through to its own +++', () => {
   const lines = tokenize(
-    ['title: Team Roster', '+++', '% for (const m of $.find({})) {', '% }', '---', 'role: member', 'name: Alice', '+++', '=== {{ res.data.name }}'].join('\n')
+    ['+++', 'title: Team Roster', '+++', '% for (const m of $.find({})) {', '% }', '---', '+++', 'role: member', 'name: Alice', '+++', '=== {{ res.data.name }}'].join('\n')
   );
-  assert.equal(lines[4][0].scope, 'markup.heading.separator.mdy'); // ---
-  assert.equal(lines[5][0].scope, 'meta.frontmatter.mdy'); // role: member
-  assert.equal(lines[6][0].scope, 'meta.frontmatter.mdy'); // name: Alice
-  assert.equal(lines[7][0].scope, 'markup.heading.frontmatter.mdy'); // +++
-  assert.ok(!lines[8].some((t) => t.scope.includes('frontmatter')));
+  assert.equal(lines[5][0].scope, 'markup.heading.separator.mdy'); // ---
+  assert.equal(lines[6][0].scope, 'markup.heading.frontmatter.mdy'); // +++ opens
+  assert.equal(lines[7][0].scope, 'meta.frontmatter.mdy'); // role: member
+  assert.equal(lines[8][0].scope, 'meta.frontmatter.mdy'); // name: Alice
+  assert.equal(lines[9][0].scope, 'markup.heading.frontmatter.mdy'); // +++ closes
+  assert.ok(!lines[10].some((t) => t.scope.includes('frontmatter')));
 });
 
-test('--- with no front matter following (next line is body, not key: value) is just a separator', () => {
-  const lines = tokenize(['title: X', '+++', 'body', '---', '= a heading, not front matter'].join('\n'));
-  assert.equal(lines[3][0].scope, 'markup.heading.separator.mdy');
-  assert.ok(!lines[4].some((t) => t.scope.includes('frontmatter')));
+test('--- with no fence following (the next line is body) is just a separator', () => {
+  const lines = tokenize(['+++', 'title: X', '+++', 'body', '---', '= a heading, not front matter'].join('\n'));
+  assert.equal(lines[4][0].scope, 'markup.heading.separator.mdy');
+  assert.ok(!lines[5].some((t) => t.scope.includes('frontmatter')));
 });
 
 // --- code lines -------------------------------------------------------------

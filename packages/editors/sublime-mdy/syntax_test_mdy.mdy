@@ -46,8 +46,9 @@ A paragraph with {{ res.data.count + 1 }} inline.
 \{{ literal braces
 # <- constant.character.escape.mdy
 ---
-+++
 # <- punctuation.definition.separator.mdy
++++
+# <- punctuation.definition.frontmatter.mdy
 role: member
 # <- meta.frontmatter.mdy
 name: Alice

@@ -10,8 +10,9 @@
  * The rules mirror src/mdy.js exactly, and test/structure.test.js holds
  * them to that with parseDocuments itself as the oracle:
  *   - a bare --- line splits documents        (DOCUMENT_SEPARATOR)
- *   - the first bare +++ inside a document ends its front matter
- *                                             (FRONT_MATTER_SEPARATOR)
+ *   - front matter is a FENCED block: +++, YAML, +++, opening on the
+ *     document's first non-blank line and required to close; an opener with
+ *     no partner is prose      (FRONT_MATTER_SEPARATOR, parseDocument)
  *   - whitespace-only chunks are dropped, so document INDEXES here are
  *     the engine's own — the `i` a template passes to $.render(i)/$.data(i).
  */
@@ -38,7 +39,8 @@ function unquote(value) {
  *   startLine: number,      // first line of the chunk (after any ---)
  *   endLine: number,        // last line of the chunk (before the next ---)
  *   separatorLine: number | null,   // the --- introducing it (null: first chunk)
- *   frontMatterEndLine: number | null, // the +++ line (null: no front matter)
+ *   frontMatterStartLine: number | null, // the opening +++ (null: none)
+ *   frontMatterEndLine: number | null,   // the closing +++ (null: none)
  *   title: string | null,   // front matter `title:`, unquoted
  *   titleLine: number | null,
  * }[]}
@@ -61,11 +63,29 @@ function scanDocuments(lines) {
     const chunkLines = lines.slice(s, e + 1);
     if (chunkLines.every((l) => l.trim() === '')) continue; // dropped by splitDocuments
 
-    const fmEnd = chunkLines.findIndex((l) => FRONT_MATTER_SEPARATOR.test(l));
+    // The fence has to open on the first line, give or take blank ones, and
+    // it has to close. This read the FIRST +++ as the end of front matter
+    // and everything above it as the YAML — the language's other, older
+    // spelling. Against a fenced document that put the end ON the opener,
+    // so the title scan ran over an empty range: every document in the repo
+    // showed up in the outline untitled and folded nothing away.
+    let fmStart = -1;
+    let fmEnd = -1;
+    let open = 0;
+    while (open < chunkLines.length && chunkLines[open].trim() === '') open += 1;
+    if (FRONT_MATTER_SEPARATOR.test(chunkLines[open] ?? '')) {
+      let close = open + 1;
+      while (close < chunkLines.length && !FRONT_MATTER_SEPARATOR.test(chunkLines[close])) close += 1;
+      if (close < chunkLines.length) {
+        fmStart = open;
+        fmEnd = close;
+      }
+    }
+
     let title = null;
     let titleLine = null;
     if (fmEnd !== -1) {
-      for (let i = 0; i < fmEnd; i++) {
+      for (let i = fmStart + 1; i < fmEnd; i++) {
         const m = TITLE.exec(chunkLines[i]);
         if (m) {
           title = unquote(m[1]);
@@ -80,6 +100,7 @@ function scanDocuments(lines) {
       startLine: s,
       endLine: e,
       separatorLine: sep,
+      frontMatterStartLine: fmStart === -1 ? null : s + fmStart,
       frontMatterEndLine: fmEnd === -1 ? null : s + fmEnd,
       title,
       titleLine,
@@ -93,6 +114,7 @@ function scanDocuments(lines) {
       startLine: 0,
       endLine: Math.max(0, lines.length - 1),
       separatorLine: null,
+      frontMatterStartLine: null,
       frontMatterEndLine: null,
       title: null,
       titleLine: null,
@@ -116,8 +138,10 @@ function scanDocuments(lines) {
 function foldingRanges(lines) {
   const ranges = [];
   for (const doc of scanDocuments(lines)) {
-    if (doc.frontMatterEndLine !== null && doc.frontMatterEndLine > doc.startLine) {
-      ranges.push({ start: doc.startLine, end: doc.frontMatterEndLine, kind: 'frontmatter' });
+    // Opener to closer, and only when there is YAML between them: a `+++`
+    // immediately followed by its partner has nothing to fold away.
+    if (doc.frontMatterEndLine !== null && doc.frontMatterEndLine > doc.frontMatterStartLine + 1) {
+      ranges.push({ start: doc.frontMatterStartLine, end: doc.frontMatterEndLine, kind: 'frontmatter' });
     }
   }
   return ranges;
