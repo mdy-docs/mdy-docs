@@ -16,7 +16,8 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "@mdy-docs/nisaba-db": "file:../../third_party/nisaba-db"
+    "@mdy-docs/nisaba-db": "file:../../third_party/nisaba-db",
+    "@mdy-docs/sukkal-wasm": "file:../../third_party/sukkal-msg"
   },
   "devDependencies": {
     "mdy-docs": "file:../.."

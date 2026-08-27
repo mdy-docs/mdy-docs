@@ -4,3 +4,6 @@
 [submodule "third_party/nisaba-db"]
 	path = third_party/nisaba-db
 	url = https://github.com/mdy-docs/nisaba-db.git
+[submodule "third_party/sukkal-msg"]
+	path = third_party/sukkal-msg
+	url = https://github.com/mdy-docs/sukkal-msg.git

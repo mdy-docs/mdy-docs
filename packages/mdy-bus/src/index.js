@@ -23,5 +23,6 @@
  * other in a circle.
  */
 export { publishMessages } from './publish.js';
-export { runBus, createDeliveryHandler, parseDelivery } from './bus.js';
+export { runBus, runLocalBus, createDeliveryHandler, parseDelivery } from './bus.js';
+export { openInProcessBroker } from './inprocess.js';
 export { deadLetters, requeueDead } from './dead.js';

@@ -296,10 +296,23 @@ The dev server publishes and delivers, in one process, with no flag. It
 already builds the set and already rebuilds on save, so the two things the
 bus needs it had anyway; what it lacked was somewhere for a message to go.
 
-There is no `--bus` switch because a broker on the other end is the only
-thing that makes delivery mean anything, and that is a fact to discover
-rather than a mode to select: serve asks `/health` once, and if nothing
-answers it behaves exactly as before — holding messages and saying so.
+There is no `--bus` switch, and since sukkal learned to compile to WASM
+there is no broker to install either: with no `--broker` given, `mdy dev`
+opens one in its own process and publishing becomes a function call. A
+`--broker` URL still wins, for talking to one a colleague or a deployment
+is also using.
+
+What that retired is worth listing, because none of it was ever messaging:
+the callback HTTP server, the bearer token that proved a delivery came
+from the broker, working out which local address reaches it, and the
+heartbeat that re-registered in case it had been restarted onto a store
+that forgot. All of it was the cost of two processes.
+
+Delivery in process is a pull — take, render, done or fail — rather than a
+push, which is not a downgrade: push exists so a subscriber need not poll
+a network, and there is no network. Attempts, backoff and the dead-letter
+channel are unaffected, because they live in the store rather than in the
+pusher.
 
 Editing a page changes what the next message renders. `runBus` holds its
 site in a box rather than capturing it, so a rebuild swaps it without

@@ -25,35 +25,28 @@ finds `handlers/invoice.mdy` because that is where the file is.
 
 ## Running it
 
-You need a [sukkal](https://github.com/mdy-docs/sukkal-msg) broker — mdy
-collects messages and sends nothing itself, deliberately (see
-`docs/messaging-plan.md`). It is one binary with no dependencies beyond
-libcurl:
+One terminal, nothing installed:
 
 ```sh
-git clone --recurse-submodules https://github.com/mdy-docs/sukkal-msg.git
-make -C sukkal-msg
-```
-
-Then two terminals, both on defaults — no flags, no configuration:
-
-```sh
-# 1. the broker — --dir keeps its store out of wherever you started it
-sukkal-msg/bin/sukkal serve --dir /tmp/sukkal
-
-# 2. everything else
 mdy dev examples/messaging
 ```
+
+The broker runs *inside* `mdy dev`. [sukkal](https://github.com/mdy-docs/sukkal-msg)
+compiles to WASM, so with no `--broker` given there is no separate process,
+no port, and nothing to install — publishing and delivering are function
+calls. Messages live in memory and go when the server does, which is right
+for a dev loop and wrong for anything else; `--broker <url>` points at a
+real one instead.
 
 `mdy dev` publishes what the rebuild produced and delivers each message
 to the page it names, so the whole loop is one process:
 
 ```
 ➜  Local:   http://localhost:4321/
-➜  Broker:  http://127.0.0.1:8080 — publishing and delivering
+➜  Broker:  in-process — publishing and delivering
 
-[send] handlers.invoice (73 bytes)
-[send] handlers.invoice (73 bytes)
+[send] handlers.invoice #1, 73 bytes
+[send] handlers.invoice #2, 73 bytes
 [deliver] handlers.invoice #1 → rendered handlers/invoice.mdy in 4ms (published 1)
 [deliver] handlers.mailer #1 → rendered handlers/mailer.mdy in 2ms
 [deliver] handlers.invoice #2 → rendered handlers/invoice.mdy in 3ms (published 1)
@@ -70,18 +63,17 @@ delivered to it renders the version you just saved — no restart. A rebuild
 never re-sends what it already sent, so saving a file does not replay the
 whole site; adding an order publishes exactly the one new message.
 
-Stop the broker and `mdy dev` still serves the site, listing the
-messages it would have sent and holding them. `mdy build --publish` is the
-one-shot version, for a build that should send and exit.
+`mdy build --publish` is the one-shot version, for a build that should
+send to a real broker and exit — it does not run one of its own, since a
+broker that vanishes when the build ends would have nowhere to deliver.
 
 ## Watching one fail
 
 `handlers/flaky.mdy` always throws. Publish to it and watch the whole
 lifecycle:
 
-```sh
-sukkal-msg/bin/sukkal pub handlers.flaky "will never render"
-```
+Publish to it from the entry document, or against a real broker with
+`sukkal pub handlers.flaky "will never render"`.
 
 ```
 [refuse] handlers.flaky #1 — handlers/flaky.mdy threw after 1ms

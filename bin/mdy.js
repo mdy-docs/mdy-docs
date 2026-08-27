@@ -158,22 +158,39 @@ const siteFail = (message) => {
  * that is a fact to discover rather than a mode to select.
  */
 async function connectServeMessaging(brokerUrl, delivery = {}) {
-  const broker = brokerUrl ?? 'http://127.0.0.1:8080';
-  let bus;
-  let publishMessages;
+  let mod;
   try {
-    const mod = await loadBus();
-    publishMessages = mod.publishMessages;
-    // Ask the broker whether it is there before announcing anything: an
-    // unreachable one is the ordinary case (most sites never publish), not
-    // an error worth interrupting a dev server for.
-    const health = await fetch(`${broker.replace(/\/+$/, '')}/health`).catch(() => null);
-    if (!health?.ok) return null;
-    bus = mod.runBus;
+    mod = await loadBus();
   } catch {
     return null;
   }
 
+  /*
+   * Two ways to have a broker, and the preferred one needs nothing
+   * installed. sukkal compiles to WASM, so with no --broker given the
+   * whole thing runs in this process: no port, no callback URL, no bearer
+   * token, no re-registration heartbeat — none of which was ever
+   * messaging, only the cost of two processes.
+   *
+   * A --broker URL still wins, because reaching a real one is how a dev
+   * server talks to something a colleague or a deployment is also using.
+   */
+  let local = null;
+  let broker = brokerUrl;
+  if (!brokerUrl) {
+    try {
+      local = await mod.openInProcessBroker();
+    } catch {
+      return null;                 /* sukkal's wasm is not built; stay quiet */
+    }
+    broker = 'in-process';
+  } else {
+    const health = await fetch(`${broker.replace(/\/+$/, '')}/health`).catch(() => null);
+    if (!health?.ok) return null;
+  }
+
+  const publishMessages = mod.publishMessages;
+  const bus = mod.runBus;
   const sent = new Set();
   // The bus prints its own listening banner, which serve has already said
   // in its own; everything else — deliveries, refusals, deaths — is wanted.
@@ -187,7 +204,10 @@ async function connectServeMessaging(brokerUrl, delivery = {}) {
       // a second one, so serve and its deliveries can never disagree about
       // what a page name means.
       if (!running) {
-        running = await bus(info.site, { ...delivery, broker, onEvent: busLog }).catch((err) => {
+        const start = local
+          ? mod.runLocalBus(info.site, local, { ...delivery, onEvent: busLog })
+          : bus(info.site, { ...delivery, broker, onEvent: busLog });
+        running = await start.catch((err) => {
           console.error(`${timestamp()} ${red('[bus]')} ${err.message ?? err}`);
           return null;
         });
@@ -210,8 +230,19 @@ async function connectServeMessaging(brokerUrl, delivery = {}) {
         sent.add(fingerprint);
         return true;
       });
-      if (fresh.length === 0) return;
       try {
+        if (local) {
+          // In process, publishing and delivering are the same tick: the
+          // page a message names renders before this returns, and anything
+          // it publishes onward goes with it.
+          for (const m of fresh) {
+            const { index, bytes } = await local.publish(m.name, m.data);
+            console.log(`${timestamp()} ${magenta('[send]')} ${m.name} ${dim(`#${index}, ${bytes} bytes`)}`);
+          }
+          await running?.drain();
+          return;
+        }
+        if (fresh.length === 0) return;
         await publishMessages(fresh, {
           url: broker,
           onSend: ({ name, bytes }) => console.log(`${timestamp()} ${magenta('[send]')} ${name} ${dim(`(${bytes} bytes)`)}`),
