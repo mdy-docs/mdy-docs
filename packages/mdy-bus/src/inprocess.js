@@ -21,6 +21,8 @@
  * dead-letter channel live in the store rather than in the pusher.
  */
 
+import { createDeliveryHandler } from './deliver.js';
+
 const CONSUMER_GROUP = 'mdy';
 
 /* How many jobs one drain claims per subject, and how long it holds them.
@@ -130,4 +132,81 @@ class InProcess {
     });
     await this.#broker.request('PUT', `/queue/${subject}`, { query: String(q) });
   }
+}
+
+/* ---- the same runtime, in one process ---------------------------------- */
+
+/**
+ * Run the bus against an in-process broker: no socket, no registration, no
+ * callback server, no token, no heartbeat.
+ *
+ * The delivery handler is the same one the HTTP path uses — it takes a
+ * subject and a batch and says which messages were rendered — so a page
+ * cannot tell which way it was reached. What changes is only how a batch
+ * arrives: claimed from the broker rather than pushed to a URL.
+ *
+ * `drain` repeats until a pass yields nothing, because a delivered page
+ * may publish onward and that message is due in this same tick. The chain
+ * of pages is the workflow, and a dev loop should not make you wait a
+ * poll interval per link in it.
+ *
+ * @param {object} site     an open document set (mdy-docs' openScriptSite)
+ * @param {object} broker   from openInProcessBroker()
+ */
+export async function runLocalBus(site, broker, options = {}) {
+  const onEvent = options.onEvent;
+  const policy = {
+    maxAttempts: options.maxAttempts ?? 5,
+    backoffMs: options.backoffMs ?? 1000,
+    maxBackoffMs: options.maxBackoffMs ?? 300000,
+  };
+
+  let currentSite = site;
+  const policied = new Set();
+
+  const flush = async (produced) => {
+    for (const m of produced) {
+      const { index, bytes } = await broker.publish(m.name, m.data);
+      onEvent?.({ type: 'sent', name: m.name, index, bytes });
+    }
+  };
+
+  const deliver = createDeliveryHandler({ site: () => currentSite, flush, onEvent });
+
+  /* One pass over every subject that has work. Returns how many messages
+   * were handled, so the caller knows whether to go round again. */
+  const pass = async () => {
+    let handled = 0;
+    for (const subject of await broker.subjects()) {
+      if (!policied.has(subject)) {
+        policied.add(subject);
+        await broker.setPolicy(subject, policy);
+      }
+      const jobs = await broker.take(subject);
+      if (jobs.length === 0) continue;
+
+      const { done, failed } = await deliver(subject, jobs);
+      for (const index of done) await broker.done(subject, index);
+      for (const index of failed) await broker.fail(subject, index);
+      handled += jobs.length;
+    }
+    return handled;
+  };
+
+  const drain = async () => {
+    /* Bounded, so a page that publishes to itself cannot spin this loop
+     * forever inside one tick — it simply continues on the next. */
+    for (let round = 0; round < 32; round++) {
+      if (await pass() === 0) return;
+    }
+    onEvent?.({ type: 'error', error: new Error('bus: still draining after 32 rounds; continuing next tick') });
+  };
+
+  onEvent?.({ type: 'registered', broker: 'in-process', pages: site.pages.size, policy: { max_attempts: policy.maxAttempts } });
+
+  return {
+    setSite: (next) => { currentSite = next; },
+    drain,
+    close: () => broker.close(),
+  };
 }

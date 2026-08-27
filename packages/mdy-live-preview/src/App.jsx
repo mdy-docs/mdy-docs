@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Editor } from './Editor.jsx';
 import { Preview } from './Preview.jsx';
+import { Messages } from './Messages.jsx';
 import { SplitDivider } from './SplitDivider.jsx';
 import { defaultInput } from './default-input.js';
 import { setupMdyLanguage } from './monaco-mdy.js';
@@ -179,6 +180,11 @@ export function App() {
             >
               <Preview source={debouncedSource} theme={theme} onStatus={handleStatus} />
             </div>
+            {/* Below the document rather than beside it: a message is
+                something the document DID, and reads as a consequence of
+                what is above it. Absent entirely unless the source
+                publishes. */}
+            <Messages source={debouncedSource} />
           </div>
         </div>
       </div>

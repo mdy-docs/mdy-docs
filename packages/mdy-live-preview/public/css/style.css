@@ -262,3 +262,89 @@ header input[type="checkbox"] {
 [data-theme="dark"] .split-divider.active {
   background: #768390;
 }
+
+/* ---- messages ---------------------------------------------------------
+ *
+ * What the document published, and what each message caused. Present only
+ * when the source calls $.publish, so the pane costs nothing to a document
+ * that does not.
+ */
+.mdy-messages {
+  border-top: 1px solid #d1d9e0;
+  padding: 12px 16px 20px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.mdy-messages header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  /* The app's own top bar is a dark `header`, and that rule reaches this
+   * one: white on white, with the label invisible. Every inherited part of
+   * it has to be undone, colour included. */
+  background: none;
+  border: 0;
+  padding: 0;
+  width: auto;
+  justify-content: flex-start;
+  color: #1f2328;
+}
+
+[data-theme="dark"] .mdy-messages header { color: #f0f6fc; }
+
+.mdy-messages-note {
+  color: #59636e;
+  font-size: 11px;
+}
+
+.mdy-messages-run { color: #9a6700; font-size: 11px; }
+.mdy-messages-empty { color: #59636e; margin: 0; }
+
+.mdy-messages ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mdy-msg-kind { color: #59636e; }
+.mdy-msg-send .mdy-msg-kind { color: #8250df; }
+.mdy-msg-deliver .mdy-msg-kind { color: #1a7f37; }
+.mdy-msg-refuse .mdy-msg-kind,
+.mdy-msg-error .mdy-msg-kind { color: #cf222e; }
+.mdy-msg-undeliverable .mdy-msg-kind { color: #9a6700; }
+
+.mdy-msg-name { font-weight: 600; }
+.mdy-msg-index, .mdy-msg-page, .mdy-msg-detail { color: #59636e; }
+
+.mdy-msg-output {
+  margin: 4px 0 6px 22px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  color: #1f2328;
+  background: #f6f8fa;
+  border-left: 2px solid #d1d9e0;
+  border-radius: 0 4px 4px 0;
+}
+
+[data-theme="dark"] .mdy-messages { border-top-color: #3d444d; }
+[data-theme="dark"] .mdy-messages-note,
+[data-theme="dark"] .mdy-messages-empty,
+[data-theme="dark"] .mdy-msg-kind,
+[data-theme="dark"] .mdy-msg-index,
+[data-theme="dark"] .mdy-msg-page,
+[data-theme="dark"] .mdy-msg-detail { color: #9198a1; }
+[data-theme="dark"] .mdy-msg-send .mdy-msg-kind { color: #d2a8ff; }
+[data-theme="dark"] .mdy-msg-deliver .mdy-msg-kind { color: #3fb950; }
+[data-theme="dark"] .mdy-msg-refuse .mdy-msg-kind,
+[data-theme="dark"] .mdy-msg-error .mdy-msg-kind { color: #ff7b72; }
+[data-theme="dark"] .mdy-msg-undeliverable .mdy-msg-kind { color: #d29922; }
+[data-theme="dark"] .mdy-msg-output {
+  color: #f0f6fc;
+  background: #151b23;
+  border-left-color: #3d444d;
+}

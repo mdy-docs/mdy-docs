@@ -1,12 +1,14 @@
 {
   "name": "@mdy-docs/mdy-bus",
   "version": "0.1.0",
-  "description": "Deliver messages to mdy pages — the sukkal adapter for $.publish, and the runtime that renders whichever page a message names",
+  "description": "Deliver messages to mdy pages \u2014 the sukkal adapter for $.publish, and the runtime that renders whichever page a message names",
   "license": "BSD-2-Clause",
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./inprocess": "./src/inprocess.js",
+    "./deliver": "./src/deliver.js"
   },
   "files": [
     "src/",

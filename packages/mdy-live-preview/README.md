@@ -1,8 +1,8 @@
 # @mdy-docs/mdy-live-preview
 
 A two-pane live [mdy](../..) editor demo: Monaco on the left, the rendered
-document on the right, re-rendered as you type — the whole engine (template
-VM, query engine) running client-side as WebAssembly.
+document on the right, re-rendered as you type — the whole stack (template
+VM, query engine, message broker) running client-side as WebAssembly.
 
 The editor is seeded with
 [`examples/document-set.mdy`](../../examples/document-set.mdy): a document
@@ -20,6 +20,35 @@ npm run build      # production bundle → dist/
 Also in the box: mermaid fences rendered as diagrams, dark mode (editor,
 preview css, and diagrams switch together), sync-scroll, draggable split,
 copy, and content persistence in localStorage.
+
+## Three WASM engines, no server
+
+[lamassu](https://github.com/mdy-docs/lamassu-js) runs the templates,
+[nisaba](https://github.com/mdy-docs/nisaba-db) answers `$.find`, and
+[sukkal](https://github.com/mdy-docs/sukkal-msg) — since it learned to
+compile to WebAssembly — is the message broker. Nothing here talks to a
+server.
+
+The seeded document ends with a `$.publish`, so the pane under the preview
+shows what it sent and what each message caused:
+
+```
+[send]    welcome #1
+[deliver] welcome #1
+          Welcome aboard, Alice. You are message #1…
+```
+
+`$.render(name, data)` calls a page now; `$.publish(name, data)` is the same
+call queued and delivered later, and the page it names renders with the
+message bound as `req`. Nothing subscribes — a page is addressable because
+it exists, by its path, or by `messageName` in its front matter when (as
+here) the whole set is one editor pane with no paths in it.
+
+What that demonstrates is not that messaging also works in a browser. It is
+that publishing has no transport in it: the routing table a native `sukkal
+serve` answers over HTTP is the one being called here, by name, in process.
+Delete the `$.publish` line and the pane disappears — a document that never
+publishes never opens a broker.
 
 ## The preview pane is React
 

@@ -17,7 +17,8 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "shiki": "^4.3.1",
-    "vscode-mdy": "file:../editors/vscode-mdy"
+    "vscode-mdy": "file:../editors/vscode-mdy",
+    "@mdy-docs/mdy-bus": "file:../mdy-bus"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.1.1",
