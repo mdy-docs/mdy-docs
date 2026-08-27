@@ -1,7 +1,7 @@
 /*
  * The delivery runtime. Pages as endpoints.
  *
- * Driven by `mdy serve`, which runs it alongside the dev server so that
+ * Driven by `mdy dev`, which runs it alongside the dev server so that
  * publishing, delivering and editing are one process (there is no separate
  * `mdy bus` command — serve already built the set and already rebuilds it
  * on save, which is most of what this needs). An embedder can drive it
@@ -109,7 +109,7 @@ const DEAD_SUFFIX = '.dead';
  */
 export function createDeliveryHandler({ site, flush, now = () => Date.now(), onEvent }) {
   // `site` may be a function, for a host that rebuilds while running:
-  // `mdy serve` replaces the whole document set on every save, and a
+  // `mdy dev` replaces the whole document set on every save, and a
   // delivery has to render against the CURRENT one or editing a page would
   // not change what the next message does. Read once per delivery, not per
   // message — a batch that started against one build finishes against it,
@@ -340,7 +340,7 @@ export async function runBus(site, options = {}) {
   };
 
   // The site is held in a box rather than captured, so a caller that
-  // rebuilds — `mdy serve` — can swap it without tearing down the
+  // rebuilds — `mdy dev` — can swap it without tearing down the
   // registration and losing its place in the broker's queue.
   let currentSite = site;
   const deliver = createDeliveryHandler({

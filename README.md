@@ -267,7 +267,7 @@ mdy [path] [options]
 
 mdy build [site-dir] [--out <dir>] [--drafts] [--future] [--entry <path>]
       render a whole site (see Static sites, below)
-mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
+mdy dev [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
       dev server for a site: watch, rebuild, live reload
 ```
 
@@ -281,7 +281,7 @@ mdy ./my-site                         # scan the dir, render main.mdy
 mdy ./my-site --entry other.mdy -o dist   # write $.emit output
 
 mdy build ./my-blog --out ./dist      # build a site
-mdy serve ./my-blog                   # dev server at http://localhost:4321
+mdy dev ./my-blog                     # dev server at http://localhost:4321
 ```
 
 - Output goes to **stdout**; pass `-o` to write a file (it won't overwrite the input).
@@ -644,7 +644,7 @@ entirely on the primitives above, with one governing idea: every site is a
 **script-defined site**. There's no host-side content/layouts/site.yaml
 convention deciding what a path means — one entry document (`main.mdy` by
 default) does ALL of that itself, in template code, via `$.find`/`$.render`/
-`$.emit`. `mdy build`/`mdy serve` (see CLI, above) and the whole
+`$.emit`. `mdy build`/`mdy dev` (see CLI, above) and the whole
 implementation live in [`src/`](src/); the design brief and
 phased history — including how this replaced an earlier conventional
 content/layouts/site.yaml pipeline — are in
@@ -747,7 +747,7 @@ Run it identically three ways:
 
 ```sh
 mdy build examples/blog --out dist   # → dist/
-mdy serve examples/blog              # dev server, watch, live reload
+mdy dev examples/blog              # dev server, watch, live reload
 mdy examples/blog                    # plain CLI: same walk, same entry
 ```
 
@@ -755,7 +755,7 @@ mdy examples/blog                    # plain CLI: same walk, same entry
 same way `mdy <directory>` does (see CLI, above) — one primitive, one
 implementation, whichever way you call it.
 
-**Web editor** ([`packages/mdy-web`](packages/mdy-web/)): the `mdy serve`
+**Web editor** ([`packages/mdy-web`](packages/mdy-web/)): the `mdy dev`
 loop with the browser as the editor — edit any source file as raw text
 (with the vscode extension's syntax highlighting), live-preview unsaved
 changes, upload assets, and rebuild on every web save. See its

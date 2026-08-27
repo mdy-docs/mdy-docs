@@ -8,7 +8,7 @@ matter (nav, sidebar, social links, edit link, footer), and the script body
 decides every page, URL, and layout via `$.find`/`$.render`/`$.emit`.
 
 ```sh
-npm run dev     # mdy serve .  → http://localhost:4321, watch + live reload
+npm run dev     # mdy dev .  → http://localhost:4321, watch + live reload
 npm run build   # mdy build . --out dist
 ```
 

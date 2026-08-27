@@ -29,7 +29,7 @@
  * on what "send" means either). @mdy-docs/mdy-bus is one such embedder.
  *
  * Publishes are DEFERRED, which is not fastidiousness. A script-defined
- * site has no incremental cache (script-site.js), so `mdy serve` reruns
+ * site has no incremental cache (script-site.js), so `mdy dev` reruns
  * the entry from scratch on every save; a publish that went out during
  * the render would re-fire on every keystroke. The hook only ever
  * collects, and the caller flushes once the whole build has succeeded.

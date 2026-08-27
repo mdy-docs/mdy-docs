@@ -1,7 +1,7 @@
 # @mdy-docs/mdy-web
 
 A web-based site editor for [mdy](../..) script-defined sites — the
-`mdy serve` dev loop, but with the browser as the editor and rebuilds
+`mdy dev` dev loop, but with the browser as the editor and rebuilds
 triggered by web saves instead of a filesystem watcher.
 
 ```sh

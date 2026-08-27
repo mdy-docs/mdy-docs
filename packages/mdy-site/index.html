@@ -290,7 +290,7 @@ cat report.mdy | mdy - --html         # stdin, straight through
 
 mdy ./my-site                         # scan the directory, run main.mdy
 mdy build ./my-blog --out ./dist      # build the whole site
-mdy serve ./my-blog                   # dev server, watch, live reload</pre>
+mdy dev ./my-blog                   # dev server, watch, live reload</pre>
 
           <p class="footnote">
             A directory input inserts every file under it as a document —
@@ -335,7 +335,7 @@ mdy serve ./my-blog                   # dev server, watch, live reload</pre>
             <div class="card">
               <h3>Web editor</h3>
               <p>
-                <code>mdy serve</code> with the browser as the editor: edit any
+                <code>mdy dev</code> with the browser as the editor: edit any
                 source file, preview unsaved changes, upload assets, rebuild on
                 save.
               </p>

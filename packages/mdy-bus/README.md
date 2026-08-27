@@ -22,7 +22,7 @@ const bus = await runBus(await openScriptSite('./site'), { broker: 'http://127.0
 ```
 
 Both are wired into mdy's own CLI already: `mdy build --publish` sends,
-and `mdy serve` does both — with a broker reachable it publishes what a
+and `mdy dev` does both — with a broker reachable it publishes what a
 rebuild produced and delivers to the pages named, so editing a page
 changes what the next message renders.
 
@@ -58,7 +58,7 @@ The HTTP response to a delivery **is** the acknowledgement:
 
 `runBus` takes an already-open document set rather than a directory, and
 `setSite` swaps it: the bus is a transport over *something that renders
-pages by name*, so a host that rebuilds (as `mdy serve` does on every
+pages by name*, so a host that rebuilds (as `mdy dev` does on every
 save) replaces the set without tearing down the registration and losing
 its place in the queue. It has no business knowing what a site directory
 is, which is also what keeps this package and mdy-docs from depending on

@@ -2,7 +2,7 @@ import { nodeFsProvider } from './fs-provider.js';
 import { renderSite } from './build.js';
 
 /*
- * mdy serve — the dev loop.
+ * mdy dev — the dev loop.
  *
  * Pages are rendered in memory (renderSite) and served straight from the
  * Map; a $.resize result (images.js) is served the same way, from
@@ -215,10 +215,10 @@ export async function serveSite(root, options = {}) {
 
   await rebuild(); // a broken first build still serves — fix and save
   // One watcher per resolved root (root + every import) — so editing an
-  // imported style package while `mdy serve` is running triggers a rebuild
+  // imported style package while `mdy dev` is running triggers a rebuild
   // too, not just editing the site itself. Fixed at startup from the first
   // build's import graph: a later edit that changes WHICH packages are
-  // imported won't pick up a new watcher until `mdy serve` is restarted —
+  // imported won't pick up a new watcher until `mdy dev` is restarted —
   // an accepted limitation, same spirit as any dev server needing a
   // restart after a fundamental config change.
   const watchers = await Promise.all(allRoots.map((dir) => nodeFsProvider().watch(dir, onChange)));

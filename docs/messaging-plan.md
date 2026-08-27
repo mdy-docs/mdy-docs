@@ -290,7 +290,7 @@ Step 4 is where reliability comes from and where the sharp edges live:
   belongs in sukkal's `/dead/<name>`, and it is the reason the dead-letter work
   in Phase 3 is not optional.
 
-## `mdy serve` is the whole loop ✅
+## `mdy dev` is the whole loop ✅
 
 The dev server publishes and delivers, in one process, with no flag. It
 already builds the set and already rebuilds on save, so the two things the
@@ -330,7 +330,7 @@ where only one of them noticed your edits, is not a division worth keeping.
 directly.
 
 What that gives up, recorded so it is a decision rather than a discovery:
-`mdy serve` is now the only long-running way to deliver messages, and it
+`mdy dev` is now the only long-running way to deliver messages, and it
 watches the filesystem and injects a live-reload snippet into every page.
 Anything deployed that consumes messages is running a dev server. If that
 becomes a problem the answer is a flag on serve, not a second command.
@@ -376,7 +376,7 @@ publishing to the other across a broker restart, with nothing in either page's
 front matter but its name.
 
 **Done.** [../packages/mdy-bus](../packages/mdy-bus) is the runtime (driven by
-`mdy serve`; it had a `mdy bus` command of its own at first, since removed);
+`mdy dev`; it had a `mdy bus` command of its own at first, since removed);
 [../src/script-site.js](../src/script-site.js) gained `openScriptSite` — a
 site built but not run, which is what a process that renders on demand needs
 and a build does not. The entry document is never rendered by the bus, because
@@ -486,7 +486,7 @@ and the dead letter is delivered to `handlers/flaky.dead.mdy` and rendered.
 
 **Logging.** A delivery *is* a re-render — the same page, the same engine,
 reached by a message instead of by a file changing — so it is logged the same
-way `mdy serve` logs a rebuild: what it rendered, and how long it took.
+way `mdy dev` logs a rebuild: what it rendered, and how long it took.
 
 ```
 11:41:16 PM [deliver] handlers.invoice #1 → rendered handlers/invoice.mdy in 54ms (published 1)

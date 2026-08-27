@@ -41,7 +41,7 @@ const tagWrite = () => green('[write]');
 const tagChange = () => yellow('[change]');
 const tagSend = () => magenta('[send]');
 
-// `mdy build`/`mdy serve` — the static-site layer. Handled first and
+// `mdy build`/`mdy dev` — the static-site layer. Handled first and
 // unconditionally: a bare `mdy [input...]` treats every positional as a
 // document path, so these two verbs have to be claimed before that parsing
 // ever runs.
@@ -51,11 +51,14 @@ Usage:
   mdy build [site-dir] [--out <dir>] [--drafts] [--future] [--entry <path>]
             [--publish [--broker <url>]]
       render the site (default dir: ., out: <site-dir>/dist)
-  mdy serve [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
-            [--broker <url>] [--consumer <name>] [--group <name>]
-            [--max-attempts <n>] [--backoff <ms>] [--max-backoff <ms>]
-      dev server: watch, rebuild, live reload (default port: 4321) — and,
-      when a broker answers, publish and deliver messages too
+  mdy dev [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]
+          [--broker <url>] [--consumer <name>] [--group <name>]
+          [--max-attempts <n>] [--backoff <ms>] [--max-backoff <ms>]
+      development server: watch, rebuild, live reload (default port: 4321)
+      — and, when a broker answers, publish and deliver messages too.
+      For development only: it rebuilds the whole site on every save and
+      injects a live-reload script into every page. Deploy \`mdy build\`'s
+      output.
   mdy dead <page-name> [--broker <url>] [--requeue <index>]
       what could not be rendered, and putting one back
 
@@ -72,7 +75,7 @@ nothing and a watch-mode rebuild does not re-fire what the last one sent.
 Without --publish they are reported and dropped; with it they go to a
 sukkal broker (--broker, default http://127.0.0.1:8080).
 
-\`mdy serve\` is also the other end. With a broker reachable it sends what a
+\`mdy dev\` is also the other end. With a broker reachable it sends what a
 rebuild publishes and renders whichever page each delivered message is
 addressed to, with the message bound as \`req\` — so the whole loop is one
 process and editing a page changes what the next message renders. Nothing
@@ -82,7 +85,7 @@ extension, "/" written as ".". A render that throws does not acknowledge,
 so the message comes back; pages reached this way have to be idempotent.
 `;
 
-/** Shared flag parsing for build/serve: positional root + options. */
+/** Shared flag parsing for build/dev: positional root + options. */
 function parseSiteArgs(args) {
   const opts = { root: '.' };
   for (let i = 0; i < args.length; i++) {
@@ -130,7 +133,7 @@ const siteFail = (message) => {
 };
 
 /*
- * `mdy serve`'s messaging half: publishing and delivering in the one
+ * `mdy dev`'s messaging half: publishing and delivering in the one
  * process that already has the document set.
  *
  * Both halves, because half of it is not a loop: a dev server that
@@ -361,6 +364,21 @@ function makeSourceLogger() {
   };
 }
 
+// `serve` was this command's name until it was renamed, and without this a
+// stale habit falls through to the single-file path handler and gets told
+// "mdy accepts a single input", which explains nothing. Not an alias: the
+// rename exists to stop the CLI implying it is somewhere to host a site, and
+// a working `serve` would keep implying it.
+if (process.argv[2] === 'serve') {
+  console.error(
+    red('mdy: `mdy serve` is now `mdy dev`') +
+      '\n  It was renamed to say what it is: a development server that rebuilds\n' +
+      '  the whole site on every save and injects a live-reload script into\n' +
+      '  every page. To publish a site, deploy what `mdy build` writes.'
+  );
+  process.exit(1);
+}
+
 if (process.argv[2] === 'dead') {
   const rest = process.argv.slice(3);
   if (rest.includes('--help') || rest.includes('-h') || rest.length === 0) {
@@ -392,7 +410,7 @@ if (process.argv[2] === 'dead') {
   } catch (err) {
     siteFail(err.message ?? err);
   }
-} else if (['build', 'serve'].includes(process.argv[2])) {
+} else if (['build', 'dev'].includes(process.argv[2])) {
   const [siteCmd, ...siteRest] = process.argv.slice(2);
   if (siteRest.includes('--help') || siteRest.includes('-h')) {
     process.stdout.write(SITE_USAGE);
@@ -434,7 +452,7 @@ if (process.argv[2] === 'dead') {
       }
       break;
     }
-    case 'serve': {
+    case 'dev': {
       const { root, broker, consumer, group, maxAttempts, backoff, maxBackoff, ...opts } =
         parseSiteArgs(siteRest);
       try {
@@ -478,7 +496,7 @@ if (process.argv[2] === 'dead') {
 Usage:
   mdy [path] [options]
   mdy build [site-dir] [options]   render a whole site — see: mdy build --help
-  mdy serve [site-dir] [options]   dev server for a site — see: mdy serve --help
+  mdy dev [site-dir] [options]     development server — see: mdy dev --help
 
 Arguments:
   path                   A .mdy file, a directory, or "-"/omitted for stdin.

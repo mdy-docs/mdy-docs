@@ -1,7 +1,7 @@
 /*
  * mdy as a web-editable static site behind Express.
  *
- * The same in-memory pipeline as `mdy serve` — renderSite() renders the
+ * The same in-memory pipeline as `mdy dev` — renderSite() renders the
  * whole site into a Map of outputs, pages are served straight from it —
  * but with NO filesystem watcher: rebuilds are triggered by the web.
  *
@@ -141,7 +141,7 @@ function scheduleRebuild() {
   return building;
 }
 
-// --- live reload (SSE), same shape as `mdy serve`'s ------------------------
+// --- live reload (SSE), same shape as `mdy dev`'s ------------------------
 
 const SSE_PATH = '/__edit/events';
 const sseClients = new Set();

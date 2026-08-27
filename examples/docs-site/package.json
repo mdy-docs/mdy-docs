@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The lamassu-js documentation site rebuilt as an mdy script-defined site — same markdown content as ../docs-site, no VitePress.",
+  "description": "The lamassu-js documentation site rebuilt as an mdy script-defined site \u2014 same markdown content as ../docs-site, no VitePress.",
   "scripts": {
-    "dev": "node ../../bin/mdy.js serve .",
+    "dev": "node ../../bin/mdy.js dev .",
     "build": "node ../../bin/mdy.js build . --out dist"
   }
 }

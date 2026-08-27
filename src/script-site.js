@@ -111,7 +111,7 @@ export async function renderScriptSite(root, options = {}) {
   const result = await set.renderResult(entryIndex, context);
 
   // `set`/`pages` come back too: a caller that goes on running after the
-  // build — `mdy serve`, which then delivers messages to pages — needs the
+  // build — `mdy dev`, which then delivers messages to pages — needs the
   // very set that was just built, not a second one opened behind its back
   // that could disagree about what a name means.
   return { output: toHtml(result.tree), text: result.text, outputs, binaryOutputs, messages, roots, set, pages: site.pages };

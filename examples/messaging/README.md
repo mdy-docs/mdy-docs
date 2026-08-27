@@ -42,10 +42,10 @@ Then two terminals, both on defaults — no flags, no configuration:
 sukkal-msg/bin/sukkal serve
 
 # 2. everything else
-mdy serve examples/messaging
+mdy dev examples/messaging
 ```
 
-`mdy serve` publishes what the rebuild produced and delivers each message
+`mdy dev` publishes what the rebuild produced and delivers each message
 to the page it names, so the whole loop is one process:
 
 ```
@@ -70,7 +70,7 @@ delivered to it renders the version you just saved — no restart. A rebuild
 never re-sends what it already sent, so saving a file does not replay the
 whole site; adding an order publishes exactly the one new message.
 
-Stop the broker and `mdy serve` still serves the site, listing the
+Stop the broker and `mdy dev` still serves the site, listing the
 messages it would have sent and holding them. `mdy build --publish` is the
 one-shot version, for a build that should send and exit.
 
@@ -95,7 +95,7 @@ doubling backoff. When it runs out of attempts the broker republishes it
 to `handlers.flaky.dead` — which is a name, so the page called
 `handlers/flaky.dead.mdy` handles it. Nothing declares that either.
 
-`--max-attempts 2 --backoff 200` on `mdy serve` makes it happen in about a
+`--max-attempts 2 --backoff 200` on `mdy dev` makes it happen in about a
 second instead of several minutes.
 
 Afterwards:
