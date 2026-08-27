@@ -209,8 +209,8 @@ test('--entry picks a different entry document', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'mdy-entry-'));
   after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'main.mdy'), '+++\n% $.emit("index.html", "default entry")');
-  await writeFile(join(dir, 'other.mdy'), '+++\n% $.emit("index.html", "other entry")');
+  await writeFile(join(dir, 'main.mdy'), '% $.emit("index.html", "default entry")');
+  await writeFile(join(dir, 'other.mdy'), '% $.emit("index.html", "other entry")');
 
   const built = await buildSite(dir, { outDir: join(dir, 'out'), entry: 'other.mdy' });
   assert.equal(built.pages, 1);
@@ -227,7 +227,7 @@ test('buildSite: onSource fires once per ingested file, onWrite once per file ac
   after(() => rm(outDir, { recursive: true, force: true }));
 
   await mkdir(join(dir, 'static'), { recursive: true });
-  await writeFile(join(dir, 'main.mdy'), '+++\n% $.emit("index.html", "hi")');
+  await writeFile(join(dir, 'main.mdy'), '% $.emit("index.html", "hi")');
   await writeFile(join(dir, 'static', 'style.css'), 'body{}');
 
   const sources = [];
@@ -320,7 +320,7 @@ test('buildSite: a template $.resize call writes a real, correctly-sized image f
   await mkdir(join(root, 'static'), { recursive: true });
   await writeFile(
     join(root, 'main.mdy'),
-    '+++\n' +
+    '' +
       '% const logo = $.findOne({ path: "static/logo.png" })\n' +
       '% const thumb = $.resize(logo, { width: 20 })\n' +
       '% $.emit("hello/index.html", "<img src=" + JSON.stringify(thumb.url) + ">")'

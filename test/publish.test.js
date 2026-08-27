@@ -53,7 +53,7 @@ test('nameProblem: sukkal\'s subject grammar is enforced before anything is queu
 test('$.publish queues a message addressed to a page, and returns null', async () => {
   const { messages } = await site([
     ENTRY('% const r = $.publish("handlers.invoice", { id: 7 })\n% $.emit("i.html", "ok:" + (r === null))'),
-    ['handlers/invoice.mdy', 'title: Invoice\n+++\nInvoice {{ req.id }}'],
+    ['handlers/invoice.mdy', '+++\ntitle: Invoice\n+++\nInvoice {{ req.id }}'],
   ]);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].name, 'handlers.invoice');
@@ -67,7 +67,7 @@ test('$.publish sends nothing during the render — messages only come back from
   // cache). All a document can do is append.
   const { messages, outputs } = await site([
     ENTRY('% $.publish("h", { n: 1 })\n% $.publish("h", { n: 2 })\n% $.emit("i.html", "rendered")'),
-    ['h.mdy', '+++\nhandler'],
+    ['h.mdy', 'handler'],
   ]);
   assert.equal(outputs.get('i.html'), 'rendered');
   assert.deepEqual(messages.map((m) => m.data.n), [1, 2]);
@@ -77,7 +77,7 @@ test('a build that throws publishes nothing at all', async () => {
   await assert.rejects(
     site([
       ENTRY('% $.publish("h", { n: 1 })\n% throw "boom"'),
-      ['h.mdy', '+++\nhandler'],
+      ['h.mdy', 'handler'],
     ]),
     // The messages array never escapes a failed build, which is the whole
     // reason publishing is deferred rather than immediate.
@@ -105,8 +105,8 @@ test('two paths collapsing to one name is an error at publish, not last-one-wins
   await assert.rejects(
     site([
       ENTRY('% $.publish("a.b.c", {})\n% $.emit("i.html", "x")'),
-      ['a/b/c.mdy', '+++\none'],
-      ['a.b/c.mdy', '+++\ntwo'],
+      ['a/b/c.mdy', 'one'],
+      ['a.b/c.mdy', 'two'],
     ]),
     /is ambiguous — 2 documents share it/
   );
@@ -115,8 +115,8 @@ test('two paths collapsing to one name is an error at publish, not last-one-wins
 test('messageName in front matter is how a collision gets resolved', async () => {
   const { messages } = await site([
     ENTRY('% $.publish("a.b.c", {})\n% $.publish("the-other-one", {})\n% $.emit("i.html", "x")'),
-    ['a/b/c.mdy', '+++\none'],
-    ['a.b/c.mdy', 'messageName: the-other-one\n+++\ntwo'],
+    ['a/b/c.mdy', 'one'],
+    ['a.b/c.mdy', '+++\nmessageName: the-other-one\n+++\ntwo'],
   ]);
   assert.deepEqual(messages.map((m) => m.name), ['a.b.c', 'the-other-one']);
 });
@@ -142,7 +142,7 @@ test('a published page is an ordinary page — $.render reaches the same documen
       '% $.publish("handlers.invoice", { id: 7, customer: "Ada" })\n' +
         '% $.emit("i.html", $.render({ path: "handlers/invoice.mdy" }, { id: 7, customer: "Ada" }))'
     ),
-    ['handlers/invoice.mdy', 'title: Invoice\n+++\nInvoice {{ req.id }} for {{ req.customer }}'],
+    ['handlers/invoice.mdy', '+++\ntitle: Invoice\n+++\nInvoice {{ req.id }} for {{ req.customer }}'],
   ]);
   assert.match(outputs.get('i.html'), /Invoice 7 for Ada/);
   assert.equal(messages[0].name, 'handlers.invoice');
@@ -151,7 +151,7 @@ test('a published page is an ordinary page — $.render reaches the same documen
 test('$.publish with no data queues {} rather than undefined', async () => {
   const { messages } = await site([
     ENTRY('% $.publish("h")\n% $.emit("i.html", "x")'),
-    ['h.mdy', '+++\nhandler'],
+    ['h.mdy', 'handler'],
   ]);
   assert.deepEqual(messages[0].data, {});
 });

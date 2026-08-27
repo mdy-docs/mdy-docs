@@ -24,10 +24,10 @@ export const CONSTRUCTS = [
   // --- structure ---------------------------------------------------------
   /*
    * Front matter is everything BEFORE the first bare +++ — the parser's own
-   * answer, checked rather than assumed: openDocumentSet('title: R\n+++\nb')
+   * answer, checked rather than assumed: openDocumentSet('+++\ntitle: R\n+++\nb')
    * yields { title: 'R' }, and the fenced +++ … +++ spelling yields {}.
    */
-  { name: 'front matter', source: 'title: Roster\n+++\nbody', marks: ['+++'] },
+  { name: 'front matter', source: '+++\ntitle: Roster\n+++\nbody', marks: ['+++'] },
   { name: 'document separator', source: 'one\n---\ntwo', marks: ['---'] },
   { name: 'script line', source: '% const x = 1', marks: ['%'] },
   { name: 'script block', source: '%% const x = 1', marks: ['%%'] },

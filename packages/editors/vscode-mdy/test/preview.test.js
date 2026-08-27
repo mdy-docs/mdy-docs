@@ -32,19 +32,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 // --- renderPreview: the CLI's file-input pipeline
 
 test('renders the entry document: front matter feeds {{ }}, markup becomes HTML', async () => {
-  const { html, emittedPaths } = await renderPreview(engine, 'title: Hello\n+++\n= {{ res.data.title }}\n');
+  const { html, emittedPaths } = await renderPreview(engine, '+++\ntitle: Hello\n+++\n= {{ res.data.title }}\n');
   assert.match(html, /<h1 id="[^"]*">Hello<\/h1>/);
   assert.deepEqual(emittedPaths, []);
 });
 
 test('multi-document files render document 0 as the entry, with $.find reaching the others', async () => {
   const source = [
+    '+++',
     'title: Index',
     '+++',
     '% for (const d of $.find({ role: "member" })) {',
     '- {{ d.title }}',
     '% }',
     '---',
+    '+++',
     'title: Alice',
     'role: member',
     '+++',
@@ -56,7 +58,7 @@ test('multi-document files render document 0 as the entry, with $.find reaching 
 });
 
 test('extra context (the CLI -d flag) arrives as req, front matter as res.data — never merged', async () => {
-  const source = 'title: Hello\n+++\n= {{ req.title ?? res.data.title }}\n';
+  const source = '+++\ntitle: Hello\n+++\n= {{ req.title ?? res.data.title }}\n';
   const { html } = await renderPreview(engine, source, { title: 'Override' });
   assert.match(html, /<h1 id="[^"]*">Override<\/h1>/); // req wins when passed
   const { html: bare } = await renderPreview(engine, source);
@@ -76,7 +78,7 @@ test('a real example file renders', async () => {
 
 test('the BUNDLED engine (dist/, built by pretest) renders standalone — sandbox and query wasm included', async () => {
   const bundled = await import('../dist/mdy-engine.mjs');
-  const source = 'title: Bundled\n+++\n= {{ res.data.title }}\n\n% for (const d of $.find({})) {\n- {{ d.title }}\n% }';
+  const source = '+++\ntitle: Bundled\n+++\n= {{ res.data.title }}\n\n% for (const d of $.find({})) {\n- {{ d.title }}\n% }';
   const { html } = await renderPreview(bundled, source);
   assert.match(html, /<h1 id="[^"]*">Bundled<\/h1>/); // lamassu.wasm ran the template
   assert.match(html, /<li>Bundled<\/li>/); // nisaba.wasm answered $.find

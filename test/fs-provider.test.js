@@ -46,9 +46,9 @@ test('memoryFsProvider: read returns the current text; ENOENT for a missing path
 test('memoryFsProvider: held by reference — a mutation after construction is visible', async () => {
   const files = new Map();
   const fs = memoryFsProvider(files);
-  files.set('content/new.mdy', 'title: New\n+++\nHi');
+  files.set('content/new.mdy', '+++\ntitle: New\n+++\nHi');
   assert.deepEqual(await fs.list('/', 'content'), ['new.mdy']);
-  assert.equal(await fs.read('/', 'content/new.mdy'), 'title: New\n+++\nHi');
+  assert.equal(await fs.read('/', 'content/new.mdy'), '+++\ntitle: New\n+++\nHi');
 });
 
 test('memoryFsProvider: write adds/overwrites, remove deletes — both visible to list/read', async () => {
@@ -58,7 +58,7 @@ test('memoryFsProvider: write adds/overwrites, remove deletes — both visible t
   await fs.write('/', 'content/about.mdy', 'new');
   assert.equal(await fs.read('/', 'content/about.mdy'), 'new');
 
-  await fs.write('/', 'content/new.mdy', 'title: New\n+++\nHi');
+  await fs.write('/', 'content/new.mdy', '+++\ntitle: New\n+++\nHi');
   assert.deepEqual(await fs.list('/', 'content'), ['about.mdy', 'new.mdy']);
 
   await fs.remove('/', 'content/about.mdy');
@@ -197,8 +197,8 @@ test('nodeFsProvider: write creates parent dirs and writes text; remove deletes 
   after(() => rm(root, { recursive: true, force: true }));
 
   const fs = nodeFsProvider();
-  await fs.write(root, 'content/nested/new.mdy', 'title: New\n+++\nHi');
-  assert.equal(await fs.read(root, 'content/nested/new.mdy'), 'title: New\n+++\nHi');
+  await fs.write(root, 'content/nested/new.mdy', '+++\ntitle: New\n+++\nHi');
+  assert.equal(await fs.read(root, 'content/nested/new.mdy'), '+++\ntitle: New\n+++\nHi');
   assert.deepEqual(await fs.list(root, 'content'), ['nested/new.mdy']);
 
   await fs.remove(root, 'content/nested/new.mdy');

@@ -94,7 +94,7 @@ test('the markdown front end reaches React too, alert icons and all', async () =
 // --- the template layer is untouched by the target ------------------------
 
 test('req and res bind exactly as they do on the string path', async () => {
-  const source = 'title: Mine\n+++\n{{ res.data.title }}/{{ req.title ?? "none" }}';
+  const source = '+++\ntitle: Mine\n+++\n{{ res.data.title }}/{{ req.title ?? "none" }}';
   assert.match(await toHtml(source), /<p>Mine\/none<\/p>/);
   assert.match(await toHtml(source, { title: 'Passed' }), /<p>Mine\/Passed<\/p>/);
 });

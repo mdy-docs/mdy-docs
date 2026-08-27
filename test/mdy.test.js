@@ -140,7 +140,7 @@ test('compiled source runs in a node:vm sandbox', () => {
 // --- parseDocuments -------------------------------------------------------
 
 test('front matter before +++ is parsed as YAML and stripped from the body', () => {
-  const src = 'title: Hi\nn: 2\n+++\n# {{ res.data.title }}';
+  const src = '+++\ntitle: Hi\nn: 2\n+++\n# {{ res.data.title }}';
   const [doc] = parseDocuments(src);
   assert.deepEqual(doc.data, { title: 'Hi', n: 2 });
   assert.ok(!doc.content.includes('title: Hi'));
@@ -154,24 +154,24 @@ test('a document with no +++ is all body and has empty data', () => {
 });
 
 test('an empty front matter block (leading +++) means no data', () => {
-  const [doc] = parseDocuments('+++\nbody text');
+  const [doc] = parseDocuments('body text');
   assert.deepEqual(doc.data, {});
   assert.equal(doc.content, 'body text');
 });
 
 test('blank lines after +++ are preserved (the body is plain markdown)', () => {
-  const [doc] = parseDocuments('a: 1\n+++\n\n\nbody');
+  const [doc] = parseDocuments('+++\na: 1\n+++\n\n\nbody');
   assert.deepEqual(doc.data, { a: 1 });
   assert.equal(doc.content, '\n\nbody');
 });
 
 test('nest in YAML to group values', () => {
-  const [doc] = parseDocuments('cfg:\n  x: 9\n+++\nbody');
+  const [doc] = parseDocuments('+++\ncfg:\n  x: 9\n+++\nbody');
   assert.deepEqual(doc.data, { cfg: { x: 9 } });
 });
 
 test('non-mapping front matter throws', () => {
-  assert.throws(() => parseDocuments('- 1\n- 2\n+++\nbody'), /YAML mapping/);
+  assert.throws(() => parseDocuments('+++\n- 1\n- 2\n+++\nbody'), /YAML mapping/);
 });
 
 test('```yaml fences are body content, not data', () => {
@@ -185,15 +185,15 @@ test('```yaml fences are body content, not data', () => {
 test('splitDocuments: no separators => one chunk; --- separates documents', () => {
   assert.deepEqual(splitDocuments('only one doc'), ['only one doc']);
   assert.deepEqual(
-    splitDocuments('a: 1\n+++\nbody A\n---\nb: 2\n+++\nbody B'),
-    ['a: 1\n+++\nbody A', 'b: 2\n+++\nbody B']
+    splitDocuments('+++\na: 1\n+++\nbody A\n---\n+++\nb: 2\n+++\nbody B'),
+    ['+++\na: 1\n+++\nbody A', '+++\nb: 2\n+++\nbody B']
   );
 });
 
 test('splitDocuments: text before the first separator is a leading document', () => {
   assert.deepEqual(
-    splitDocuments('preamble\n---\na: 1\n+++\nbody'),
-    ['preamble', 'a: 1\n+++\nbody']
+    splitDocuments('preamble\n---\n+++\na: 1\n+++\nbody'),
+    ['preamble', '+++\na: 1\n+++\nbody']
   );
 });
 
@@ -230,7 +230,7 @@ test('```data fences are parsed as YAML, merged into data, and stripped', async 
 });
 
 test('later data fences win over earlier ones and over front matter', () => {
-  const src = 'a: 1\nb: 1\n+++\n```data\nb: 2\nc: 2\n```\n\n```data\nc: 3\n```\n';
+  const src = '+++\na: 1\nb: 1\n+++\n```data\nb: 2\nc: 2\n```\n\n```data\nc: 3\n```\n';
   const [doc] = parseDocuments(src);
   assert.deepEqual(doc.data, { a: 1, b: 2, c: 3 });
 });
@@ -256,7 +256,7 @@ test('a ```data example inside a longer outer fence is display, not data', () =>
 });
 
 test('tags from data fences union with front matter tags and body hashtags', () => {
-  const src = 'tags: [alpha]\n+++\nabout #beta\n\n```data\ntags: [Gamma]\n```\n';
+  const src = '+++\ntags: [alpha]\n+++\nabout #beta\n\n```data\ntags: [Gamma]\n```\n';
   const [doc] = parseDocuments(src);
   assert.deepEqual(doc.data.tags, ['alpha', 'gamma', 'beta']);
 });
@@ -304,17 +304,17 @@ test('markdown-escaped \\#tag is not a tag', () => {
 });
 
 test('body hashtags land in data.tags, unioned with front matter tags', () => {
-  const [doc] = parseDocuments('tags: [Alpha]\n+++\nabout #beta and #alpha');
+  const [doc] = parseDocuments('+++\ntags: [Alpha]\n+++\nabout #beta and #alpha');
   assert.deepEqual(doc.data.tags, ['alpha', 'beta']);
 });
 
 test('a single-string front matter tags is one tag', () => {
-  const [doc] = parseDocuments('tags: solo\n+++\nbody');
+  const [doc] = parseDocuments('+++\ntags: solo\n+++\nbody');
   assert.deepEqual(doc.data.tags, ['solo']);
 });
 
 test('non-list front matter tags throws', () => {
-  assert.throws(() => parseDocuments('tags: { a: 1 }\n+++\nbody'), /`tags` must be a list/);
+  assert.throws(() => parseDocuments('+++\ntags: { a: 1 }\n+++\nbody'), /`tags` must be a list/);
 });
 
 test('an untagged document gets no tags key', () => {
@@ -333,14 +333,17 @@ test('$.withTag finds tagged documents (case-insensitive)', async () => {
     '- {{ d.name }}',
     '% }',
     '---',
+    '+++',
     'name: one',
     '+++',
     'a note about #fred',
     '---',
+    '+++',
     'name: two',
     '+++',
     'a note about #wilma',
     '---',
+    '+++',
     'name: three',
     '+++',
     'more on #Fred and #wilma',
@@ -424,14 +427,14 @@ test('createProcessor accepts a custom compiler, and passes its value through un
   // Both entry points — the string path and the tree path (a document that
   // ended in tree form) — have to reach the same compiler.
   assert.deepEqual(await renderMarkdown('# a\n\n- b\n- c\n'), { elements: 4 });
-  assert.deepEqual(await r('title: T\n+++\n= {{ res.data.title }}'), { elements: 1 });
+  assert.deepEqual(await r('+++\ntitle: T\n+++\n= {{ res.data.title }}'), { elements: 1 });
   assert.deepEqual(await renderTree({ type: 'root', children: [] }), { elements: 0 });
 });
 
 test('extraContext arrives on arg; the document\'s own data stays on self, never merged', async () => {
   // Both carry `who` with different values: the bindings stay separate, and
   // "extraContext wins" is the template's own explicit `req.x ?? res.data.x`.
-  const src = 'who: world\n+++\n{{ res.data.who }}/{{ req.who }}/{{ req.who ?? res.data.who }}/{{ req.where }}';
+  const src = '+++\nwho: world\n+++\n{{ res.data.who }}/{{ req.who }}/{{ req.who ?? res.data.who }}/{{ req.where }}';
   const out = await renderText(src, { where: 'mdy', who: 'everyone' });
   assert.equal(out.trim(), 'world/everyone/everyone/mdy');
 });
@@ -439,7 +442,7 @@ test('extraContext arrives on arg; the document\'s own data stays on self, never
 test('an entry document\'s own front matter is self, not arg', async () => {
   // The contradiction the split resolves: with nothing passed in, arg is {}
   // — the document's front matter never leaks onto it.
-  const out = await renderText('title: Hi\n+++\narg={{ req.title }} self={{ res.data.title }}');
+  const out = await renderText('+++\ntitle: Hi\n+++\narg={{ req.title }} self={{ res.data.title }}');
   assert.equal(out.trim(), 'arg=undefined self=Hi');
 });
 
@@ -456,14 +459,17 @@ test('$.find selects documents by data attributes, in document order', async () 
     '- {{ p.name }}',
     '% }',
     '---',
+    '+++',
     'kind: person',
     'name: Alice',
     '+++',
     '---',
+    '+++',
     'kind: place',
     'name: Uluru',
     '+++',
     '---',
+    '+++',
     'kind: person',
     'name: Bob',
     '+++',
@@ -474,8 +480,8 @@ test('$.find selects documents by data attributes, in document order', async () 
 test('$.find supports MongoDB query operators', async () => {
   const src = [
     '% for (const p of $.find({ age: { $gt: 35 } })) {\n[{{ p.name }}]\n% }',
-    '---', 'name: Alice', 'age: 30', '+++',
-    '---', 'name: Bob', 'age: 41', '+++',
+    '---', '+++', 'name: Alice', 'age: 30', '+++',
+    '---', '+++', 'name: Bob', 'age: 41', '+++',
   ].join('\n');
   assert.equal((await renderText(src)).trim(), '[Bob]');
 });
@@ -483,8 +489,8 @@ test('$.find supports MongoDB query operators', async () => {
 test('$.findOne returns the first match or null', async () => {
   const src = [
     'first={{ $.findOne({ kind: "x" }).name }} none={{ $.findOne({ kind: "z" }) === null }}',
-    '---', 'kind: x', 'name: a', '+++',
-    '---', 'kind: x', 'name: b', '+++',
+    '---', '+++', 'kind: x', 'name: a', '+++',
+    '---', '+++', 'kind: x', 'name: b', '+++',
   ].join('\n');
   assert.equal((await renderText(src)).trim(), 'first=a none=true');
 });
@@ -495,15 +501,18 @@ test('$.render selects its template document by query', async () => {
     '{{ $.render({ template: "card" }, m) }}',
     '% }',
     '---',
+    '+++',
     'template: card',
     '+++',
     '- {{ req.name }} is {{ req.age }}',
     '---',
+    '+++',
     'role: member',
     'name: Alice',
     'age: 30',
     '+++',
     '---',
+    '+++',
     'role: member',
     'name: Bob',
     'age: 41',
@@ -522,10 +531,12 @@ test('$.render renders a $.find/$.findOne result directly — a document referen
     '{{ $.render(card, m) }}',
     '% }',
     '---',
+    '+++',
     'template: card',
     '+++',
     '- {{ req.name }}',
     '---',
+    '+++',
     'role: member',
     'name: Alice',
     '+++',
@@ -536,7 +547,7 @@ test('$.render renders a $.find/$.findOne result directly — a document referen
 test('$.render of a reference resolves by identity: no query fires for the render itself', async () => {
   const seen = [];
   const set = await openDocumentSet(
-    '% const card = $.findOne({ t: "card" })\n{{ $.render(card) }}\n---\nt: card\n+++\nhi',
+    '% const card = $.findOne({ t: "card" })\n{{ $.render(card) }}\n---\n+++\nt: card\n+++\nhi',
     { onQuery: (info) => seen.push(info.query) }
   );
   assert.equal((await set.render(0)).trim(), '<p>hi</p>');
@@ -545,14 +556,14 @@ test('$.render of a reference resolves by identity: no query fires for the rende
 
 test('$.render(null) — a missed $.findOne — is a clear template error', async () => {
   await assert.rejects(
-    renderText('{{ $.render($.findOne({ t: "nope" })) }}\n---\nt: card\n+++\nhi'),
+    renderText('{{ $.render($.findOne({ t: "nope" })) }}\n---\n+++\nt: card\n+++\nhi'),
     /target is null\/undefined/
   );
 });
 
 test('$.render of a reference from another set (unknown _id) is a clear error', async () => {
   await assert.rejects(
-    renderText('{{ $.render({ _id: "deadbeef" }) }}\n---\nt: card\n+++\nhi'),
+    renderText('{{ $.render({ _id: "deadbeef" }) }}\n---\n+++\nt: card\n+++\nhi'),
     /not a document of this set/
   );
 });
@@ -565,10 +576,12 @@ test('$.render by index still works (positional)', async () => {
     '---',
     '- {{ req.name }} is {{ req.age }}',
     '---',
+    '+++',
     'name: Alice',
     'age: 30',
     '+++',
     '---',
+    '+++',
     'name: Bob',
     'age: 41',
     '+++',
@@ -620,7 +633,7 @@ test('$.render on an unmatched query rejects', async () => {
 });
 
 test('$.data and $.count expose the document set', async () => {
-  const src = 'count={{ $.count }} second={{ $.data(1).x }}\n---\nx: 42\n+++\nsecond doc';
+  const src = 'count={{ $.count }} second={{ $.data(1).x }}\n---\n+++\nx: 42\n+++\nsecond doc';
   assert.equal((await renderText(src)).trim(), 'count=2 second=42');
 });
 
@@ -635,7 +648,7 @@ test('cyclic $.render is caught by the depth guard', async () => {
 });
 
 test('entry index selects which document renders', async () => {
-  const src = 'doc zero\n---\nx: 7\n+++\nsecond doc x={{ res.data.x }}';
+  const src = 'doc zero\n---\n+++\nx: 7\n+++\nsecond doc x={{ res.data.x }}';
   assert.equal((await renderText(src, {}, 0)).trim(), 'doc zero');
   assert.equal((await renderText(src, {}, 1)).trim(), 'second doc x=7');
 });
@@ -651,18 +664,18 @@ test('document-set example: entry composes cards over members by query', async (
 // --- multi-source sets & renderEach ---------------------------------------
 
 test('an array of sources parses as one combined document set', () => {
-  const docs = parseDocuments(['a: 1\n+++\ntemplate', 'b: 2\n+++\n---\nc: 3\n+++\n']);
+  const docs = parseDocuments(['+++\na: 1\n+++\ntemplate', '+++\nb: 2\n+++\n---\n+++\nc: 3\n+++\n']);
   assert.deepEqual(docs.map((d) => d.data), [{ a: 1 }, { b: 2 }, { c: 3 }]);
 });
 
 test('$ addresses documents across sources', async () => {
   const template = 'count={{ $.count }}\n% for (const d of $.find({ x: { $gte: 1 } })) {\n x={{ d.x }}\n% }';
-  const data = 'x: 1\n+++\n---\nx: 2\n+++\n';
+  const data = '+++\nx: 1\n+++\n---\n+++\nx: 2\n+++\n';
   assert.equal((await renderText([template, data])).trim(), 'count=3\n x=1\n x=2');
 });
 
 test('renderEach applies the entry template to each other document', async () => {
-  const out = await renderEach(['Hi {{ req.name }}!', 'name: Ada\n+++\n---\nname: Bob\n+++\n']);
+  const out = await renderEach(['Hi {{ req.name }}!', '+++\nname: Ada\n+++\n---\n+++\nname: Bob\n+++\n']);
   assert.deepEqual(out.map((s) => s.trim()), ['<p>Hi Ada!</p>', '<p>Hi Bob!</p>']);
 });
 
@@ -671,8 +684,8 @@ test('renderEach: the record is req, template front matter is res.data; defaults
   // "nobody" even while req.name is "Ada". extraContext merges into the
   // record (and wins) before arriving as req.
   const template =
-    'greeting: Hello\nname: nobody\n+++\n{{ req.greeting ?? res.data.greeting }} {{ req.name ?? res.data.name }}/{{ res.data.name }}';
-  const data = 'name: Ada\n+++\n';
+    '+++\ngreeting: Hello\nname: nobody\n+++\n{{ req.greeting ?? res.data.greeting }} {{ req.name ?? res.data.name }}/{{ res.data.name }}';
+  const data = '+++\nname: Ada\n+++\n';
   assert.deepEqual((await renderEach([template, data])).map((s) => s.trim()), ['<p>Hello Ada/nobody</p>']);
   assert.deepEqual(
     (await renderEach([template, data], { greeting: 'Yo' })).map((s) => s.trim()),
@@ -683,7 +696,7 @@ test('renderEach: the record is req, template front matter is res.data; defaults
 test('renderEach with no sibling documents renders the entry once with req = {}', async () => {
   // The same explicit fallback keeps a template file working standalone: its
   // own front matter is on res.data, and there is no record to be req.
-  const out = await renderEach('who: world\n+++\nhi {{ req.who ?? res.data.who }}');
+  const out = await renderEach('+++\nwho: world\n+++\nhi {{ req.who ?? res.data.who }}');
   assert.deepEqual(out.map((s) => s.trim()), ['<p>hi world</p>']);
 });
 
@@ -705,9 +718,9 @@ test('invoice template applies to each invoice-data record', async () => {
 
 test('source meta merges into every document of that source', () => {
   const docs = parseDocuments([
-    { text: 'a: 1\n+++\n---\na: 2\n+++\n', meta: { path: 'posts/x.mdy', section: 'posts' } },
-    { text: 'a: 3\n+++\n', meta: { path: 'about.mdy' } },
-    'a: 4\n+++\n',
+    { text: '+++\na: 1\n+++\n---\n+++\na: 2\n+++\n', meta: { path: 'posts/x.mdy', section: 'posts' } },
+    { text: '+++\na: 3\n+++\n', meta: { path: 'about.mdy' } },
+    '+++\na: 4\n+++\n',
   ]);
   assert.deepEqual(docs.map((d) => d.data), [
     { a: 1, path: 'posts/x.mdy', section: 'posts' },
@@ -718,14 +731,14 @@ test('source meta merges into every document of that source', () => {
 });
 
 test('meta wins over front matter (identity is not overridable)', () => {
-  const docs = parseDocuments({ text: 'path: forged\n+++\n', meta: { path: 'real.mdy' } });
+  const docs = parseDocuments({ text: '+++\npath: forged\n+++\n', meta: { path: 'real.mdy' } });
   assert.equal(docs[0].data.path, 'real.mdy');
 });
 
 test('a bare { text } source parses like a plain string', () => {
   assert.deepEqual(
-    parseDocuments({ text: 'a: 1\n+++\nbody' }),
-    parseDocuments('a: 1\n+++\nbody')
+    parseDocuments({ text: '+++\na: 1\n+++\nbody' }),
+    parseDocuments('+++\na: 1\n+++\nbody')
   );
 });
 
@@ -737,7 +750,7 @@ test('invalid sources throw', () => {
 test('meta fields are queryable and visible in templates', async () => {
   const out = await renderText([
     { text: '% for (const p of $.find({ section: "posts" })) {\n{{ p.title }} in {{ p.path }};\n% }' },
-    { text: 'title: One\n+++\n---\ntitle: Two\n+++\n', meta: { section: 'posts', path: 'p.mdy' } },
+    { text: '+++\ntitle: One\n+++\n---\n+++\ntitle: Two\n+++\n', meta: { section: 'posts', path: 'p.mdy' } },
   ]);
   assert.equal(out.trim(), 'One in p.mdy;\nTwo in p.mdy;');
 });
@@ -746,8 +759,8 @@ test('meta fields are queryable and visible in templates', async () => {
 
 test('openDocumentSet: one set, many host-side queries and renders', async () => {
   const set = await openDocumentSet([
-    { text: 'layout: post\n+++\n# {{ req.title }}', meta: { kind: 'layout' } },
-    { text: 'title: A\n+++\n---\ntitle: B\n+++\n', meta: { kind: 'page' } },
+    { text: '+++\nlayout: post\n+++\n# {{ req.title }}', meta: { kind: 'layout' } },
+    { text: '+++\ntitle: A\n+++\n---\n+++\ntitle: B\n+++\n', meta: { kind: 'page' } },
   ]);
 
   assert.equal(set.docs.length, 3);
@@ -763,18 +776,18 @@ test('openDocumentSet: one set, many host-side queries and renders', async () =>
 });
 
 test('openDocumentSet: find with no query returns all documents in order', async () => {
-  const set = await openDocumentSet('a: 1\n+++\n---\na: 2\n+++\n');
+  const set = await openDocumentSet('+++\na: 1\n+++\n---\n+++\na: 2\n+++\n');
   assert.deepEqual((await set.find()).map((d) => d.a), [1, 2]);
 });
 
 test('openDocumentSet: findOne returns first match or null', async () => {
-  const set = await openDocumentSet('x: 1\n+++\n---\nx: 2\n+++\n');
+  const set = await openDocumentSet('+++\nx: 1\n+++\n---\n+++\nx: 2\n+++\n');
   assert.equal((await set.findOne({ x: { $gt: 1 } })).x, 2);
   assert.equal(await set.findOne({ x: 99 }), null);
 });
 
 test('openDocumentSet: render by index — ctx is arg, document data is self', async () => {
-  const set = await openDocumentSet('name: default\n+++\nHi {{ req.name ?? res.data.name }}');
+  const set = await openDocumentSet('+++\nname: default\n+++\nHi {{ req.name ?? res.data.name }}');
   assert.equal((await set.renderText(0)).trim(), 'Hi default');
   assert.equal((await set.renderText(0, { name: 'Ada' })).trim(), 'Hi Ada');
 });
@@ -787,8 +800,8 @@ test('openDocumentSet: render on an unmatched query rejects', async () => {
 test('openDocumentSet: templates can still $.find and $.render inside the VM', async () => {
   const set = await openDocumentSet([
     '% for (const d of $.find({ n: { $gte: 1 } })) {\n{{ $.render({ card: true }, d) }}\n% }',
-    'card: true\n+++\n[{{ req.n }}]',
-    'n: 1\n+++\n---\nn: 2\n+++\n',
+    '+++\ncard: true\n+++\n[{{ req.n }}]',
+    '+++\nn: 1\n+++\n---\n+++\nn: 2\n+++\n',
   ]);
   assert.equal((await set.render(0)).replace(/\s+/g, ''), '<p>[1]</p><p>[2]</p>');
 });
@@ -883,34 +896,38 @@ test('a missing data key reads as undefined instead of erroring', async () => {
   // access reading undefined — ?? and ternary fallbacks work, on res.data (a
   // document's own optional data) and req (a record a shared layout
   // references but the caller may not carry) alike.
-  assert.equal(await renderText('x: 1\n+++\nv={{ res.data.missing }}'), 'v=undefined');
-  assert.equal(await renderText('x: 1\n+++\n{{ res.data.age ?? "n/a" }}'), 'n/a');
-  assert.equal(await renderText('x: 1\n+++\n{{ res.data.age ? res.data.age : "none" }}'), 'none');
-  assert.equal(await renderText('x: 1\n+++\n{{ (res.data.skills ?? []).join(", ") }}'), '');
+  assert.equal(await renderText('+++\nx: 1\n+++\nv={{ res.data.missing }}'), 'v=undefined');
+  assert.equal(await renderText('+++\nx: 1\n+++\n{{ res.data.age ?? "n/a" }}'), 'n/a');
+  assert.equal(await renderText('+++\nx: 1\n+++\n{{ res.data.age ? res.data.age : "none" }}'), 'none');
+  assert.equal(await renderText('+++\nx: 1\n+++\n{{ (res.data.skills ?? []).join(", ") }}'), '');
   // and on req, which is {} here because nothing was passed in
-  assert.equal(await renderText('x: 1\n+++\nv={{ req.missing }}'), 'v=undefined');
+  assert.equal(await renderText('+++\nx: 1\n+++\nv={{ req.missing }}'), 'v=undefined');
   // several distinct missing keys in one document
-  assert.equal(await renderText('+++\n{{ req.a ?? 1 }}/{{ res.data.b ?? 2 }}/{{ req.c ?? res.data.c ?? 3 }}'), '1/2/3');
+  assert.equal(await renderText('{{ req.a ?? 1 }}/{{ res.data.b ?? 2 }}/{{ req.c ?? res.data.c ?? 3 }}'), '1/2/3');
 });
 
 test('a shared layout renders records that lack referenced properties', async () => {
   const src = [
+    '+++',
     'title: T',
     '+++',
     '% for (const m of $.find({ role: "member" })) {',
     '{{ $.render({ template: "card" }, m) }}',
     '% }',
     '---',
+    '+++',
     'template: card',
     '+++',
     '=== {{ req.name ?? "(unnamed)" }} — {{ req.age ?? "?" }} — {{ (req.skills ?? []).join("/") }}',
     '---',
+    '+++',
     'role: member',
     'name: Alice',
     'age: 30',
     'skills: [js]',
     '+++',
     '---',
+    '+++',
     'role: member',
     'name: Bob',
     '+++',
@@ -923,9 +940,9 @@ test('a shared layout renders records that lack referenced properties', async ()
 test('an undeclared bare identifier is a genuine document error', async () => {
   // only res.data.*/req.* property access is graceful — a bare identifier the
   // document never declared is a real ReferenceError
-  await assert.rejects(renderText('+++\n{{ nope }}'), /document 0 failed.*nope is not defined/);
+  await assert.rejects(renderText('{{ nope }}'), /document 0 failed.*nope is not defined/);
   // and property access on a missing key's undefined is a real TypeError
-  await assert.rejects(renderText('+++\n{{ req.missing.prop }}'), /document 0 failed/);
+  await assert.rejects(renderText('{{ req.missing.prop }}'), /document 0 failed/);
 });
 
 test('$.html on a non-node is a document error, not an engine crash', async () => {
@@ -1049,7 +1066,7 @@ test('> [!WARNING] blockquotes render as GitHub alert boxes — in the MARKDOWN 
 test('onQuery: fires for a template-level $.find, tagged with the rendering document\'s index', async () => {
   const seen = [];
   const set = await openDocumentSet(
-    ['% $.find({ n: { $gte: 1 } })', 'n: 1\n+++\n'],
+    ['% $.find({ n: { $gte: 1 } })', '+++\nn: 1\n+++\n'],
     { onQuery: (info) => seen.push(info) }
   );
   await set.renderText(0);
@@ -1059,7 +1076,7 @@ test('onQuery: fires for a template-level $.find, tagged with the rendering docu
 test('onQuery: fires for $.findOne and $.withTag too, same shape', async () => {
   const seen = [];
   const set = await openDocumentSet(
-    ['% $.findOne({ x: 1 })\n\n% $.withTag("go")', 'x: 1\n+++\n'],
+    ['% $.findOne({ x: 1 })\n\n% $.withTag("go")', '+++\nx: 1\n+++\n'],
     { onQuery: (info) => seen.push(info) }
   );
   await set.renderText(0);
@@ -1072,7 +1089,7 @@ test('onQuery: fires for $.findOne and $.withTag too, same shape', async () => {
 test('onQuery: a template-level $.render-by-query counts as a query too', async () => {
   const seen = [];
   const set = await openDocumentSet(
-    ['{{ $.render({ role: "card" }, {}) }}', 'role: card\n+++\nhi'],
+    ['{{ $.render({ role: "card" }, {}) }}', '+++\nrole: card\n+++\nhi'],
     { onQuery: (info) => seen.push(info) }
   );
   await set.renderText(0);
@@ -1084,7 +1101,7 @@ test('onQuery: docIndex tracks whichever document is currently rendering, includ
   const set = await openDocumentSet(
     [
       '{{ $.render({ role: "inner" }, {}) }}', // doc 0
-      'role: inner\n+++\n% $.find({ tag: "x" })\ninner', // doc 1 — its own $.find runs while doc 1 is rendering
+      '+++\nrole: inner\n+++\n% $.find({ tag: "x" })\ninner', // doc 1 — its own $.find runs while doc 1 is rendering
     ],
     { onQuery: (info) => seen.push(info) }
   );
@@ -1098,7 +1115,7 @@ test('onQuery: docIndex tracks whichever document is currently rendering, includ
 test('onQuery: fires for host-side find/findOne/render too, tagged docIndex: null', async () => {
   const seen = [];
   const set = await openDocumentSet(
-    ['title: A\n+++\nhi', 'role: card\n+++\ncard'],
+    ['+++\ntitle: A\n+++\nhi', '+++\nrole: card\n+++\ncard'],
     { onQuery: (info) => seen.push(info) }
   );
   await set.find({ title: 'A' });
@@ -1150,7 +1167,7 @@ test('natives: multiple extra natives, and args/return cross the VM boundary JSO
 });
 
 test('natives: coexist with find/findOne/render — no interference either direction', async () => {
-  const set = await openDocumentSet(['{{ $.tag($.findOne({ n: 1 }).n) }}', 'n: 1\n+++\n'], {
+  const set = await openDocumentSet(['{{ $.tag($.findOne({ n: 1 }).n) }}', '+++\nn: 1\n+++\n'], {
     natives: { tag: (n) => `#${n}` },
   });
   assert.equal((await set.renderText(0)).trim(), '#1');
@@ -1191,7 +1208,7 @@ test('onEmit: multiple emits from one document, in call order', async () => {
 test('onEmit: docIndex tracks whichever document is currently rendering, including nested $.render', async () => {
   const seen = [];
   const set = await openDocumentSet(
-    ['% $.emit("outer.html", "outer")\n{{ $.render({ role: "inner" }, {}) }}', 'role: inner\n+++\n% $.emit("inner.html", "inner")'],
+    ['% $.emit("outer.html", "outer")\n{{ $.render({ role: "inner" }, {}) }}', '+++\nrole: inner\n+++\n% $.emit("inner.html", "inner")'],
     { onEmit: (info) => seen.push(info) }
   );
   await set.renderText(0);

@@ -63,7 +63,7 @@ test('opfsFsProvider: list/read/write/remove/mtime against real OPFS, roots stay
     const { opfsFsProvider } = await import('/fs-provider.js');
     const fs = opfsFsProvider();
 
-    await fs.write('vault-a', 'content/about.mdy', 'title: About\n+++\nHi');
+    await fs.write('vault-a', 'content/about.mdy', '+++\ntitle: About\n+++\nHi');
     await fs.write('vault-a', 'content/nested/note.md', 'plain');
     await fs.write('vault-b', 'content/about.mdy', 'a different vault entirely');
 
@@ -96,10 +96,10 @@ test('opfsFsProvider: list/read/write/remove/mtime against real OPFS, roots stay
   assert.deepEqual(result.listed, ['about.mdy']);
   assert.deepEqual(result.listedAll, ['content/about.mdy', 'content/nested/note.md']);
   assert.deepEqual(result.listedUnfiltered, ['about.mdy', 'nested/note.md']);
-  assert.equal(result.text, 'title: About\n+++\nHi');
+  assert.equal(result.text, '+++\ntitle: About\n+++\nHi');
   assert.equal(result.otherVaultText, 'a different vault entirely');
   assert.ok(result.mtimeIsRecent);
-  assert.equal(result.size, 'title: About\n+++\nHi'.length);
+  assert.equal(result.size, '+++\ntitle: About\n+++\nHi'.length);
   assert.deepEqual(result.missingSubdir, []);
   assert.deepEqual(result.afterRemove, []);
 });

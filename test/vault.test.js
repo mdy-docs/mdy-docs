@@ -11,14 +11,14 @@ import { makePng } from './png-fixture.js';
 
 test('walkVault: raw sources, no interpretation beyond path + mtime identity', async () => {
   const files = new Map([
-    ['notes/today.mdy', 'title: Today\n+++\nWhat happened.'],
+    ['notes/today.mdy', '+++\ntitle: Today\n+++\nWhat happened.'],
     ['notes/ideas.mdy', 'A loose idea.'],
   ]);
   const sources = await walkVault('/', { fs: memoryFsProvider(files) });
 
   assert.equal(sources.length, 2);
   const today = sources.find((s) => s.meta.path === 'notes/today.mdy');
-  assert.equal(today.text, 'title: Today\n+++\nWhat happened.');
+  assert.equal(today.text, '+++\ntitle: Today\n+++\nWhat happened.');
   assert.deepEqual(Object.keys(today.meta).sort(), ['mtime', 'path']);
   assert.ok(today.meta.mtime instanceof Date);
   // No url, section, slug, date, title, draft — that's all consumer-specific.
@@ -75,7 +75,7 @@ test('walkVault: options.extensions widens (or narrows) which files are walked',
 
 test('walkFiles: every file, any extension, by default — no text read', async () => {
   const files = new Map([
-    ['content/about.mdy', 'title: About\n+++\nHi'],
+    ['content/about.mdy', '+++\ntitle: About\n+++\nHi'],
     ['static/logo.png', 'not-really-png-bytes'],
     ['static/style.css', 'body { color: red }'],
     ['site.yaml', 'title: Test\n'],
@@ -140,8 +140,8 @@ test('walkFiles: defaults to the real filesystem and reports real sizes', async 
 
 test('walkRawSources: a .mdy file gets its real text, front matter extractable via openDocumentSet', async () => {
   const files = new Map([
-    ['main.mdy', 'title: Hello\n+++\nbody'],
-    ['other.mdy', 'title: Other\n+++\nirrelevant'],
+    ['main.mdy', '+++\ntitle: Hello\n+++\nbody'],
+    ['other.mdy', '+++\ntitle: Other\n+++\nirrelevant'],
   ]);
   const sources = await walkRawSources('/', { fs: memoryFsProvider(files) });
 
@@ -244,7 +244,7 @@ test('walkRawSources: an empty .yaml file is just an identity record, no parsed 
 
 test('walkRawSources: dist/, node_modules/, and dotfiles/dot-directories are excluded', async () => {
   const files = new Map([
-    ['main.mdy', '+++\nhi'],
+    ['main.mdy', 'hi'],
     ['dist/index.html', 'built'],
     ['node_modules/x/index.js', 'dep'],
     ['.git/HEAD', 'ref'],
@@ -258,12 +258,12 @@ test('walkVault: defaults to the real filesystem and works against a real direct
   const root = await mkdtemp(join(tmpdir(), 'vault-walk-'));
   after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'wiki'), { recursive: true });
-  await writeFile(join(root, 'wiki', 'home.mdy'), 'title: Home\n+++\nWelcome.');
+  await writeFile(join(root, 'wiki', 'home.mdy'), '+++\ntitle: Home\n+++\nWelcome.');
 
   const sources = await walkVault(root); // no options.fs — default nodeFsProvider()
   assert.equal(sources.length, 1);
   assert.equal(sources[0].meta.path, 'wiki/home.mdy');
-  assert.equal(sources[0].text, 'title: Home\n+++\nWelcome.');
+  assert.equal(sources[0].text, '+++\ntitle: Home\n+++\nWelcome.');
 
   // Sanity: nodeFsProvider is genuinely what's used by default.
   const viaExplicitProvider = await walkVault(root, { fs: nodeFsProvider() });

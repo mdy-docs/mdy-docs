@@ -29,7 +29,7 @@ async function bus(files, options = {}) {
 
 test('a published message renders the page it names, with no socket', async () => {
   const { site, broker, running } = await bus([
-    ['handlers/invoice.mdy', '+++\n% $.emit("out", "invoice for " + req.customer)'],
+    ['handlers/invoice.mdy', '% $.emit("out", "invoice for " + req.customer)'],
   ]);
   try {
     await broker.publish('handlers.invoice', { customer: 'Ada' });
@@ -43,9 +43,9 @@ test('a chain of pages runs to the end in one drain', async () => {
   // that message is due in the same tick — a dev loop should not make you
   // wait a poll interval per link.
   const { site, broker, running } = await bus([
-    ['a.mdy', '+++\n% $.publish("b", { from: "a" })'],
-    ['b.mdy', '+++\n% $.publish("c", { from: "b" })'],
-    ['c.mdy', '+++\n% $.emit("end", "reached via " + req.from)'],
+    ['a.mdy', '% $.publish("b", { from: "a" })'],
+    ['b.mdy', '% $.publish("c", { from: "b" })'],
+    ['c.mdy', '% $.emit("end", "reached via " + req.from)'],
   ]);
   try {
     await broker.publish('a', {});
@@ -56,7 +56,7 @@ test('a chain of pages runs to the end in one drain', async () => {
 
 test('req.msg carries the envelope, exactly as over HTTP', async () => {
   const { site, broker, running } = await bus([
-    ['h.mdy', '+++\n% $.emit("out", req.msg.name + "/" + req.msg.index + "/" + req.msg.attempts)'],
+    ['h.mdy', '% $.emit("out", req.msg.name + "/" + req.msg.index + "/" + req.msg.attempts)'],
   ]);
   try {
     await broker.publish('h', { any: 'thing' });
@@ -72,8 +72,8 @@ test('a page that throws is retried, then dead-lettered to its .dead page', asyn
   // minute from now.
   const { site, broker, running } = await bus(
     [
-      ['flaky.mdy', '+++\n% throw "always"'],
-      ['flaky.dead.mdy', '+++\n% $.emit("gave-up", "after " + req.msg.attempts + " attempts")'],
+      ['flaky.mdy', '% throw "always"'],
+      ['flaky.dead.mdy', '% $.emit("gave-up", "after " + req.msg.attempts + " attempts")'],
     ],
     { maxAttempts: 2, backoffMs: 0, maxBackoffMs: 0 }
   );
@@ -87,7 +87,7 @@ test('a page that throws is retried, then dead-lettered to its .dead page', asyn
 
 test('nothing is delivered twice: a finished job is not taken again', async () => {
   const { site, broker, running } = await bus([
-    ['h.mdy', '+++\n% $.emit("n" + req.msg.index, String(req.msg.index))'],
+    ['h.mdy', '% $.emit("n" + req.msg.index, String(req.msg.index))'],
   ]);
   try {
     await broker.publish('h', {});
@@ -102,13 +102,13 @@ test('an edit changes what the next message renders', async () => {
   // setSite is what makes one process worth having: mdy dev rebuilds on
   // save and the bus delivers against the new set without tearing anything
   // down.
-  const files = [['h.mdy', '+++\n% $.emit("out", "first")']];
+  const files = [['h.mdy', '% $.emit("out", "first")']];
   const { broker, running } = await bus(files);
   try {
     await broker.publish('h', {});
     await running.drain();
 
-    const edited = await open([['h.mdy', '+++\n% $.emit("out", "second")']]);
+    const edited = await open([['h.mdy', '% $.emit("out", "second")']]);
     running.setSite(edited);
     await broker.publish('h', {});
     await running.drain();

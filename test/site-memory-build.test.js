@@ -14,8 +14,8 @@ import { makePng } from './png-fixture.js';
 
 test('renderSite over memoryFsProvider builds a real site with zero disk I/O', async () => {
   const files = new Map([
-    ['main.mdy', '+++\n% const body = $.render({ path: "hello.mdy" })\n% $.emit("hello/index.html", "<html><body>" + body + "</body></html>")'],
-    ['hello.mdy', 'title: Hello\n+++\nBuilt entirely in memory.'],
+    ['main.mdy', '% const body = $.render({ path: "hello.mdy" })\n% $.emit("hello/index.html", "<html><body>" + body + "</body></html>")'],
+    ['hello.mdy', '+++\ntitle: Hello\n+++\nBuilt entirely in memory.'],
   ]);
   const fs = memoryFsProvider(files);
 
@@ -28,15 +28,15 @@ test('renderSite over memoryFsProvider builds a real site with zero disk I/O', a
 
 test('renderSite over memoryFsProvider: an edit is reflected on the next render (live-editing shape)', async () => {
   const files = new Map([
-    ['main.mdy', '+++\n% const body = $.render({ path: "note.mdy" })\n% $.emit("note/index.html", body)'],
-    ['note.mdy', 'title: Draft one\n+++\nfirst version'],
+    ['main.mdy', '% const body = $.render({ path: "note.mdy" })\n% $.emit("note/index.html", body)'],
+    ['note.mdy', '+++\ntitle: Draft one\n+++\nfirst version'],
   ]);
   const fs = memoryFsProvider(files);
 
   const first = await renderSite('/', { fs });
   assert.match(first.outputs.get('note/index.html'), /first version/);
 
-  files.set('note.mdy', 'title: Draft one\n+++\nsecond version');
+  files.set('note.mdy', '+++\ntitle: Draft one\n+++\nsecond version');
   const second = await renderSite('/', { fs });
   assert.match(second.outputs.get('note/index.html'), /second version/);
 });
@@ -45,7 +45,7 @@ test('a script can $.find raw file records — static assets are queryable even 
   const files = new Map([
     [
       'main.mdy',
-      '+++\n' +
+      '' +
         '% const images = $.find({ ext: ".png" })\n' +
         '% const lines = images.map((f) => "asset: " + f.path + " (" + f.size + " bytes)").join("\\n")\n' +
         '% $.emit("hello/index.html", lines)',
@@ -65,7 +65,7 @@ test('a script can $.resize a raw image record — a real, correctly-sized thumb
   const files = new Map([
     [
       'main.mdy',
-      '+++\n' +
+      '' +
         '% const logo = $.findOne({ path: "static/logo.png" })\n' +
         '% const thumb = $.resize(logo, { width: 20 })\n' +
         '% $.emit("hello/index.html", "<img src=" + JSON.stringify(thumb.url) + " width=" + JSON.stringify(String(thumb.width)) + " height=" + JSON.stringify(String(thumb.height)) + ">")',
@@ -93,12 +93,12 @@ test('an entry document can $.emit its own output files — a script defining a 
   // sites are built on (see docs/site-plan.md's "Toward a script-defined
   // site" note).
   const files = new Map([
-    ['posts/hello.mdy', 'title: Hello\ntags: [wasm]\n+++\nHi.'],
-    ['posts/other.mdy', 'title: Other\ntags: [wasm]\n+++\nMore.'],
-    ['posts/unrelated.mdy', 'title: Unrelated\ntags: [misc]\n+++\nSkip me.'],
+    ['posts/hello.mdy', '+++\ntitle: Hello\ntags: [wasm]\n+++\nHi.'],
+    ['posts/other.mdy', '+++\ntitle: Other\ntags: [wasm]\n+++\nMore.'],
+    ['posts/unrelated.mdy', '+++\ntitle: Unrelated\ntags: [misc]\n+++\nSkip me.'],
     [
       'main.mdy',
-      '+++\n' +
+      '' +
         '% const posts = $.find({}).filter((d) => d.path && d.path.indexOf("posts/") === 0)\n' +
         '% const wasmPosts = posts.filter((p) => (p.tags || []).includes("wasm"))\n' +
         '% $.emit("tags/wasm/index.html", "<ul>" + wasmPosts.map((p) => "<li>" + p.title + "</li>").join("") + "</ul>")\n' +

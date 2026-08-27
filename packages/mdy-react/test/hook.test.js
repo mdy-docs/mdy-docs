@@ -65,7 +65,7 @@ const mount = async (element, until = () => container.innerHTML !== '') => {
 };
 
 test('renders a document into the DOM', async () => {
-  await mount(createElement(Mdy, { source: 'title: Hi\n+++\n= {{ res.data.title }}' }));
+  await mount(createElement(Mdy, { source: '+++\ntitle: Hi\n+++\n= {{ res.data.title }}' }));
   assert.equal(container.querySelector('h1').textContent, 'Hi');
   assert.equal(container.querySelector('h1').id, 'hi');
 });

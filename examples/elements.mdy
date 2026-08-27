@@ -1,3 +1,4 @@
++++
 title: Elements and indentation
 subtitle: structure without closing tags
 members:
@@ -90,6 +91,7 @@ An opener shown inside a fence is sample text, not structure:
   This block is displayed, not expanded.
 ```
 ---
++++
 template: card
 +++
 === {{ req.name }}

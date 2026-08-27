@@ -44,7 +44,7 @@ test('a delivered message renders the page of that name, with the message as req
 
 test('req.msg carries the envelope: name, index, attempts', async () => {
   const site = await open([
-    ['h.mdy', '+++\n% $.emit("out", req.msg.name + "/" + req.msg.index + "/" + req.msg.attempts)'],
+    ['h.mdy', '% $.emit("out", req.msg.name + "/" + req.msg.index + "/" + req.msg.attempts)'],
   ]);
   const { deliver } = handlerFor(site);
 
@@ -53,7 +53,7 @@ test('req.msg carries the envelope: name, index, attempts', async () => {
 });
 
 test('attempts defaults to 1 when the broker did not say', async () => {
-  const site = await open([['h.mdy', '+++\n% $.emit("out", String(req.msg.attempts))']]);
+  const site = await open([['h.mdy', '% $.emit("out", String(req.msg.attempts))']]);
   const { deliver } = handlerFor(site);
   await deliver('h', [entry(1, {})]);
   assert.equal(site.outputs.get('out'), '1');
@@ -61,7 +61,7 @@ test('attempts defaults to 1 when the broker did not say', async () => {
 
 test('a batch is rendered in order, and every message is acked on its own', async () => {
   const site = await open([
-    ['h.mdy', '+++\n% $.emit("out-" + req.n, String(req.n))'],
+    ['h.mdy', '% $.emit("out-" + req.n, String(req.n))'],
   ]);
   const { deliver } = handlerFor(site);
 
@@ -76,7 +76,7 @@ test('one message failing returns only that message — the rest still run', asy
   // drag every later message back with it; jobs are held and returned
   // individually, so a message that cannot render blocks nothing.
   const site = await open([
-    ['h.mdy', '+++\n% if (req.n === 2) { throw "boom" }\n% $.emit("out-" + req.n, "ok")'],
+    ['h.mdy', '% if (req.n === 2) { throw "boom" }\n% $.emit("out-" + req.n, "ok")'],
   ]);
   const { deliver } = handlerFor(site);
 
@@ -87,7 +87,7 @@ test('one message failing returns only that message — the rest still run', asy
 });
 
 test('a delivery where nothing succeeded returns everything', async () => {
-  const site = await open([['h.mdy', '+++\n% throw "always"']]);
+  const site = await open([['h.mdy', '% throw "always"']]);
   const { deliver } = handlerFor(site);
 
   const { done, failed } = await deliver('h', [entry(9, {}), entry(10, {})]);
@@ -97,7 +97,7 @@ test('a delivery where nothing succeeded returns everything', async () => {
 
 test('a failure reports the attempt it was on, so a retry is distinguishable', async () => {
   const events = [];
-  const site = await open([['h.mdy', '+++\n% throw "nope"']]);
+  const site = await open([['h.mdy', '% throw "nope"']]);
   const { deliver } = handlerFor(site, (e) => events.push(e));
 
   await deliver('h', [entry(1, {}, 3)]);
@@ -110,7 +110,7 @@ test('a delivery reports the page it rendered and how long it took', async () =>
   // The CLI logs a delivery the way it logs a re-render, which it can only
   // do if the event says which page and how long.
   const events = [];
-  const site = await open([['handlers/invoice.mdy', '+++\nhi']]);
+  const site = await open([['handlers/invoice.mdy', 'hi']]);
   const { deliver } = handlerFor(site, (e) => events.push(e));
 
   await deliver('handlers.invoice', [entry(1, {})]);
@@ -121,8 +121,8 @@ test('a delivery reports the page it rendered and how long it took', async () =>
 
 test('what a delivered page publishes is flushed only after its own render succeeded', async () => {
   const site = await open([
-    ['h.mdy', '+++\n% $.publish("next", { from: req.n })'],
-    ['next.mdy', '+++\nnext'],
+    ['h.mdy', '% $.publish("next", { from: req.n })'],
+    ['next.mdy', 'next'],
   ]);
   const { deliver, flushed } = handlerFor(site);
 
@@ -133,8 +133,8 @@ test('what a delivered page publishes is flushed only after its own render succe
 
 test('a page that publishes and then throws publishes nothing', async () => {
   const site = await open([
-    ['h.mdy', '+++\n% $.publish("next", { n: 1 })\n% throw "after"'],
-    ['next.mdy', '+++\nnext'],
+    ['h.mdy', '% $.publish("next", { n: 1 })\n% throw "after"'],
+    ['next.mdy', 'next'],
   ]);
   const { deliver, flushed } = handlerFor(site);
 
@@ -152,7 +152,7 @@ test('a message for a name this set has no page for is returned, so it dead-lett
   // go, so the message is kept and ends up in <name>.dead rather than
   // being silently discarded.
   const events = [];
-  const site = await open([['h.mdy', '+++\nhere']]);
+  const site = await open([['h.mdy', 'here']]);
   const { deliver } = handlerFor(site, (e) => events.push(e));
 
   const { done, failed } = await deliver('not.here', [entry(3, {}), entry(4, {})]);
@@ -165,8 +165,8 @@ test('a message for a name this set has no page for is returned, so it dead-lett
 test('an ambiguous name is returned rather than delivered to a guess', async () => {
   const events = [];
   const site = await open([
-    ['a/b/c.mdy', '+++\none'],
-    ['a.b/c.mdy', '+++\ntwo'],
+    ['a/b/c.mdy', 'one'],
+    ['a.b/c.mdy', 'two'],
   ]);
   const { deliver } = handlerFor(site, (e) => events.push(e));
 
@@ -179,7 +179,7 @@ test('a dead-letter channel with no page is kept, not returned — returning it 
   // <name>.dead is where the broker republishes what this bus already gave
   // up on. Failing those would send them round again forever.
   const events = [];
-  const site = await open([['h.mdy', '+++\nhere']]);
+  const site = await open([['h.mdy', 'here']]);
   const { deliver } = handlerFor(site, (e) => events.push(e));
 
   const { done, failed } = await deliver('h.dead', [entry(1, { why: 'boom' })]);
@@ -194,8 +194,8 @@ test('a dead-letter handler is just a page called <name>.dead', async () => {
   // way every other page is.
   const events = [];
   const site = await open([
-    ['handlers/invoice.mdy', '+++\nlive'],
-    ['handlers/invoice.dead.mdy', '+++\n% $.emit("alerted", "died: " + req.why)'],
+    ['handlers/invoice.mdy', 'live'],
+    ['handlers/invoice.dead.mdy', '% $.emit("alerted", "died: " + req.why)'],
   ]);
   const { deliver } = handlerFor(site, (e) => events.push(e));
 
@@ -208,7 +208,7 @@ test('a dead-letter handler is just a page called <name>.dead', async () => {
 });
 
 test('a non-object message body still reaches the page, under `value`', async () => {
-  const site = await open([['h.mdy', '+++\n% $.emit("out", "got " + req.value)']]);
+  const site = await open([['h.mdy', '% $.emit("out", "got " + req.value)']]);
   const { deliver } = handlerFor(site);
   await deliver('h', [entry(1, 'a string')]);
   assert.equal(site.outputs.get('out'), 'got a string');
@@ -218,8 +218,8 @@ test('the same page renders identically inline and on delivery', async () => {
   // Two tenses of one operation: nothing marks a page as a handler, so
   // $.render and a delivery cannot produce different results.
   const site = await open([
-    ['h.mdy', '+++\nHello {{ req.who }}'],
-    ['main.mdy', '+++\n% $.emit("inline.html", $.render({ path: "h.mdy" }, { who: "Ada" }))'],
+    ['h.mdy', 'Hello {{ req.who }}'],
+    ['main.mdy', '% $.emit("inline.html", $.render({ path: "h.mdy" }, { who: "Ada" }))'],
   ]);
   const entryIndex = site.set.docs.find((d) => d.data.path === 'main.mdy').index;
   await site.set.renderResult(entryIndex, {});

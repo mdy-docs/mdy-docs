@@ -1,3 +1,4 @@
++++
 title: Team Roster
 +++
 = {{ res.data.title }}
@@ -7,6 +8,7 @@ title: Team Roster
 {{ $.render(card, m) }}
 % }
 ---
++++
 template: member-card
 +++
 === {{ req.name }}
@@ -14,12 +16,14 @@ template: member-card
 - Age: {{ req.age ?? 'unknown' }}
 - Skills: {{ (req.skills ?? []).join(', ') }}
 ---
++++
 role: member
 name: Alice
 age: 30
 skills: [js, python]
 +++
 ---
++++
 role: member
 name: Bob
 skills: [go, rust]

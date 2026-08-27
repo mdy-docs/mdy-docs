@@ -112,8 +112,15 @@ export function compileTemplate(template) {
 // (use `***` or `___` for a thematic break inside a document body).
 const DOCUMENT_SEPARATOR = /^---[ \t]*$/;
 
-// A bare `+++` line: the front matter separator inside a document. The first
-// one splits YAML front matter (before) from the body (after).
+// A bare `+++` line: the fence that opens and closes a document's YAML front
+// matter. A document set used to read this as a SEPARATOR instead — YAML
+// above the first one, body below, no opening fence — which is not what the
+// language says (docs/language.md §11, and extractMatter in
+// src/parse/matter.js, both of which want a fenced block). The two disagreed
+// in a way that failed silently one way and visibly the other: a fenced
+// document in a set had no data at all, and a separator-style document put
+// through the parser directly rendered its own YAML into the page as a
+// paragraph. The fence wins, because it is the language.
 const FRONT_MATTER_SEPARATOR = /^\+\+\+[ \t]*$/;
 
 // A hashtag: `#` preceded by start-of-line or whitespace, then a letter, then
@@ -311,17 +318,31 @@ export function splitDocuments(source) {
  */
 function parseDocument(chunk) {
   const lines = chunk.split('\n');
-  const sep = lines.findIndex((line) => FRONT_MATTER_SEPARATOR.test(line));
+
+  /*
+   * Front matter opens on the document's first line, give or take blank
+   * ones, and it has to close. An opening fence with no partner is left
+   * alone — it is likelier to be prose than a block somebody forgot to
+   * finish, and guessing would swallow the rest of the document. The same
+   * rule extractMatter applies, deliberately: one language, one answer.
+   */
+  let open = 0;
+  while (open < lines.length && lines[open].trim() === '') open += 1;
 
   let frontMatter = {};
   let content = chunk;
-  if (sep !== -1) {
-    const yamlText = lines.slice(0, sep).join('\n');
-    content = lines.slice(sep + 1).join('\n');
-    const loaded = yamlText.trim() === '' ? {} : loadYaml(yamlText);
-    frontMatter = loaded ?? {};
-    if (typeof frontMatter !== 'object' || Array.isArray(frontMatter)) {
-      throw new Error('mdy: front matter must be a YAML mapping');
+  if (FRONT_MATTER_SEPARATOR.test(lines[open] ?? '')) {
+    let close = open + 1;
+    while (close < lines.length && !FRONT_MATTER_SEPARATOR.test(lines[close])) close += 1;
+
+    if (close < lines.length) {
+      const yamlText = lines.slice(open + 1, close).join('\n');
+      content = lines.slice(close + 1).join('\n');
+      const loaded = yamlText.trim() === '' ? {} : loadYaml(yamlText);
+      frontMatter = loaded ?? {};
+      if (typeof frontMatter !== 'object' || Array.isArray(frontMatter)) {
+        throw new Error('mdy: front matter must be a YAML mapping');
+      }
     }
   }
 

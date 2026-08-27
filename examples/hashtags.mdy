@@ -1,3 +1,4 @@
++++
 title: Notes about fred
 +++
 = {{ res.data.title }}
@@ -6,10 +7,12 @@ title: Notes about fred
 - !!{{ d.title }}!! — tags: {{ d.tags.join(', ') }}
 % }
 ---
++++
 title: Kickoff
 +++
 Met with the team about #Fred today. Also touched on #budget-2026.
 ---
++++
 title: Pairing notes
 +++
 Notes on #wilma and #fred: they pair well.
@@ -20,6 +23,7 @@ A ``#comment`` in inline code is not a tag, and neither is this:
 # nor anything in a fence, like #barney
 ```
 ---
++++
 title: Unrelated
 tags: [misc]
 +++

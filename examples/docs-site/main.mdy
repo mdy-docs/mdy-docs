@@ -1,3 +1,4 @@
++++
 site:
   title: lamassu-js
   description: A strict, safe JavaScript-subset engine written in C, compiled to WebAssembly — sandboxed evaluation for untrusted templates.

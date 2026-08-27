@@ -25,21 +25,26 @@ An `.mdy` source is read in two passes:
    `---` is a single document. Documents that are only whitespace are dropped
    (but an empty or all-whitespace source is a single empty document, so an
    empty file renders to nothing rather than erroring).
-2. **Split each document on its first bare `+++` line.** The text before `+++`
-   is YAML front matter (parsed into a data object); the text after it is the
-   MDY body. A document with no `+++` is all body.
+2. **Take each document's front matter off the top.** A `+++` fence opens it,
+   YAML follows, a second `+++` closes it, and the rest is the MDY body — the
+   same block the language defines (docs/language.md §11). It has to open on
+   the document's first line, give or take blank ones, and it has to close: an
+   opener with no partner is left as prose, since guessing would swallow the
+   document. A document with no fence is all body.
 3. **Extract ` ```data ` fences from the body.** Each is parsed as YAML and
    merged into the document's data (front matter first, later fences win);
    inline `#hashtags` union into `data.tags`. Details below.
 
 ```
-title: Report            ← YAML front matter
++++                      ← front matter opens
+title: Report            ← YAML
 author: Grace Hopper
-+++                      ← front matter separator
++++                      ← and closes
 = {{ res.data.title }}   ← MDY body
 By {{ res.data.author }}.
 ---                      ← document separator
-title: Appendix          ← the next document begins
++++                      ← the next document begins
+title: Appendix
 +++
 …
 ```

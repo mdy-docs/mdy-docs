@@ -102,7 +102,7 @@ test('editing content rebuilds and pings live-reload clients', async () => {
 
   await writeFile(
     join(siteDir, 'about.mdy'),
-    'title: About the tablet house\n+++\nRewritten while the server watched.\n'
+    '+++\ntitle: About the tablet house\n+++\nRewritten while the server watched.\n'
   );
 
   await Promise.race([
@@ -139,7 +139,7 @@ test('editing one post rebuilds the whole script-defined site (no incremental re
 
   await writeFile(
     join(siteDir, 'posts', '2026-07-hello.mdy'),
-    'title: Hello world\ndate: 2026-07-18\n+++\nEdited again, this time via serve.'
+    '+++\ntitle: Hello world\ndate: 2026-07-18\n+++\nEdited again, this time via serve.'
   );
   await Promise.race([
     sawReload,
@@ -173,7 +173,7 @@ test("onRebuild's info.changed lists the watched path(s) that triggered the rebu
     assert.deepEqual(rebuilds[0].changed, []); // first build: nothing "changed", it just ran
 
     const changedPath = join('posts', '2026-07-hello.mdy');
-    await writeFile(join(dir, changedPath), 'title: Hello world\ndate: 2026-07-18\n+++\nEdited for the changed-path test.');
+    await writeFile(join(dir, changedPath), '+++\ntitle: Hello world\ndate: 2026-07-18\n+++\nEdited for the changed-path test.');
 
     await new Promise((resolve, reject) => {
       const started = Date.now();
@@ -202,9 +202,9 @@ test("onRebuild reports what the site would have published, unsent", async () =>
   const dir = await mkdtemp(join(tmpdir(), 'mdy-serve-publish-'));
   await writeFile(
     join(dir, 'main.mdy'),
-    '+++\n% $.publish("h", { n: 1 })\n% $.publish("h", { n: 2 })\n% $.emit("index.html", "hi")'
+    '% $.publish("h", { n: 1 })\n% $.publish("h", { n: 2 })\n% $.emit("index.html", "hi")'
   );
-  await writeFile(join(dir, 'h.mdy'), '+++\nhandler');
+  await writeFile(join(dir, 'h.mdy'), 'handler');
 
   const rebuilds = [];
   const site = await serveSite(dir, { port: 0, onRebuild: (info) => rebuilds.push(info) });
