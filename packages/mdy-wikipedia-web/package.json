@@ -1,0 +1,24 @@
+{
+  "name": "@mdy-docs/mdy-wikipedia-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read Wikipedia as mdy: a converted article beside its source, and every link in it another article away",
+  "license": "BSD-2-Clause",
+  "bin": {
+    "mdy-wikipedia-web": "bin/mdy-wikipedia-web.js"
+  },
+  "scripts": {
+    "dev": "node bin/mdy-wikipedia-web.js",
+    "build": "vite build",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@mdy-docs/mdy-site": "file:../mdy-site",
+    "@mdy-docs/mdy-wikipedia": "file:../mdy-wikipedia",
+    "mdy-docs": "file:../.."
+  },
+  "devDependencies": {
+    "vite": "^6.0.7"
+  }
+}
