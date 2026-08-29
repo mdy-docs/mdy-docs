@@ -148,8 +148,9 @@ dist
 sukkal-data/
 
 # Their own repositories now — github.com/belteshazzar/mdy-wikipedia and
-# github.com/belteshazzar/mdy-wikipedia-web. They are checked out here because
-# their dependencies on mdy-docs, and on each other, are relative `file:`
-# paths, and this is where they resolve.
+# github.com/belteshazzar/mdy-wikipedia-web — and no longer checked out here.
+# The paths stay ignored because that is where each one asks to be cloned: both
+# take mdy-docs, and one takes the other, by relative `file:` path, and
+# packages/ is where those resolve.
 packages/mdy-wikipedia/
 packages/mdy-wikipedia-web/
