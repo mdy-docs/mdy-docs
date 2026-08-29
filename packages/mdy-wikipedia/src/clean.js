@@ -151,6 +151,13 @@ const unwraps = [
  * @property {Array<string>} [sections]
  *   Only these sections, by id or heading text; `lead` is the part above the
  *   first heading.
+ * @property {'footnotes' | 'data' | 'drop'} [refs='footnotes']
+ *   What becomes of the citations. `footnotes` puts a real mdy footnote where
+ *   each one was; `data` and `drop` take them out, the first keeping them in
+ *   the front matter instead.
+ * @property {Map<string, object>} [references]
+ *   The citations, as `extractReferences` read them off the page before this
+ *   ran. Without them a `<sup>` has nothing to point at and goes.
  */
 
 // Sections that are a list of pointers rather than an article.
@@ -171,9 +178,17 @@ export function clean(tree, options = {}) {
   const body = find(tree, 'body') ?? tree
   const sections = pickSections(body, options, counts)
 
+  // Which citations the body actually points at, in the order a reader meets
+  // them. The document only carries the notes it uses: Babylon's reference
+  // list holds a handful nothing in the prose reaches, and a note with no
+  // reference is a dangling paragraph.
+  /** @type {Array<string>} */
+  const used = []
+
   return {
-    tree: {type: 'root', children: walk(sections, options, counts)},
-    counts
+    tree: {type: 'root', children: walk(sections, {...options, used}, counts)},
+    counts,
+    used
   }
 }
 
@@ -257,12 +272,40 @@ function walk(nodes, options, counts) {
     const dropped = drops.find((rule) => matches(node, rule))
 
     if (dropped) {
+      const note = dropped.name === 'citations' ? footnote(node, options) : undefined
+
+      if (note) {
+        count(counts, 'footnotes')
+        if (!options.used.includes(note.id)) options.used.push(note.id)
+        // An empty `<sup>` that says which note it is. The serialiser writes
+        // `[[ ^1 ]]` for it; nothing else in the tree needs to know.
+        out.push({
+          type: 'element',
+          tagName: 'sup',
+          properties: {},
+          children: [],
+          data: {footnote: note.number}
+        })
+        continue
+      }
+
       count(counts, dropped.name)
       continue
     }
 
     const children = walk(node.children, options, counts)
     const kept = properties(node, options)
+
+    // A link that now points at nothing. Wikipedia's Harvard citations link
+    // into `#CITEREFSeymour2006`, an anchor in the bibliography — which is end
+    // matter, and gone. The words stay; the link does not, because a link to
+    // an anchor that is not in the document is worse than no link.
+    if (node.tagName === 'a' && !liveHref(kept.href)) {
+      count(counts, 'dead-links')
+      out.push(...children)
+      continue
+    }
+
     const unwrapped = unwraps.find((rule) => matches(node, rule))
 
     // A `<span>` or `<div>` with nothing left on it is a wrapper; one still
@@ -394,6 +437,53 @@ function href(value, node, options) {
   return (
     '/wiki/' + page.replaceAll(' ', '_') + (fragment ? '#' + fragment : '')
   )
+}
+
+/**
+ * @param {unknown} href
+ * @returns {boolean}
+ */
+function liveHref(href) {
+  return typeof href === 'string' && href !== '' && !/^#cite/i.test(href)
+}
+
+/**
+ * The citation a `<sup>` points at, when there is one to point at.
+ *
+ * The marker holds `<a href="./Babylon#cite_note-Cam-1">`, and the reference
+ * list holds `<li id="cite_note-Cam-1">`; the fragment is what joins them.
+ *
+ * @param {import('hast').Element} node
+ * @param {object} options
+ * @returns {object | undefined}
+ */
+function footnote(node, options) {
+  if (options.refs === 'drop' || options.refs === 'data') return
+  if (!options.references) return
+
+  const link = findFirst(node, (child) => child.tagName === 'a')
+  const href = String(link?.properties?.href ?? '')
+  const at = href.indexOf('#')
+
+  if (at === -1) return
+
+  return options.references.get(decodeURIComponent(href.slice(at + 1)))
+}
+
+/**
+ * @param {import('hast').Parent} tree
+ * @param {(node: import('hast').Element) => boolean} test
+ * @returns {import('hast').Element | undefined}
+ */
+function findFirst(tree, test) {
+  for (const child of tree.children ?? []) {
+    if (child.type !== 'element') continue
+    if (test(child)) return child
+
+    const found = findFirst(child, test)
+
+    if (found) return found
+  }
 }
 
 /**

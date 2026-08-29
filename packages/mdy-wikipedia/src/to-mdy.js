@@ -65,10 +65,30 @@ export function toMdy(tree, options = {}) {
     },
     headingIds: options.headingId === false ? undefined : headingState(options),
     wrap: Number(options.wrap) || 0,
+    // Whether the document will be compiled as a template. It changes what a
+    // *raw* span and a fence have to escape: nothing is raw to the script
+    // stage, so `{{` and a leading `%` mean something in a code block too.
+    // Off by default, because with script off those escapes would show.
+    script: options.script === true,
     file: options.file
   }
 
-  const body = blocks(children(tree), context).join('\n')
+  const lines = blocks(children(tree), context)
+  const notes = tree.data?.footnotes ?? []
+
+  for (const note of notes) {
+    const text = inline(note.children ?? [], context).trim()
+
+    if (!text) continue
+
+    if (lines.length) lines.push('')
+
+    // One line each: a definition may run on over indented lines, but a note
+    // that fits on one is a note nobody has to count columns to read.
+    lines.push(escapeLineStart('[[ ^' + noteId(note.id) + ' ]]: ' + text))
+  }
+
+  const body = lines.join('\n')
   const matter =
     options.frontmatter === false ? undefined : tree.data?.matter
 
@@ -295,7 +315,9 @@ function fence(node, context) {
   const longest = Math.max(2, ...[...body.matchAll(/`+/g)].map((m) => m[0].length))
   const marker = '`'.repeat(longest + 1)
 
-  return [marker + (language[0] ?? ''), ...(value ? body.split('\n') : []), marker]
+  const lines = value ? body.split('\n').map((line) => escapeRaw(line, context)) : []
+
+  return [marker + (language[0] ?? ''), ...lines, marker]
 }
 
 /**
@@ -732,6 +754,14 @@ function inline(nodes, context, open = []) {
  * @returns {string}
  */
 function phrase(node, context, open) {
+  // A footnote reference is the one construct with no shape of its own in
+  // hast: mdy *generates* the `<sup><a>` for it, so recognising that output
+  // would be recognising an implementation. A node says it is one instead, and
+  // the tree carries the notes — see `footnotes` in the options.
+  const marked = node.data?.footnote
+
+  if (marked !== undefined) return '[[ ^' + noteId(marked) + ' ]]'
+
   const properties = node.properties ?? {}
   const marker = Object.keys(properties).length
     ? undefined
@@ -751,7 +781,7 @@ function phrase(node, context, open) {
         return escapeInline(value, context.options)
       }
 
-      return marker.sequence + value + marker.sequence
+      return marker.sequence + escapeRaw(value, context) + marker.sequence
     }
 
     return (
@@ -830,7 +860,15 @@ function anchor(node, context, open) {
     .replaceAll(']', '\\]')
     .replaceAll('|', '\\|')
 
+  // A link with nothing in it. Wikipedia's `[1]`-style external links are
+  // exactly this — the number is drawn by a stylesheet, so the anchor really is
+  // empty — and the URL is the whole of what they say. Written bare, it is
+  // both the label and the link.
   if (!label.trim()) {
+    if (typeof href === 'string' && /^(https?:)?\/\//.test(href)) {
+      return escapeInline(href, context.options) === href ? href : '[[ ' + href + ' | ' + href + ' ]]'
+    }
+
     warn(context, 'A link with no label has no spelling, dropping it')
 
     return ''
@@ -1029,6 +1067,42 @@ function headingState(options) {
 
     if (id) used.add(id)
   }
+}
+
+/**
+ * Escape what the script stage reads, in content the *markup* treats as raw.
+ *
+ * A fence and a `` `` `` span hold whatever they hold as far as the parser is
+ * concerned, but the script stage runs before the parser and nothing is raw to
+ * it: a code sample containing `{{ … }}` is an interpolation, and one whose
+ * line opens with `%` is a statement. Both have a backslash escape that the
+ * script stage takes off again, so the reader sees what was written.
+ *
+ * Only when the document is going to be compiled. With script off these
+ * escapes are not removed by anything and would show, which is why `toMdy`
+ * leaves them out unless it is told.
+ *
+ * @param {string} value
+ * @param {object} context
+ * @returns {string}
+ */
+function escapeRaw(value, context) {
+  if (!context.script) return value
+
+  return value.replaceAll('{{', '\\{{').replace(/^([ \t]*)%/, '$1\\%')
+}
+
+/**
+ * A footnote id that survives being written down.
+ *
+ * `[[ ^id ]]` runs to the first `]]` and splits on the first `|`, and neither
+ * can be escaped inside one, so an id is reduced to what cannot break it.
+ *
+ * @param {string | number} value
+ * @returns {string}
+ */
+function noteId(value) {
+  return String(value).replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '')
 }
 
 /**

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import {renderDocumentSet} from 'mdy-docs'
 import {fromMdy} from 'mdy-docs/parse'
 import {toText} from 'mdy-docs/parse/script.js'
 import {buildDocument} from '../src/index.js'
@@ -152,4 +153,130 @@ test('no prose is lost between the cleaned page and the document', () => {
   // Not a character comparison: the serialiser is allowed to move whitespace
   // about. It is not allowed to lose sentences.
   assert.ok(words(toText(tree)) > 6000, 'Babylon runs to about 6,500 words')
+})
+
+test('the extracted data is in the front matter', () => {
+  const {matter} = parse(built.source).tree.data
+
+  assert.equal(matter.infobox.history.built, 'c. 2200 BC')
+  assert.equal(matter.infobox.location, 'Hillah, Babil Governorate, Iraq')
+  assert.deepEqual(matter.coordinates, {lat: 32.5425, lon: 44.42111111})
+  assert.ok(matter.images.length > 20)
+  assert.deepEqual(matter.sections[0], {level: 2, id: 'names', title: 'Names'})
+})
+
+test('the outline names anchors that are in the document', () => {
+  const {tree} = parse(built.source)
+  const ids = new Set(
+    elements(tree)
+      .filter((element) => /^h[1-6]$/.test(element.tagName))
+      .map((element) => element.properties.id)
+  )
+
+  for (const section of tree.data.matter.sections) {
+    assert.ok(ids.has(section.id), section.id + ' should be a heading in the document')
+  }
+})
+
+test('the citations become footnotes the body points at', () => {
+  const {tree} = parse(built.source)
+  const notes = elements(tree).find(
+    (element) => element.tagName === 'section' && element.properties.dataFootnotes
+  )
+
+  assert.ok(notes, 'mdy should have built a footnotes section')
+
+  const items = elements(notes).filter((element) => element.tagName === 'li')
+
+  assert.ok(items.length > 120, 'Babylon cites 134 sources')
+
+  // The note keeps the citation tree, so a citation that linked somewhere
+  // still does.
+  assert.ok(
+    elements(notes).some(
+      (element) => element.tagName === 'a' && /^https?:/.test(String(element.properties.href))
+    )
+  )
+})
+
+test('only the citations the body reaches become notes', () => {
+  const {tree} = parse(built.source)
+  const references = elements(tree).filter(
+    (element) => element.tagName === 'a' && element.properties.dataFootnoteRef !== undefined
+  )
+  const notes = new Set(
+    elements(tree)
+      .filter((element) => element.tagName === 'li' && String(element.properties.id ?? '').startsWith('user-content-fn-'))
+      .map((element) => '#' + element.properties.id)
+  )
+
+  assert.ok(references.length > 100)
+
+  // A note nothing points at would be a dangling paragraph, and a reference
+  // pointing at no note would be a dangling number.
+  for (const reference of references) {
+    assert.ok(notes.has(String(reference.properties.href)), String(reference.properties.href))
+  }
+})
+
+test('--refs data puts them in the front matter instead', () => {
+  const {source} = buildDocument(page, {now, refs: 'data'})
+  const {tree, messages} = parse(source)
+
+  assert.deepEqual(messages, [])
+  assert.ok(tree.data.matter.references.length > 130)
+  assert.match(tree.data.matter.references[0].text, /\S/)
+  assert.equal(
+    elements(tree).filter(
+      (element) => element.tagName === 'section' && element.properties.dataFootnotes
+    ).length,
+    0
+  )
+})
+
+test('--refs drop takes them out altogether', () => {
+  const {source} = buildDocument(page, {now, refs: 'drop'})
+  const {tree} = parse(source)
+
+  assert.equal(tree.data.matter.references, undefined)
+  assert.ok(!source.includes('[[ ^'))
+})
+
+test('the parts of the record can be turned off', () => {
+  const {source} = buildDocument(page, {now, infobox: false, images: false})
+  const {matter} = parse(source).tree.data
+
+  assert.equal(matter.infobox, undefined)
+  assert.equal(matter.images, undefined)
+  assert.ok(matter.sections.length > 0, 'the outline is of the document, not of the page')
+})
+
+test('the document compiles as a template and the data resolves', async () => {
+  // The exit criterion for extraction. Front matter that cannot be read from a
+  // template is a file with a header, not a document with data.
+  const facts = [
+    '== Facts',
+    '',
+    '- Founded {{ res.data.infobox.history.built }} at {{ res.data.infobox.location }}',
+    '- {{ res.data.coordinates.lat }}, {{ res.data.coordinates.lon }}',
+    "- {{ res.data.sections.length }} sections; part of {{ res.data.infobox['part-of'] }}",
+    ''
+  ].join('\n')
+  const html = await renderDocumentSet(built.source.trimEnd() + '\n\n' + facts)
+
+  assert.match(html, /Founded c\. 2200 BC at Hillah, Babil Governorate, Iraq/)
+  assert.match(html, /32\.5425, 44\.42111111/)
+  assert.match(html, /19 sections; part of Babylonia/)
+})
+
+test('a page that says `{{cite web}}` still compiles', async () => {
+  // The script stage reads `{{ … }}` before a line of markup is parsed, so
+  // nothing is raw to it — not a code span, not a fence. One of Babylon's
+  // citations carries the literal text `{{cite web}}`, which is enough to stop
+  // the whole document compiling if it goes in unescaped.
+  assert.ok(built.source.includes('\\{{cite web}}'))
+
+  const html = await renderDocumentSet(built.source)
+
+  assert.match(html, /\{\{cite web\}\}/)
 })

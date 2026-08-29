@@ -25,6 +25,12 @@ Options:
   --sections <list>     only these sections, by heading or id; "lead" is the
                         part above the first heading
   --keep-sections       keep See also / References / External links as prose
+  --refs <mode>         what becomes of the citations (default: footnotes)
+                          footnotes  a real mdy footnote where each one was
+                          data       a references list in the front matter
+                          drop       neither
+  --no-infobox          do not read the infobox into the front matter
+  --no-images           do not list the images in the front matter
   --wrap <columns>      wrap paragraphs (default: 78; 0 for one line each)
   --no-title            do not write the page title as a heading
   --cache <dir>         where fetched pages are kept
@@ -47,10 +53,16 @@ const {values, positionals} = parseArgs({
     links: {type: 'string'},
     sections: {type: 'string'},
     'keep-sections': {type: 'boolean'},
+    refs: {type: 'string'},
     wrap: {type: 'string'},
-    title: {type: 'boolean', default: true},
     cache: {type: 'string'},
     refresh: {type: 'boolean'},
+    // `parseArgs` has no notion of a negated flag, so the four `--no-…` ones
+    // are their own options rather than defaults to be turned off.
+    'no-title': {type: 'boolean'},
+    'no-infobox': {type: 'boolean'},
+    'no-images': {type: 'boolean'},
+    'no-cache': {type: 'boolean'},
     contact: {type: 'string'},
     quiet: {type: 'boolean'},
     help: {type: 'boolean', short: 'h'}
@@ -67,6 +79,11 @@ if (values.links && !['path', 'url', 'wiki'].includes(values.links)) {
   process.exit(1)
 }
 
+if (values.refs && !['footnotes', 'data', 'drop'].includes(values.refs)) {
+  process.stderr.write('--refs must be one of: footnotes, data, drop\n')
+  process.exit(1)
+}
+
 // Messages are the point of the exercise, not an afterthought: they say what
 // the page held that an mdy document cannot, which is how the cleaner is
 // judged. They go to stderr so the document can still be piped.
@@ -79,9 +96,12 @@ try {
     links: values.links ?? 'url',
     sections: values.sections?.split(',').map((name) => name.trim()).filter(Boolean),
     keepSections: values['keep-sections'],
+    refs: values.refs ?? 'footnotes',
+    infobox: !values['no-infobox'],
+    images: !values['no-images'],
     wrap: values.wrap === undefined ? undefined : Number(values.wrap),
-    title: values.title,
-    cache: values.cache ?? (process.argv.includes('--no-cache') ? false : undefined),
+    title: !values['no-title'],
+    cache: values['no-cache'] ? false : values.cache,
     refresh: values.refresh,
     contact: values.contact,
     file

@@ -369,7 +369,7 @@ body is right and whose front matter holds only `source:`. Exit:
 
 **Phase 2 — extraction.** Infobox, sections, images, coordinates,
 references-as-footnotes. Exit: the YAML above, and `res.data.infobox.built`
-resolves in a template.
+resolves in a template. ✅ — see [what phase 2 landed](#what-phase-2-landed).
 
 **Phase 3 — the optional records.** Wikidata with label resolution,
 categories, langlinks, `--links=wiki`.
@@ -381,7 +381,10 @@ exists. Rate limiting and cache reuse matter here and nowhere earlier.
 
 ## Open questions
 
-**Does the infobox belong under `infobox:` or at the top level?** Nested is
+**Does the infobox belong under `infobox:` or at the top level?** ✅ Nested —
+the two `region`s settle it; see [phase 2](#what-phase-2-landed).
+
+The reasoning, as it stood before. Nested is
 safer — no key of Wikipedia's can collide with `title`, `tags`, `users` or
 anything a layout expects — but `res.data.infobox.location` is wordier than
 `res.data.location`, and a vault of imported pages would query the shorter
@@ -528,3 +531,80 @@ pipes, and writes the table out as elements when it does not.
 - **`lang` and `dir` are lost** on the spans and `<i>`s they sit on. MDY has no
   inline element syntax, so there is nowhere for them to go; the text is the
   article and the annotation is not.
+
+## What phase 2 landed
+
+The infobox comes out exactly as the sample above, key for key — `history.built`
+is `c. 2200 BC`, both `region`s survive, `reference-no` is still `'278'`. 83
+tests, still all offline.
+
+The exit criterion was written as "`res.data.infobox.built` resolves in a
+template", and it is now a test that renders one:
+
+```mdy
+- Founded {{ res.data.infobox.history.built }} at {{ res.data.infobox.location }}
+- {{ res.data.coordinates.lat }}, {{ res.data.coordinates.lon }}
+- {{ res.data.sections.length }} sections; part of {{ res.data.infobox['part-of'] }}
+```
+
+```html
+<li>Founded c. 2200 BC at Hillah, Babil Governorate, Iraq</li>
+<li>32.5425, 44.42111111</li>
+<li>19 sections; part of Babylonia</li>
+```
+
+### The bug that says why the exit criterion was worth writing that way
+
+Rendering the document as a *template* — rather than parsing it, which is all
+phase 1 checked — failed on the whole file. Not on the front matter: on one
+citation, which carries the literal text `{{cite web}}` as a CS1 maintenance
+note. The serialiser had written it inside a `` `` `` span, which is raw as far
+as the markup is concerned, and left it alone.
+
+But **nothing is raw to the script stage**. `{{ … }}` is read before a line of
+markup is parsed (rule 12), so a code span containing it is an interpolation,
+and one that is not valid JavaScript stops the document compiling. The same
+goes for a fence, and for a line inside either that opens with `%`.
+
+Both have a backslash escape that the script stage takes off again, so the fix
+is small — but it is a *choice*, because with script off nothing removes those
+backslashes and they would show. So `toMdy` escapes `{{` in prose always (the
+inline rules take the backslash off there either way), and in raw spans and
+fences only when told the document will be compiled. The importer tells it,
+because a document whose data cannot be read from a template is a file with a
+header rather than a document with data.
+
+### Extraction is reading, and reading is not `textContent`
+
+Three bugs, all of the same kind: the text of an element is not the
+concatenation of the text under it.
+
+**Collapse once, at the end.** Collapsing whitespace at every level of the walk
+eats the space *between* two elements, so `Part of` slugged to `partof` and
+`c. 2200 BC` came out `c.2200 BC` — the abbreviation and the year are separate
+elements with a space between them that belongs to neither.
+
+**What a reader cannot see is not part of the value.** Wikipedia puts a
+machine-readable microformat beside the written date and hides it with CSS, so
+Ada Lovelace's birth read `Augusta Ada Byron(1815-12-10)10 December 1815`.
+Anything with `display: none` or `noprint` is skipped now.
+
+**A `<br>` draws a break, not nothing.** `10 December 1815London, England` was
+two lines of an infobox with nothing put in place of the line ending.
+
+### What is knowingly left
+
+- **The infobox is read through the English Wikipedia's conventions** —
+  `Module:Infobox`'s `infobox-label` / `infobox-data` / `infobox-header`
+  classes. The German wiki does not use them, so `de:Babylon` gets prose and no
+  infobox. Everything else the extractor reads — figures, citations, the
+  outline — comes from Parsoid's own markup and works anywhere. Same shape of
+  limit as the English end-matter headings, and worth solving together.
+- **A citation is a string, not a record.** Babylon's `<cite class="citation">`
+  elements carry author, title, year and ISBN in microformat classes, and the
+  note keeps only the rendered text plus any URL. That was already flagged as
+  an open question, and it stays open: making `references` a list of records is
+  strictly additive to the YAML when it happens.
+- **`--flatten` was not built.** The open question about `infobox:` nesting
+  versus the top level is answered by the region collision — nested — and the
+  shorter spelling can wait for somebody building a vault of one article type.

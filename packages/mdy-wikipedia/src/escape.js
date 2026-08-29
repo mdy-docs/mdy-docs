@@ -168,6 +168,11 @@ function mark(value, options) {
     // thing: `write` puts one in front of every marked position.
     need[index] =
       character === '\\' ||
+      // `{{ … }}` is interpolation (rule 12), read by the script stage before
+      // a line of markup is parsed. `\\{{` is its escape, and it is harmless
+      // with script off too, where the inline rules take the backslash off and
+      // leave the same two characters.
+      value.startsWith('{{', index) ||
       starts.has(index) ||
       Boolean(wiki && character === '[' && parseWikiLink(value, index)) ||
       Boolean(

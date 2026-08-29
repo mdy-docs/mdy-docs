@@ -14,7 +14,14 @@
  */
 
 import {fromHtml} from 'hast-util-from-html'
+import {defaultResolve} from 'mdy-docs/parse/wiki.js'
 import {clean} from './clean.js'
+import {
+  extractImages,
+  extractInfobox,
+  extractReferences,
+  outline
+} from './extract.js'
 import {fetchPage, resolveTarget} from './fetch.js'
 import {toMdy} from './to-mdy.js'
 
@@ -22,6 +29,7 @@ export {toMdy} from './to-mdy.js'
 export {escapeInline} from './escape.js'
 export {clean} from './clean.js'
 export {fetchPage, resolveTarget} from './fetch.js'
+export {extractInfobox, extractImages, extractReferences, outline} from './extract.js'
 
 /**
  * Fetch a page and write it as an mdy document.
@@ -29,8 +37,9 @@ export {fetchPage, resolveTarget} from './fetch.js'
  * @param {string} input
  *   A title, a `fr:Babylone` prefix, or a Wikipedia URL.
  * @param {object} [options]
- *   `lang`, `links`, `sections`, `keepSections`, `wrap`, `cache`, `refresh`,
- *   `contact`, `file`, and `fetch` for an implementation of your own.
+ *   `lang`, `links`, `sections`, `keepSections`, `refs`, `wrap`, `cache`,
+ *   `refresh`, `contact`, `file`, and `fetch` for an implementation of your
+ *   own.
  * @returns {Promise<{source: string, data: object, counts: object}>}
  */
 export async function wikipediaToMdy(input, options = {}) {
@@ -49,13 +58,40 @@ export async function wikipediaToMdy(input, options = {}) {
  */
 export function buildDocument(page, options = {}) {
   const {target, summary} = page
-  const {tree, counts} = clean(fromHtml(page.html), {
-    ...options,
-    lang: target.lang,
-    title: target.title
+  const raw = fromHtml(page.html)
+  const settings = {...options, lang: target.lang, title: target.title}
+
+  // Extraction runs first, on the page as it arrived, because most of what it
+  // wants is in the parts the cleaner is about to take out.
+  const references = extractReferences(raw)
+  const record = {
+    infobox: options.infobox === false ? undefined : extractInfobox(raw),
+    images: options.images === false ? undefined : extractImages(raw)
+  }
+
+  const {tree, counts, used} = clean(raw, {...settings, references})
+
+  // The notes the body reaches, cleaned the same way the body was, so a
+  // citation's own links are rewritten like every other link on the page.
+  const notes = used.map((id) => {
+    const reference = references.get(id)
+
+    return {
+      id: reference.number,
+      children: clean({type: 'root', children: reference.children}, settings).tree.children
+    }
   })
 
-  const data = frontMatter(page, options)
+  const data = frontMatter(page, options, {
+    ...record,
+    sections: outline(tree, defaultResolve),
+    references:
+      options.refs === 'data'
+        ? [...references.values()].map(({number, text, url}) =>
+            url ? {number, text, url} : {number, text}
+          )
+        : undefined
+  })
 
   // The title as a heading as well as a field. A document that renders on its
   // own says what it is about; a layout that would rather write the title
@@ -69,7 +105,7 @@ export function buildDocument(page, options = {}) {
     })
   }
 
-  tree.data = {matter: data}
+  tree.data = {matter: data, footnotes: notes}
 
   return {
     source: toMdy(tree, {
@@ -79,6 +115,9 @@ export function buildDocument(page, options = {}) {
       // parser was not assigning them is what lets a heading be written as a
       // heading rather than as an element pinned to a foreign anchor.
       headingId: false,
+      // The document is meant to be templated — that is the whole point of
+      // putting the infobox in the front matter — so it has to compile.
+      script: options.script !== false,
       wrap: options.wrap ?? 78
     }),
     data,
@@ -98,7 +137,7 @@ export function buildDocument(page, options = {}) {
  * @param {object} options
  * @returns {object}
  */
-function frontMatter(page, options) {
+function frontMatter(page, options, extracted) {
   const {target, summary} = page
   const title = summary?.titles?.normalized ?? target.title
   const url =
@@ -134,6 +173,23 @@ function frontMatter(page, options) {
   const data = {title}
 
   if (summary?.description) data.description = summary.description
+
+  // Where the page is, when it is somewhere. From the summary rather than from
+  // the coordinate span in the HTML: the same numbers, already numbers.
+  if (summary?.coordinates) {
+    data.coordinates = {lat: summary.coordinates.lat, lon: summary.coordinates.lon}
+  }
+
+  if (summary?.originalimage?.source) {
+    data.image = summary.originalimage.source.replace(/[?&]utm_[^&]*/g, '')
+  }
+
+  for (const [key, value] of Object.entries(extracted)) {
+    if (value === undefined) continue
+    if (Array.isArray(value) && !value.length) continue
+
+    data[key] = value
+  }
 
   data.source = source
 

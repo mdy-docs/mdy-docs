@@ -7,10 +7,63 @@ YAML, where `res.data` can reach it.
 
 The design is [docs/wikipedia-plan.md](../../docs/wikipedia-plan.md).
 
-> **Phases 0 and 1 of that plan.** A page fetches, cleans, and writes itself as
-> a document whose front matter says where it came from. What is not built is
-> extraction: the infobox, the section outline, the images and the citations are
-> removed rather than turned into data, which is phase 2.
+> **Phases 0 to 2 of that plan.** A page fetches, cleans, extracts, and writes
+> itself as a document with data. What is not built is Wikidata, categories and
+> langlinks (phase 3), and importing more than one page at a time (phase 4).
+
+## What comes out
+
+```yaml
++++
+title: Babylon
+description: Ancient Mesopotamian city in Iraq
+coordinates: {lat: 32.5425, lon: 44.42111111}
+infobox:
+  type: Settlement
+  location: Hillah, Babil Governorate, Iraq
+  region: Mesopotamia
+  part-of: Babylonia
+  history: {built: c. 2200 BC, abandoned: c. 1000 AD}
+  site-notes: {area: 9 km2 (3.5 sq mi), condition: Ruined, owner: Public}
+  unesco-world-heritage-site:
+    official-name: Babylon
+    criteria: 'Cultural: (iii), (vi)'
+    designated: 2019 (43rd session)
+    reference-no: '278'
+    region: Arab States
+sections: [{level: 2, id: names, title: Names}, …]
+images: [{file: Map_of_Babylon_with_major_areas.jpg, src: …, caption: …}, …]
+source: {…}
++++
+= Babylon
+
+!!Babylon!! was an ancient city on the lower [[ Euphrates | … ]]…[[ ^2 ]]
+```
+
+so that a template can read it:
+
+```mdy
+Founded {{ res.data.infobox.history.built }} at {{ res.data.infobox.location }}.
+```
+
+The **nesting is not decoration**. Babylon has a `region` (Mesopotamia) *and* a
+World Heritage listing with a `region` (Arab States); flat, one silently eats
+the other. Grouping by the infobox's own headers keeps both, and each says
+which region it means.
+
+Values stay **strings**. An infobox value is display text — `9 km2 (3.5 sq mi)`,
+`c. 2200 BC` — and the few that look numeric are usually identifiers, where
+being a number is wrong: a World Heritage reference is `278`, not two hundred
+and seventy-eight. A cell holding a list becomes a list.
+
+The **outline is of the document, not of the page**: taken after cleaning and
+slugified with mdy's own slugifier, so every `sections` entry names an anchor
+that is really in the rendered page.
+
+Citations become **real footnotes** — `[[ ^2 ]]` where the marker was, the note
+at the end with the links the citation had, and only for the citations the body
+actually reaches. `--refs data` puts them in the front matter instead, and
+`--refs drop` takes them out.
 
 ## Use
 
@@ -92,9 +145,14 @@ is Parsoid's bookkeeping around real prose. Getting these the wrong way round is
 how an importer silently loses paragraphs, so each rule says which it is and the
 tests count what each one took.
 
-One known limit: the sections dropped as end matter — See also, Notes,
-References, Further reading, External links — are named in English, so on
-another wiki they stay. `--sections` names what to keep instead.
+Two known limits, both the same shape: the cleaner knows the English
+Wikipedia's conventions. The sections dropped as end matter — See also, Notes,
+References, Further reading, External links — are matched by heading text, so on
+another wiki they stay; `--sections` names what to keep instead. And the infobox
+is read through `Module:Infobox`'s `infobox-label` / `infobox-data` classes, which
+the German wiki does not use, so `de:Babylon` comes out with prose and no
+`infobox`. Everything else — links, figures, citations, the outline — is read
+from Parsoid's own markup and works on any wiki.
 
 ## `toMdy` — hast → MDY
 
