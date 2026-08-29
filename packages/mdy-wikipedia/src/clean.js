@@ -333,7 +333,11 @@ function walk(nodes, options, counts) {
 const bookkeeping = new Set([
   'about', 'typeof', 'rel', 'resource', 'dataMw', 'dataParsoid', 'dataMwSectionId',
   'className', 'style', 'title', 'decoding', 'loading', 'srcSet', 'sizes',
-  'dataFileWidth', 'dataFileHeight', 'dataFileType', 'referrerPolicy'
+  'dataFileWidth', 'dataFileHeight', 'dataFileType', 'referrerPolicy',
+  // `tabindex` makes a wide table scrollable with the keyboard, which is a
+  // fact about Wikipedia's rendering and not about the article. mdy's
+  // sanitizer refuses it on a `<div>` and says so, once per table.
+  'tabIndex'
 ])
 
 /**

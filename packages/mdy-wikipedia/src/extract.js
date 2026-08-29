@@ -318,9 +318,13 @@ function sourceUrl(value) {
  * @returns {string}
  */
 function slug(value) {
+  // Letters and numbers, not `a-z0-9`: a label is whatever language the wiki
+  // is in, and `Encyclopædia` should key as `encyclopædia` rather than as
+  // `encyclop-dia`. ASCII labels are unaffected, which is every label on the
+  // English infobox.
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '')
 }
 

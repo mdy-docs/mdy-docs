@@ -7,9 +7,9 @@ YAML, where `res.data` can reach it.
 
 The design is [docs/wikipedia-plan.md](../../docs/wikipedia-plan.md).
 
-> **Phases 0 to 2 of that plan.** A page fetches, cleans, extracts, and writes
-> itself as a document with data. What is not built is Wikidata, categories and
-> langlinks (phase 3), and importing more than one page at a time (phase 4).
+> **Phases 0 to 3 of that plan.** A page fetches, cleans, extracts, and writes
+> itself as a document with data. What is not built is importing more than one
+> page at a time, which is phase 4.
 
 ## What comes out
 
@@ -59,6 +59,52 @@ and seventy-eight. A cell holding a list becomes a list.
 The **outline is of the document, not of the page**: taken after cleaning and
 slugified with mdy's own slugifier, so every `sections` entry names an anchor
 that is really in the rendered page.
+
+### The optional records
+
+Three more, each its own round trip and each behind its own flag.
+
+**`--wikidata`** resolves the page's Wikidata entity. The claims are typed
+where an infobox is text, which is the reason to want them — but everything
+arrives as opaque ids (`P31` → `Q133442`), so a second request looks up the
+labels for all ~150 of them, fifty at a time as the API asks:
+
+```yaml
+wikidata:
+  id: Q5684
+  label: Babylon
+  description: capital city of Babylonia and an archaeological site in modern-day Iraq
+  claims:
+    instance-of: [city-state, ancient city, archaeological site]
+    inception: 3rd millennium BC
+    coordinate-location: [{lat: 32.5425, lon: 44.42111111111111}, …]
+    capital-of: [Neo-Babylonian Empire, Achaemenid Empire, …]
+  identifiers:
+    geonames-id: '98228'
+    freebase-id: /m/01cyh
+```
+
+Two things it does that a naive reading would not. **External identifiers are
+kept apart**: 66 of Babylon's 90 statements are GeoNames, Freebase, Quora and a
+dozen library catalogues, and mixed in they bury the two dozen claims anybody
+came for. The datatype says which is which, so no list of properties has to be
+maintained. And **rank is honoured**: Babylon's inception has a deprecated claim
+to 1894 BC and a live one to the 3rd millennium BC, and an importer that ignores
+rank quietly resurrects the wrong answer.
+
+A time is written to the precision Wikidata claims for it — `1815-12-10`,
+`1815`, `1810s`, `19th century`, `3rd millennium BC`. `-1894-00-00T00:00:00Z`
+is not the tenth of never; the zeroes are Wikidata saying it does not know the
+month, and writing it out as a date would invent two facts.
+
+Labels come back in the wiki's own language, so `fr:Babylone --wikidata` keys
+its claims `nature-de-l-élément` and `coordonnées-géographiques`.
+
+**`--categories`** lists the page's categories, with the hidden maintenance ones
+left behind at the API — Babylon is in 53 and 35 of them are upkeep.
+
+**`--lang-links`** lists the page in every other language it exists in, as a map
+(`res.data.langlinks.fr`) rather than 115 records saying almost nothing.
 
 Citations become **real footnotes** — `[[ ^2 ]]` where the marker was, the note
 at the end with the links the citation had, and only for the citations the body

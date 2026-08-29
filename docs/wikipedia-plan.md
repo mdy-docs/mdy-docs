@@ -372,7 +372,8 @@ references-as-footnotes. Exit: the YAML above, and `res.data.infobox.built`
 resolves in a template. ✅ — see [what phase 2 landed](#what-phase-2-landed).
 
 **Phase 3 — the optional records.** Wikidata with label resolution,
-categories, langlinks, `--links=wiki`.
+categories, langlinks, `--links=wiki`. ✅ — see
+[what phase 3 landed](#what-phase-3-landed).
 
 **Phase 4 — more than one page.** `mdy-wikipedia --category "Cities in Iraq"`
 or a list of titles into a directory, which is the point at which the output
@@ -608,3 +609,73 @@ two lines of an infobox with nothing put in place of the line ending.
 - **`--flatten` was not built.** The open question about `infobox:` nesting
   versus the top level is answered by the region collision — nested — and the
   shorter spelling can wait for somebody building a vault of one article type.
+
+## What phase 3 landed
+
+`--wikidata`, `--categories` and `--lang-links`. 101 tests, still all offline:
+the entity, its labels and the Action API's answer are committed beside the
+Parsoid HTML, and `buildDocument` takes all three as given, so the network
+stays on one side of the line and the document on the other.
+
+### Wikidata is only worth having if you read it properly
+
+The claims are typed where an infobox is text, which is the whole reason to
+fetch them. Three things stand between that and a useful record, and each one
+is a way to be quietly wrong rather than obviously broken.
+
+**Rank.** Babylon's inception has two claims: `-1894-00-00T00:00:00Z` at year
+precision, and `-2200-00-00T00:00:00Z` at millennium precision. The plan quoted
+the first one as the example of Wikidata being better than the infobox. It is
+*deprecated* — Wikidata keeps it to record that somebody published it — and the
+live answer is `3rd millennium BC`. An importer that ignores rank writes the
+superseded answer down beside the current one with nothing to tell them apart.
+
+**Precision.** `-1894-00-00T00:00:00Z` is not the tenth of never. The zeroes are
+Wikidata saying it does not know the month, so a time is written to the
+precision it claims — `1815-12-10`, `1815-12`, `1815`, `1810s`,
+`19th century`, `3rd millennium BC` — and never to more.
+
+**Proportion.** 66 of Babylon's 90 statements are external identifiers, and
+mixed in with the rest they bury the two dozen claims anybody came for. They go
+under `identifiers`, sorted by *datatype* rather than by a list of property ids
+that would need maintaining.
+
+Labels are asked for in the wiki's own language, so `fr:Babylone --wikidata`
+keys its claims `nature-de-l-élément` and `coordonnées-géographiques` — which
+is what made the slugifier Unicode-aware, and incidentally turned
+`encyclop-dia-britannica-online-id` into `encyclopædia-britannica-online-id` on
+the English side too.
+
+### The two small ones
+
+`--categories` is one parameter's worth of judgement: `clshow=!hidden` at the
+API is the difference between a taxonomy and a maintenance log, since Babylon
+is in 53 categories and 35 of them are `All articles with unsourced statements`
+and its friends.
+
+`--lang-links` writes a map, not a list. What anybody wants from it is
+`res.data.langlinks.fr`, and 115 languages as records is a page of YAML saying
+almost nothing.
+
+### The fetch layer grew up
+
+`get` was two hard-coded kinds; it is now a resource descriptor with an
+`optional` flag, because everything phase 3 adds is optional in the real sense.
+A summary, a category list or a Wikidata entity that will not fetch leaves the
+document poorer and still a document — saying so beats failing a whole import
+over a record nobody asked for by name. The page's own HTML is the one thing
+that is not optional.
+
+### What is knowingly left
+
+- **Qualifiers and references on statements are dropped.** `capital of` carries
+  start and end dates on Wikidata, and the record keeps only the value. A
+  claim's provenance is a second record's worth of structure, and the plan's
+  open question about citations-as-records is the same question.
+- **An entity with no label in the wiki's language or in English keeps its
+  id.** Three of Babylon's values come out as `Q9253865` and the like. Asking
+  for every language to find one would be an order of magnitude more data;
+  falling back to the id is at least honest about what it is.
+- **The English-conventions limit from phase 2 stands.** Wikidata and the
+  Action API are language-neutral and work anywhere; the infobox reader and the
+  end-matter headings are still the English Wikipedia's.

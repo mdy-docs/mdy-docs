@@ -93,61 +93,204 @@ const namespaces = new Set([
  * @returns {Promise<{html: string, summary: object | undefined}>}
  */
 export async function fetchPage(target, options = {}) {
-  const html = await get(target, 'html', options)
-  const summary = await get(target, 'summary', options)
+  const html = await get(target, {name: 'html', url: rest(target, 'html')}, options)
+  const summary = await get(
+    target,
+    {name: 'summary', url: rest(target, 'summary'), optional: true, json: true},
+    options
+  )
 
-  return {
-    html,
-    summary: summary === undefined ? undefined : parseSummary(summary, options)
-  }
+  return {html, summary}
 }
 
 /**
- * @param {string} value
- * @param {object} options
- * @returns {object | undefined}
- */
-function parseSummary(value, options) {
-  try {
-    return JSON.parse(value)
-  } catch {
-    options.file?.message('The page summary did not parse as JSON, ignoring it', {
-      ruleId: 'summary',
-      source: 'mdy-wikipedia'
-    })
-  }
-}
-
-/**
- * One resource, from the cache when it is there and from Wikipedia when it is
- * not. A summary that will not fetch is not fatal — it is extra, and the HTML
- * is the page — but HTML that will not fetch is.
+ * The categories and the interwiki links, from the Action API.
+ *
+ * `clshow=!hidden` is the whole difference between a taxonomy and a
+ * maintenance log: Babylon is in 53 categories, and 35 of them are
+ * `All articles with unsourced statements` and its friends.
  *
  * @param {Target} target
- * @param {'html' | 'summary'} kind
- * @param {object} options
- * @returns {Promise<string | undefined>}
+ * @param {{categories?: boolean, langLinks?: boolean}} what
+ * @param {object} [options]
+ * @returns {Promise<{categories?: Array<string>, langlinks?: Record<string, string>}>}
  */
-async function get(target, kind, options) {
-  const path = options.cache === false ? undefined : cachePath(target, kind, options)
+export async function fetchIndexes(target, what, options = {}) {
+  const props = []
+
+  if (what.categories) props.push('categories')
+  if (what.langLinks) props.push('langlinks')
+  if (!props.length) return {}
+
+  const url =
+    'https://' + target.lang + '.wikipedia.org/w/api.php?action=query&format=json' +
+    '&formatversion=2&redirects=1&prop=' + props.join('%7C') +
+    '&cllimit=max&clshow=!hidden&lllimit=max' +
+    '&titles=' + encodeURIComponent(target.title)
+  const body = await get(
+    target,
+    {name: 'indexes.' + props.join('-'), url, optional: true, json: true},
+    options
+  )
+  const page = body?.query?.pages?.[0]
+
+  if (!page) return {}
+
+  /** @type {{categories?: Array<string>, langlinks?: Record<string, string>}} */
+  const out = {}
+
+  if (page.categories) {
+    out.categories = page.categories.map((entry) =>
+      String(entry.title).replace(/^Category:/, '')
+    )
+  }
+
+  if (page.langlinks) {
+    // A map rather than a list: what anybody wants from this is
+    // `res.data.langlinks.fr`, and 115 languages as records is a page of YAML
+    // saying almost nothing.
+    out.langlinks = Object.fromEntries(
+      page.langlinks.map((entry) => [entry.lang, entry.title])
+    )
+  }
+
+  return out
+}
+
+/**
+ * A Wikidata entity, and the labels for everything it names.
+ *
+ * The claims arrive as opaque ids — `P31` → `Q133442` — so a second round trip
+ * turns them into `instance of` → `city-state`. That is what makes the record
+ * readable, and it is why this is behind a flag: two more requests, ~150 ids
+ * for Babylon, batched fifty at a time as the API asks.
+ *
+ * @param {string} id
+ *   A `Q…` item id, from the page summary's `wikibase_item`.
+ * @param {Target} target
+ * @param {object} [options]
+ * @returns {Promise<{entity: object, labels: Record<string, string>} | undefined>}
+ */
+export async function fetchWikidata(id, target, options = {}) {
+  if (!id) return
+
+  const entity = (
+    await get(
+      target,
+      {
+        name: 'wikidata',
+        url: 'https://www.wikidata.org/wiki/Special:EntityData/' + encodeURIComponent(id) + '.json',
+        optional: true,
+        json: true
+      },
+      options
+    )
+  )?.entities?.[id]
+
+  if (!entity) return
+
+  const wanted = [...namesIn(entity)]
+  const languages = target.lang === 'en' ? 'en' : target.lang + '%7Cen'
+  /** @type {Record<string, string>} */
+  const labels = {}
+
+  for (let at = 0; at < wanted.length; at += 50) {
+    const batch = wanted.slice(at, at + 50)
+    const body = await get(
+      target,
+      {
+        name: 'wikidata-labels-' + at / 50,
+        url:
+          'https://www.wikidata.org/w/api.php?action=wbgetentities&format=json' +
+          '&formatversion=2&props=labels&languages=' + languages +
+          '&ids=' + batch.map(encodeURIComponent).join('%7C'),
+        optional: true,
+        json: true
+      },
+      options
+    )
+
+    for (const [name, found] of Object.entries(body?.entities ?? {})) {
+      const label = found?.labels?.[target.lang]?.value ?? found?.labels?.en?.value
+
+      if (label) labels[name] = label
+    }
+  }
+
+  return {entity, labels}
+}
+
+/**
+ * Every property and item an entity names, so all of them can be asked for at
+ * once rather than one lookup at a time.
+ *
+ * @param {object} entity
+ * @returns {Set<string>}
+ */
+function namesIn(entity) {
+  /** @type {Set<string>} */
+  const out = new Set()
+
+  for (const [property, statements] of Object.entries(entity.claims ?? {})) {
+    out.add(property)
+
+    for (const statement of statements) {
+      const value = statement.mainsnak?.datavalue?.value
+
+      if (value?.id) out.add(value.id)
+      if (typeof value?.unit === 'string' && value.unit.includes('/Q')) {
+        out.add(value.unit.slice(value.unit.lastIndexOf('/') + 1))
+      }
+    }
+  }
+
+  return out
+}
+
+/**
+ * One resource, from the cache when it is there and from the network when it
+ * is not.
+ *
+ * Everything except the page's own HTML is `optional`: a summary, a category
+ * list or a Wikidata entity that will not fetch leaves the document poorer and
+ * still a document, and saying so beats failing the whole import over a
+ * record nobody asked for by name.
+ *
+ * @param {Target} target
+ * @param {{name: string, url: string, optional?: boolean, json?: boolean}} resource
+ * @param {object} options
+ * @returns {Promise<any>}
+ */
+async function get(target, resource, options) {
+  const path =
+    options.cache === false ? undefined : cachePath(target, resource, options)
 
   if (path && !options.refresh) {
     const cached = await readFile(path, 'utf8').catch(() => undefined)
 
-    if (cached !== undefined) return cached
+    if (cached !== undefined) return decode(cached, resource, options)
   }
 
   const request = options.fetch ?? globalThis.fetch
-  const url = endpoint(target, kind)
-  const response = await request(url, {
-    headers: {'user-agent': userAgent(options), accept: accepts[kind]}
+  const response = await request(resource.url, {
+    headers: {
+      'user-agent': userAgent(options),
+      accept: resource.json ? 'application/json' : parsoidProfile
+    }
   })
 
   if (!response.ok) {
-    if (kind === 'summary') return
+    if (resource.optional) {
+      options.file?.message(
+        'Could not fetch ' + resource.name + ' (' + response.status + '), leaving it out',
+        {ruleId: 'fetch', source: 'mdy-wikipedia'}
+      )
+
+      return
+    }
 
     throw new Error(
-      'Could not fetch ' + url + ': ' + response.status + ' ' + response.statusText
+      'Could not fetch ' + resource.url + ': ' + response.status + ' ' + response.statusText
     )
   }
 
@@ -158,22 +301,39 @@ async function get(target, kind, options) {
     await writeFile(path, value)
   }
 
-  return value
+  return decode(value, resource, options)
 }
 
-const accepts = {
-  // Pinning the profile is what keeps a future Parsoid version from changing
-  // the shape of the tree under the cleaner without warning.
-  html: 'text/html; charset=utf-8; profile="https://www.mediawiki.org/wiki/Specs/HTML/2.8.0"',
-  summary: 'application/json'
+/**
+ * @param {string} value
+ * @param {{name: string, json?: boolean}} resource
+ * @param {object} options
+ * @returns {any}
+ */
+function decode(value, resource, options) {
+  if (!resource.json) return value
+
+  try {
+    return JSON.parse(value)
+  } catch {
+    options.file?.message(
+      'The ' + resource.name + ' response did not parse as JSON, ignoring it',
+      {ruleId: 'fetch', source: 'mdy-wikipedia'}
+    )
+  }
 }
+
+// Pinning the profile is what keeps a future Parsoid version from changing the
+// shape of the tree under the cleaner without warning.
+const parsoidProfile =
+  'text/html; charset=utf-8; profile="https://www.mediawiki.org/wiki/Specs/HTML/2.8.0"'
 
 /**
  * @param {Target} target
  * @param {'html' | 'summary'} kind
  * @returns {string}
  */
-function endpoint(target, kind) {
+function rest(target, kind) {
   return (
     'https://' +
     target.lang +
@@ -189,11 +349,11 @@ function endpoint(target, kind) {
  * one every other tool on the machine uses.
  *
  * @param {Target} target
- * @param {'html' | 'summary'} kind
+ * @param {{name: string}} resource
  * @param {object} options
  * @returns {string}
  */
-function cachePath(target, kind, options) {
+function cachePath(target, resource, options) {
   const base =
     options.cache ??
     join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'mdy-wikipedia')
@@ -201,7 +361,8 @@ function cachePath(target, kind, options) {
   return join(
     base,
     target.lang,
-    encodeURIComponent(target.title) + (kind === 'html' ? '.html' : '.summary.json')
+    encodeURIComponent(target.title) +
+      (resource.name === 'html' ? '.html' : '.' + resource.name + '.json')
   )
 }
 

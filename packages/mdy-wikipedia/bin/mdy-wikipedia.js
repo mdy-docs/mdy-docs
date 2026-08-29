@@ -31,6 +31,11 @@ Options:
                           drop       neither
   --no-infobox          do not read the infobox into the front matter
   --no-images           do not list the images in the front matter
+  --wikidata            resolve the page's Wikidata claims into the front
+                        matter (two more requests: the entity, then the
+                        labels for everything it names)
+  --categories          list the page's categories
+  --lang-links          list the page in every other language it exists in
   --wrap <columns>      wrap paragraphs (default: 78; 0 for one line each)
   --no-title            do not write the page title as a heading
   --cache <dir>         where fetched pages are kept
@@ -54,6 +59,9 @@ const {values, positionals} = parseArgs({
     sections: {type: 'string'},
     'keep-sections': {type: 'boolean'},
     refs: {type: 'string'},
+    wikidata: {type: 'boolean'},
+    categories: {type: 'boolean'},
+    'lang-links': {type: 'boolean'},
     wrap: {type: 'string'},
     cache: {type: 'string'},
     refresh: {type: 'boolean'},
@@ -97,6 +105,9 @@ try {
     sections: values.sections?.split(',').map((name) => name.trim()).filter(Boolean),
     keepSections: values['keep-sections'],
     refs: values.refs ?? 'footnotes',
+    wikidata: values.wikidata,
+    categories: values.categories,
+    langLinks: values['lang-links'],
     infobox: !values['no-infobox'],
     images: !values['no-images'],
     wrap: values.wrap === undefined ? undefined : Number(values.wrap),

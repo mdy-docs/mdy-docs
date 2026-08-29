@@ -4,7 +4,14 @@ import {renderDocumentSet} from 'mdy-docs'
 import {fromMdy} from 'mdy-docs/parse'
 import {toText} from 'mdy-docs/parse/script.js'
 import {buildDocument} from '../src/index.js'
-import {babylonHtml, babylonSummary, babylonTarget} from './fixture.js'
+import {
+  babylonEntity,
+  babylonHtml,
+  babylonIndexes,
+  babylonLabels,
+  babylonSummary,
+  babylonTarget
+} from './fixture.js'
 
 const page = {html: babylonHtml, summary: babylonSummary, target: babylonTarget}
 const now = new Date('2026-08-29T00:00:00Z')
@@ -279,4 +286,52 @@ test('a page that says `{{cite web}}` still compiles', async () => {
   const html = await renderDocumentSet(built.source)
 
   assert.match(html, /\{\{cite web\}\}/)
+})
+
+test('the optional records reach the document, and a template', async () => {
+  // Everything phase 3 adds is another round trip, so `buildDocument` takes it
+  // as given: the network stays on one side of the line and the document on
+  // the other.
+  const {source} = buildDocument(
+    {
+      ...page,
+      wikidata: {entity: babylonEntity, labels: babylonLabels},
+      categories: babylonIndexes.categories.map((entry) =>
+        entry.title.replace(/^Category:/, '')
+      ),
+      langlinks: Object.fromEntries(
+        babylonIndexes.langlinks.map((entry) => [entry.lang, entry.title])
+      )
+    },
+    {now, refs: 'drop', images: false}
+  )
+  const {tree, messages} = parse(source)
+  const {matter} = tree.data
+
+  assert.deepEqual(messages, [])
+  assert.equal(matter.wikidata.id, 'Q5684')
+  assert.ok(matter.wikidata.claims['instance-of'].includes('ancient city'))
+  assert.equal(matter.wikidata.identifiers['geonames-id'], '98228')
+  assert.ok(matter.categories.includes('Archaeological sites in Iraq'))
+  assert.equal(matter.langlinks.fr, 'Babylone')
+
+  const facts = [
+    '== Elsewhere',
+    '',
+    "- {{ res.data.wikidata.claims['instance-of'][1] }} in {{ res.data.langlinks.fr }}",
+    "- {{ res.data.categories.length }} categories, GeoNames {{ res.data.wikidata.identifiers['geonames-id'] }}",
+    ''
+  ].join('\n')
+  const html = await renderDocumentSet(source.trimEnd() + '\n\n' + facts)
+
+  assert.match(html, /ancient city in Babylone/)
+  assert.match(html, /18 categories, GeoNames 98228/)
+})
+
+test('the records that were not asked for are simply not there', () => {
+  const {matter} = parse(built.source).tree.data
+
+  assert.equal(matter.wikidata, undefined)
+  assert.equal(matter.categories, undefined)
+  assert.equal(matter.langlinks, undefined)
 })

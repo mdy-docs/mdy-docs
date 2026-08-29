@@ -16,3 +16,24 @@ export const babylonSummary = JSON.parse(
 )
 
 export const babylonTarget = {lang: 'en', title: 'Babylon'}
+
+/** The Wikidata entity, trimmed to what the record builder reads. */
+export const babylonEntity = JSON.parse(
+  readFileSync(fileURLToPath(new URL('babylon.wikidata.json', here)), 'utf8')
+).entities.Q5684
+
+/** Labels for every property and item the entity names. */
+export const babylonLabels = Object.fromEntries(
+  Object.entries(
+    JSON.parse(
+      readFileSync(fileURLToPath(new URL('babylon.wikidata-labels.json', here)), 'utf8')
+    ).entities
+  )
+    .map(([id, found]) => [id, found?.labels?.en?.value])
+    .filter(([, label]) => label)
+)
+
+/** The Action API's categories and langlinks for the page. */
+export const babylonIndexes = JSON.parse(
+  readFileSync(fileURLToPath(new URL('babylon.indexes.json', here)), 'utf8')
+).query.pages[0]

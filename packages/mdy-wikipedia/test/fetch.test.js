@@ -3,7 +3,8 @@ import {mkdtemp, readFile, writeFile, mkdir} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import test from 'node:test'
-import {fetchPage, resolveTarget, userAgent} from '../src/fetch.js'
+import {fetchIndexes, fetchPage, fetchWikidata, resolveTarget, userAgent} from '../src/fetch.js'
+import {babylonIndexes} from './fixture.js'
 
 /** A fetch that answers from a table and records what it was asked. */
 function stub(table) {
@@ -138,4 +139,112 @@ test('a summary that is not JSON is reported and skipped', async () => {
 
   assert.equal(page.summary, undefined)
   assert.match(messages[0], /did not parse as JSON/)
+})
+
+test('the categories and langlinks come back as a list and a map', async () => {
+  const calls = []
+  const fetch = (url) => {
+    calls.push(url)
+
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({query: {pages: [babylonIndexes]}}))
+    })
+  }
+
+  const out = await fetchIndexes(
+    {lang: 'en', title: 'Babylon'},
+    {categories: true, langLinks: true},
+    {fetch, cache: false}
+  )
+
+  assert.ok(out.categories.includes('Archaeological sites in Iraq'))
+  // The `Category:` prefix is a namespace, not part of the name.
+  assert.ok(!out.categories.some((name) => name.startsWith('Category:')))
+  // A map, not a list: what anybody wants from this is `langlinks.fr`.
+  assert.equal(out.langlinks.fr, 'Babylone')
+  assert.equal(out.langlinks.ar, '\u0628\u0627\u0628\u0644')
+
+  // Hidden maintenance categories are asked to stay behind at the API rather
+  // than filtered here: Babylon is in 53 and 35 of them are upkeep.
+  assert.equal(calls.length, 1)
+  assert.match(calls[0], /clshow=!hidden/)
+  assert.ok(out.categories.length < 25)
+})
+
+test('asking for neither index asks for nothing', async () => {
+  const {fetch, calls} = stub({})
+
+  assert.deepEqual(await fetchIndexes({lang: 'en', title: 'Babylon'}, {}, {fetch}), {})
+  assert.equal(calls.length, 0)
+})
+
+test('an index that will not fetch is reported, not fatal', async () => {
+  const messages = []
+  const {fetch} = stub({})
+  const out = await fetchIndexes(
+    {lang: 'en', title: 'Babylon'},
+    {categories: true},
+    {fetch, cache: false, file: {message: (reason) => messages.push(reason)}}
+  )
+
+  assert.deepEqual(out, {})
+  assert.match(messages[0], /Could not fetch indexes\.categories \(404\)/)
+})
+
+test('wikidata is two round trips: the entity, then the labels it names', async () => {
+  const entity = {
+    entities: {
+      Q1: {
+        id: 'Q1',
+        claims: {
+          P31: [
+            {
+              rank: 'normal',
+              mainsnak: {
+                snaktype: 'value',
+                datatype: 'wikibase-item',
+                datavalue: {type: 'wikibase-entityid', value: {id: 'Q2'}}
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+  const labels = {
+    entities: {
+      P31: {labels: {en: {value: 'instance of'}}},
+      Q2: {labels: {en: {value: 'city-state'}}}
+    }
+  }
+  const calls = []
+  const fetch = (url) => {
+    calls.push(url)
+
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(JSON.stringify(url.includes('EntityData') ? entity : labels))
+    })
+  }
+
+  const out = await fetchWikidata('Q1', {lang: 'en', title: 'Babylon'}, {fetch, cache: false})
+
+  assert.equal(out.entity.id, 'Q1')
+  assert.deepEqual(out.labels, {P31: 'instance of', Q2: 'city-state'})
+  assert.equal(calls.length, 2)
+  assert.match(calls[0], /Special:EntityData\/Q1\.json$/)
+  // Both the property and its value in one request: the API takes fifty at a
+  // time and asking one at a time would be 150 requests for Babylon.
+  assert.match(calls[1], /ids=P31%7CQ2/)
+})
+
+test('no wikidata id means no request', async () => {
+  const {fetch, calls} = stub({})
+
+  assert.equal(await fetchWikidata(undefined, {lang: 'en', title: 'Babylon'}, {fetch}), undefined)
+  assert.equal(calls.length, 0)
 })

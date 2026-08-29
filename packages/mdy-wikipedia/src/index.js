@@ -22,13 +22,15 @@ import {
   extractReferences,
   outline
 } from './extract.js'
-import {fetchPage, resolveTarget} from './fetch.js'
+import {fetchIndexes, fetchPage, fetchWikidata, resolveTarget} from './fetch.js'
 import {toMdy} from './to-mdy.js'
+import {wikidataRecord} from './wikidata.js'
 
 export {toMdy} from './to-mdy.js'
 export {escapeInline} from './escape.js'
 export {clean} from './clean.js'
-export {fetchPage, resolveTarget} from './fetch.js'
+export {fetchPage, fetchIndexes, fetchWikidata, resolveTarget} from './fetch.js'
+export {wikidataRecord} from './wikidata.js'
 export {extractInfobox, extractImages, extractReferences, outline} from './extract.js'
 
 /**
@@ -37,16 +39,24 @@ export {extractInfobox, extractImages, extractReferences, outline} from './extra
  * @param {string} input
  *   A title, a `fr:Babylone` prefix, or a Wikipedia URL.
  * @param {object} [options]
- *   `lang`, `links`, `sections`, `keepSections`, `refs`, `wrap`, `cache`,
- *   `refresh`, `contact`, `file`, and `fetch` for an implementation of your
- *   own.
+ *   `lang`, `links`, `sections`, `keepSections`, `refs`, `wikidata`,
+ *   `categories`, `langLinks`, `wrap`, `cache`, `refresh`, `contact`, `file`,
+ *   and `fetch` for an implementation of your own.
  * @returns {Promise<{source: string, data: object, counts: object}>}
  */
 export async function wikipediaToMdy(input, options = {}) {
   const target = resolveTarget(input, options)
   const page = await fetchPage(target, options)
 
-  return buildDocument({...page, target}, options)
+  // The optional records, each its own round trip and each behind its own
+  // flag. They are asked for here rather than in `buildDocument` so that
+  // everything after the network stays a pure function of what came back.
+  const indexes = await fetchIndexes(target, options, options)
+  const wikidata = options.wikidata
+    ? await fetchWikidata(page.summary?.wikibase_item, target, options)
+    : undefined
+
+  return buildDocument({...page, ...indexes, wikidata, target}, options)
 }
 
 /**
@@ -84,6 +94,11 @@ export function buildDocument(page, options = {}) {
 
   const data = frontMatter(page, options, {
     ...record,
+    wikidata: page.wikidata
+      ? wikidataRecord(page.wikidata.entity, page.wikidata.labels, {lang: target.lang})
+      : undefined,
+    categories: page.categories,
+    langlinks: page.langlinks,
     sections: outline(tree, defaultResolve),
     references:
       options.refs === 'data'
@@ -187,6 +202,7 @@ function frontMatter(page, options, extracted) {
   for (const [key, value] of Object.entries(extracted)) {
     if (value === undefined) continue
     if (Array.isArray(value) && !value.length) continue
+    if (!Array.isArray(value) && typeof value === 'object' && !Object.keys(value).length) continue
 
     data[key] = value
   }
