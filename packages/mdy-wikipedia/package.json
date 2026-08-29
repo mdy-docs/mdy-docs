@@ -1,0 +1,25 @@
+{
+  "name": "@mdy-docs/mdy-wikipedia",
+  "version": "0.1.0",
+  "description": "Import a Wikipedia page as an mdy document: prose as MDY markup, infobox and page metadata as YAML front matter",
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./to-mdy": "./src/to-mdy.js",
+    "./escape": "./src/escape.js"
+  },
+  "files": [
+    "src/",
+    "bin/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "mdy-docs": "file:../..",
+    "yaml": "^2.9.0"
+  }
+}

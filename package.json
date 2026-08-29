@@ -29,7 +29,8 @@
     "live-preview": "npm --prefix packages/mdy-live-preview run dev",
     "test:mdy-site": "npm --prefix packages/mdy-site test",
     "mdy-site": "npm --prefix packages/mdy-site run dev",
-    "test:mdy-bus": "npm --prefix packages/mdy-bus test"
+    "test:mdy-bus": "npm --prefix packages/mdy-bus test",
+    "test:mdy-wikipedia": "npm --prefix packages/mdy-wikipedia test"
   },
   "dependencies": {
     "@jsquash/jpeg": "^1.6.0",
@@ -62,6 +63,7 @@
   "exports": {
     ".": "./index.js",
     "./parse": "./src/parse/index.js",
+    "./parse/*": "./src/parse/*",
     "./tasks": "./src/parse/enhance.js",
     "./package.json": "./package.json"
   }
