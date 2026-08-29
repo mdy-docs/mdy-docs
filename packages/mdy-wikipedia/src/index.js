@@ -31,6 +31,7 @@ export {escapeInline} from './escape.js'
 export {clean} from './clean.js'
 export {fetchPage, fetchIndexes, fetchWikidata, resolveTarget} from './fetch.js'
 export {wikidataRecord} from './wikidata.js'
+export {importVault, documentPath} from './vault.js'
 export {extractInfobox, extractImages, extractReferences, outline} from './extract.js'
 
 /**
@@ -64,7 +65,7 @@ export async function wikipediaToMdy(input, options = {}) {
  *
  * @param {{html: string, summary?: object, target: {lang: string, title: string}}} page
  * @param {object} [options]
- * @returns {{source: string, data: object, counts: object}}
+ * @returns {{source: string, data: object, counts: object, links: Array<string>}}
  */
 export function buildDocument(page, options = {}) {
   const {target, summary} = page
@@ -79,7 +80,7 @@ export function buildDocument(page, options = {}) {
     images: options.images === false ? undefined : extractImages(raw)
   }
 
-  const {tree, counts, used} = clean(raw, {...settings, references})
+  const {tree, counts, used, links} = clean(raw, {...settings, references})
 
   // The notes the body reaches, cleaned the same way the body was, so a
   // citation's own links are rewritten like every other link on the page.
@@ -123,6 +124,7 @@ export function buildDocument(page, options = {}) {
   tree.data = {matter: data, footnotes: notes}
 
   return {
+    links,
     source: toMdy(tree, {
       ...options,
       // The ids in this tree are Wikipedia's — `id="Names"`, from its own

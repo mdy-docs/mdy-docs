@@ -204,3 +204,45 @@ test('what was taken out is counted, so the cleaner can be judged', () => {
     assert.ok(counts[name] > 0, name + ' should have been counted')
   }
 })
+
+test('a formula is kept as the TeX it was written as', () => {
+  // Parsoid renders `<math>` to MathML — 28 elements for one line — and MDY
+  // has no inline element syntax to hold any of it, so unwrapping leaves
+  // `1 + 24 60 + 51 60 2` where a formula was. The source is in `data-mw`.
+  const page = fromHtml(
+    '<body><section><p><span typeof="mw:Extension/math" ' +
+      'data-mw=\'{"name":"math","body":{"extsrc":"1 + \\\\frac{24}{60}"}}\'>' +
+      '<span style="display: none;"><math><mn>1</mn><mo>+</mo></math></span>' +
+      '</span></p></section></body>'
+  )
+  const {tree: out, counts} = clean(page, {lang: 'en', title: 'X'})
+  const code = elements(out).find((element) => element.tagName === 'code')
+
+  assert.equal(counts.math, 1)
+  assert.equal(toText(code), '1 + \\frac{24}{60}')
+  assert.ok(!tagNames(out).has('math'))
+  assert.ok(!tagNames(out).has('mn'))
+})
+
+test('an emphasis inside an emphasis is flattened, not reported', () => {
+  // MDY's markers toggle, so the inner one would close the outer. It also says
+  // nothing — the emphasis is already on — so it goes here rather than being
+  // reported as unwritable 32 times on one page.
+  const page = fromHtml('<body><section><p><i>a <i>b</i> c</i></p></section></body>')
+  const {tree: out, counts} = clean(page, {lang: 'en', title: 'X'})
+
+  assert.equal(counts['nested-markup'], 1)
+  assert.equal(elements(out).filter((element) => element.tagName === 'em').length, 1)
+  assert.equal(toText(out).trim(), 'a b c')
+})
+
+test('what Wikipedia draws and hides does not come through', () => {
+  const page = fromHtml(
+    '<body><section><p>Born <span style="display:none">(1815-12-10)</span>' +
+      '10 December 1815</p></section></body>'
+  )
+  const {tree: out, counts} = clean(page, {lang: 'en', title: 'X'})
+
+  assert.equal(counts.hidden, 1)
+  assert.equal(toText(out).replace(/\s+/g, ' ').trim(), 'Born 10 December 1815')
+})

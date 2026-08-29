@@ -378,7 +378,8 @@ categories, langlinks, `--links=wiki`. ✅ — see
 **Phase 4 — more than one page.** `mdy-wikipedia --category "Cities in Iraq"`
 or a list of titles into a directory, which is the point at which the output
 is a *vault* and `$.find` over infobox fields becomes the reason the tool
-exists. Rate limiting and cache reuse matter here and nowhere earlier.
+exists. Rate limiting and cache reuse matter here and nowhere earlier. ✅ — see
+[what phase 4 landed](#what-phase-4-landed).
 
 ## Open questions
 
@@ -400,7 +401,9 @@ extractor's worth of work. Phase 2 renders them as text; a later phase can
 make `references:` a list of records instead of strings, and that is a
 strictly additive change to the YAML.
 
-**Should `--links=wiki` create the pages it links to?** A vault where
+**Should `--links=wiki` create the pages it links to?** ✅ Yes, with the cap —
+`--follow <depth>` and `--max`; see [phase 4](#what-phase-4-landed). The
+reasoning, as it stood before. A vault where
 `[[ Marduk ]]` resolves to nothing is half a wiki. A `--follow <depth>` that
 imports linked pages too is obvious and dangerous in equal measure — Babylon
 links to 1179 places. Phase 4, if at all, with a hard cap and an explicit
@@ -679,3 +682,80 @@ that is not optional.
 - **The English-conventions limit from phase 2 stands.** Wikidata and the
   Action API are language-neutral and work anywhere; the infobox reader and the
   end-matter headings are still the English Wikipedia's.
+
+## What phase 4 landed
+
+`--out-dir`, `--category`, `--from`, `--follow`, `--max`, `--delay`. 116 tests.
+A category import of twenty pages takes thirty seconds, almost all of it the
+politeness gap, and the second one takes none.
+
+The exit criterion is a query, and it is a test:
+
+```mdy
+% const settlements = await $.find({ 'infobox.type': 'Settlement' })
+% const iraq = await $.find({ 'infobox.location': { $regex: 'Iraq' } })
+{{ settlements.length }} settlements, {{ iraq.length }} in Iraq
+```
+
+over a directory of imported articles, with a real regex over a nested infobox
+field. That is the thing the four phases were for: one converted article is a
+converted article, and two hundred of them are a set that answers questions
+about Mesopotamian settlements.
+
+### The naming rule is the cross-linking rule
+
+`--out-dir` writes `third-dynasty-of-ur.mdy`, and `--links wiki` writes a link
+to that page as `[[ Third Dynasty of Ur ]]`, which mdy resolves to
+`third-dynasty-of-ur`. Those are the same slugifier on purpose, so a vault
+cross-links itself with no index and no rewriting pass: of the twenty documents
+in the Assyrian-cities import, eleven are linked to by the others, by name, and
+every one of those links lands.
+
+### The cap is on what is written, not on what is found
+
+The first version capped discovery, which quietly made the cap useless: the
+queue never held leftovers, so the run could not say what it had skipped.
+Capping only what is *written* and letting the queue fill past it is what makes
+this line possible, and this line is the whole value of the flag:
+
+```
+stopped at --max 5; 288 more were queued
+```
+
+288 is the number that says whether 5 was the right cap. Nothing queued is ever
+fetched, so the queue costs a few hundred strings and buys the report.
+
+### Two pages of the follow found two real gaps
+
+`--follow 1` from Babylon reaches Mesopotamia and Akkadian language, and both
+reported dozens of things MDY could not write. Neither was a limit of MDY.
+
+**Formulas were being shredded.** Parsoid renders `<math>` to MathML — 28
+elements for one line of Mesopotamia — and unwrapping it leaves
+`1 + 24 60 + 51 60 2` where a formula was. Parsoid also keeps the original TeX
+in `data-mw`, so a formula is now a code span holding exactly what somebody
+typed. 13 messages became 0.
+
+**Nested emphasis was being reported rather than flattened.** Akkadian language
+has 32 `<i>` inside `<i>`. Markers toggle, so the inner one cannot be written —
+but it also says nothing, since the emphasis is already on. Flattening it in
+the cleaner is lossless and silent; reporting it 32 times was noise that hid
+whatever else that page might have had to say. 32 messages became 0.
+
+That is the pattern worth keeping: a message is a claim that something was
+lost, and a message that fires thirty times for something that was not lost
+makes the honest ones unreadable.
+
+### What is knowingly left
+
+- **No concurrency.** Serial, with a 100ms gap. Wikimedia asks for it, and the
+  cache means the only slow run is the first one. There is no speed here worth
+  being rude for.
+- **`--follow` follows every link.** The plan wondered about an allowlist. The
+  cap turned out to be the control that matters — it is the one you can reason
+  about — and a filter would need a vocabulary (namespace? category? regex?)
+  that nothing has yet asked for.
+- **The English-conventions limit is unchanged.** A category import runs on one
+  wiki at a time, so it inherits whatever that wiki's section names and infobox
+  markup are; on the English wiki everything works, and elsewhere the infobox
+  and the end matter are still the two things read through English conventions.

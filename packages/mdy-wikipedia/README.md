@@ -7,9 +7,7 @@ YAML, where `res.data` can reach it.
 
 The design is [docs/wikipedia-plan.md](../../docs/wikipedia-plan.md).
 
-> **Phases 0 to 3 of that plan.** A page fetches, cleans, extracts, and writes
-> itself as a document with data. What is not built is importing more than one
-> page at a time, which is phase 4.
+> All four phases of that plan are built.
 
 ## What comes out
 
@@ -117,6 +115,10 @@ actually reaches. `--refs data` puts them in the front matter instead, and
 mdy-wikipedia Babylon > babylon.mdy
 mdy-wikipedia https://en.wikipedia.org/wiki/Babylon --out babylon.mdy
 mdy-wikipedia fr:Babylone --links wiki --sections lead --out babylone.mdy
+
+mdy-wikipedia Babylon Nineveh Ur --out-dir vault
+mdy-wikipedia --category "Ancient Assyrian cities" --out-dir vault --links wiki
+mdy-wikipedia Babylon --follow 1 --max 25 --out-dir vault --links wiki
 ```
 
 ```js
@@ -150,6 +152,41 @@ Those two lines are the measure of the thing. The first says what of Wikipedia's
 half a megabyte was not the article; the second says what of the article MDY
 could not write, and for the whole of Babylon it is one link that never had a
 label.
+
+## More than one page is a vault
+
+One imported article is a nicely converted article. A directory of them is a
+*vault*, and the infobox that became `res.data.infobox` becomes a field you can
+query across the lot:
+
+```sh
+mdy-wikipedia --category "Ancient Assyrian cities" --out-dir vault --links wiki
+```
+
+```mdy
+% const settlements = await $.find({ 'infobox.type': 'Settlement' })
+% const iraq = await $.find({ 'infobox.location': { $regex: 'Iraq' } })
+{{ settlements.length }} settlements, {{ iraq.length }} of them in Iraq
+```
+
+That is the reason the extraction was worth doing, and it is why documents are
+named the way they are: `--out-dir` writes `third-dynasty-of-ur.mdy`, which is
+exactly what `--links wiki` writes a link to it as. A vault cross-links itself
+with no index to maintain.
+
+`--follow <depth>` imports the pages a document links to as well, and `--max`
+caps the whole run — the default is 100. The cap is not a formality: Babylon
+links to 292 pages, so `--follow 2` without one is an import of the
+encyclopedia. When the cap stops a run it says what was left, which is the
+number that tells you whether it was the right cap:
+
+```
+stopped at --max 5; 288 more were queued
+```
+
+Requests go one at a time with a small gap (`--delay`, 100ms), a `429` or `503`
+is waited out on the server's own `Retry-After`, and every page is cached — so
+the second run of a two-hundred-page import costs nothing.
 
 ## Attribution
 

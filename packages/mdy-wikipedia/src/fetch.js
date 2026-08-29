@@ -158,6 +158,52 @@ export async function fetchIndexes(target, what, options = {}) {
 }
 
 /**
+ * The pages in a category.
+ *
+ * Articles only (`cmnamespace=0`, `cmtype=page`): a category holds its
+ * subcategories and its talk pages too, and neither is something to write a
+ * document from. Continued to the end, because `cmlimit=max` is 500 and
+ * plenty of categories are bigger.
+ *
+ * @param {string} name
+ *   The category, with or without its `Category:` prefix.
+ * @param {Target} target
+ * @param {object} [options]
+ * @returns {Promise<Array<string>>}
+ */
+export async function fetchCategory(name, target, options = {}) {
+  const title = /^category:/i.test(name) ? name : 'Category:' + name
+  /** @type {Array<string>} */
+  const out = []
+  let from
+
+  for (let page = 0; page < 40; page++) {
+    const body = await get(
+      target,
+      {
+        name: 'category-' + page,
+        url:
+          'https://' + target.lang + '.wikipedia.org/w/api.php?action=query&format=json' +
+          '&formatversion=2&list=categorymembers&cmnamespace=0&cmtype=page&cmlimit=max' +
+          '&cmtitle=' + encodeURIComponent(title) +
+          (from ? '&cmcontinue=' + encodeURIComponent(from) : ''),
+        optional: true,
+        json: true
+      },
+      {...options, cache: false}
+    )
+
+    for (const member of body?.query?.categorymembers ?? []) out.push(member.title)
+
+    from = body?.continue?.cmcontinue
+
+    if (!from) break
+  }
+
+  return out
+}
+
+/**
  * A Wikidata entity, and the labels for everything it names.
  *
  * The claims arrive as opaque ids — `P31` → `Q133442` — so a second round trip
@@ -271,13 +317,7 @@ async function get(target, resource, options) {
     if (cached !== undefined) return decode(cached, resource, options)
   }
 
-  const request = options.fetch ?? globalThis.fetch
-  const response = await request(resource.url, {
-    headers: {
-      'user-agent': userAgent(options),
-      accept: resource.json ? 'application/json' : parsoidProfile
-    }
-  })
+  const response = await send(resource, options)
 
   if (!response.ok) {
     if (resource.optional) {
@@ -321,6 +361,68 @@ function decode(value, resource, options) {
       {ruleId: 'fetch', source: 'mdy-wikipedia'}
     )
   }
+}
+
+/**
+ * One request, made politely.
+ *
+ * Two things Wikimedia asks for and one it enforces. Requests go one at a
+ * time — this whole module is serial, and a category import is a few hundred
+ * of them — with a small gap between, which is invisible on a single page and
+ * the difference between a guest and a scraper on two hundred. And a `429` or
+ * `503` carries a `Retry-After` that is not advice: it is the server saying
+ * when to come back, and an importer that ignores it gets blocked rather than
+ * throttled.
+ *
+ * The gap is between *network* requests only. A cached page never reaches
+ * here, which is what makes iterating on the converter free.
+ *
+ * @param {{url: string, json?: boolean}} resource
+ * @param {object} options
+ * @returns {Promise<{ok: boolean, status: number, statusText?: string, headers?: object, text: () => Promise<string>}>}
+ */
+async function send(resource, options) {
+  const request = options.fetch ?? globalThis.fetch
+  const gap = options.delay ?? 100
+  const attempts = options.attempts ?? 3
+  const headers = {
+    'user-agent': userAgent(options),
+    accept: resource.json ? 'application/json' : parsoidProfile
+  }
+  let response
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const since = Date.now() - lastRequest
+
+    if (gap > since) await wait(gap - since)
+
+    lastRequest = Date.now()
+    response = await request(resource.url, {headers})
+
+    if (response.status !== 429 && response.status !== 503) return response
+
+    const after = Number(response.headers?.get?.('retry-after'))
+    const backoff = Number.isFinite(after) && after > 0 ? after * 1000 : 1000 * 2 ** attempt
+
+    options.file?.message(
+      'Wikipedia asked to wait ' + Math.round(backoff / 1000) + 's (' + response.status + ')',
+      {ruleId: 'fetch', source: 'mdy-wikipedia'}
+    )
+
+    await wait(Math.min(backoff, 60000))
+  }
+
+  return response
+}
+
+let lastRequest = 0
+
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 // Pinning the profile is what keeps a future Parsoid version from changing the

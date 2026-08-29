@@ -54,8 +54,26 @@ const drops = [
     className: ['reflist', 'refbegin', 'mw-references-wrap', 'mw-reflink-text'],
     typeOf: ['mw:Extension/references']
   },
-  {name: 'citations', typeOf: ['mw:Extension/ref'], className: ['mw-ref', 'reference']},
+  {
+    name: 'citations',
+    typeOf: ['mw:Extension/ref'],
+    className: ['mw-ref', 'reference'],
+    replace: footnoteRef,
+    became: 'footnotes'
+  },
   {name: 'indicators', typeOf: ['mw:Extension/indicator']},
+  // A formula, kept as the TeX it was written as. Parsoid renders `<math>` to
+  // MathML — 28 elements for one line of Mesopotamia — and MDY has no inline
+  // element syntax to hold any of it, so unwrapping leaves `1 + 24 60 + 51 60
+  // 2` where a formula was. The source is right there in `data-mw`, and a code
+  // span says it exactly.
+  {name: 'math', typeOf: ['mw:Extension/math'], replace: math},
+  // Anything Wikipedia draws and hides. The MathML above lives in one of
+  // these, and so do the machine-readable microformats beside a date.
+  {
+    name: 'hidden',
+    test: (node) => /display\s*:\s*none/i.test(String(node.properties?.style ?? ''))
+  },
   // An empty `<span id="Etymology">` is an anchor Wikipedia keeps so that
   // links written before a section was renamed still land. It anchors nothing
   // here, and an element with an id has to be written in element form — a
@@ -184,11 +202,17 @@ export function clean(tree, options = {}) {
   // reference is a dangling paragraph.
   /** @type {Array<string>} */
   const used = []
+  // The pages this document links to, as titles. Read off the links that
+  // survive rather than off the page, so that following them (`--follow`)
+  // follows what the document says rather than what the end matter did.
+  /** @type {Set<string>} */
+  const linked = new Set()
 
   return {
-    tree: {type: 'root', children: walk(sections, {...options, used}, counts)},
+    tree: {type: 'root', children: walk(sections, {...options, used, linked}, counts)},
     counts,
-    used
+    used,
+    links: [...linked]
   }
 }
 
@@ -272,28 +296,34 @@ function walk(nodes, options, counts) {
     const dropped = drops.find((rule) => matches(node, rule))
 
     if (dropped) {
-      const note = dropped.name === 'citations' ? footnote(node, options) : undefined
+      // A rule may put something in the place of what it takes: a citation
+      // becomes a footnote reference, a formula becomes the TeX it was.
+      const instead = dropped.replace?.(node, options, counts)
 
-      if (note) {
-        count(counts, 'footnotes')
-        if (!options.used.includes(note.id)) options.used.push(note.id)
-        // An empty `<sup>` that says which note it is. The serialiser writes
-        // `[[ ^1 ]]` for it; nothing else in the tree needs to know.
-        out.push({
-          type: 'element',
-          tagName: 'sup',
-          properties: {},
-          children: [],
-          data: {footnote: note.number}
-        })
-        continue
-      }
+      // Counted under what it became when it became something, so the report
+      // says `footnotes 161` rather than `citations 161` for markers that are
+      // still in the document.
+      count(counts, instead ? dropped.became ?? dropped.name : dropped.name)
 
-      count(counts, dropped.name)
+      if (instead) out.push(instead)
+
       continue
     }
 
-    const children = walk(node.children, options, counts)
+    // MDY's inline markers toggle, so an `<em>` inside an `<em>` cannot be
+    // written: the inner one would close the outer. The inner one also says
+    // nothing — the emphasis is already on — so it goes here rather than being
+    // reported as unwritable 32 times on one page.
+    if (inlineMarkup.has(node.tagName) && options.open?.includes(node.tagName)) {
+      count(counts, 'nested-markup')
+      out.push(...walk(node.children, options, counts))
+      continue
+    }
+
+    const inside = inlineMarkup.has(node.tagName)
+      ? {...options, open: [...(options.open ?? []), node.tagName]}
+      : options
+    const children = walk(node.children, inside, counts)
     const kept = properties(node, options)
 
     // A link that now points at nothing. Wikipedia's Harvard citations link
@@ -424,6 +454,10 @@ function href(value, node, options) {
     return fragment ? '#' + defaultResolve(fragment) : ''
   }
 
+  // Articles only. A link to `File:`, `Help:` or `Category:` is a link out of
+  // the encyclopedia's prose and not a page anybody would import.
+  if (!page.includes(':')) options.linked?.add(page)
+
   if (options.links === undefined || options.links === 'url') {
     return (
       'https://' + (options.lang ?? 'en') + '.wikipedia.org/wiki/' +
@@ -449,6 +483,51 @@ function href(value, node, options) {
  */
 function liveHref(href) {
   return typeof href === 'string' && href !== '' && !/^#cite/i.test(href)
+}
+
+/**
+ * An empty `<sup>` that says which note it is. The serialiser writes
+ * `[[ ^1 ]]` for it; nothing else in the tree needs to know.
+ *
+ * @param {import('hast').Element} node
+ * @param {object} options
+ * @returns {import('hast').Element | undefined}
+ */
+function footnoteRef(node, options) {
+  const note = footnote(node, options)
+
+  if (!note) return
+
+  if (!options.used.includes(note.id)) options.used.push(note.id)
+
+  return {type: 'element', tagName: 'sup', properties: {}, children: [], data: {footnote: note.number}}
+}
+
+/**
+ * A formula as the TeX somebody wrote, from `data-mw` where Parsoid kept it.
+ *
+ * @param {import('hast').Element} node
+ * @returns {import('hast').Element | undefined}
+ */
+function math(node) {
+  let source
+
+  try {
+    source = JSON.parse(String(node.properties?.dataMw ?? '{}'))?.body?.extsrc
+  } catch {
+    source = undefined
+  }
+
+  const value = String(source ?? '').replace(/\s+/g, ' ').trim()
+
+  if (!value) return
+
+  return {
+    type: 'element',
+    tagName: 'code',
+    properties: {},
+    children: [{type: 'text', value}]
+  }
 }
 
 /**

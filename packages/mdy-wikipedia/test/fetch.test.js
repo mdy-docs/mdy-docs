@@ -3,7 +3,7 @@ import {mkdtemp, readFile, writeFile, mkdir} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import test from 'node:test'
-import {fetchIndexes, fetchPage, fetchWikidata, resolveTarget, userAgent} from '../src/fetch.js'
+import {fetchCategory, fetchIndexes, fetchPage, fetchWikidata, resolveTarget, userAgent} from '../src/fetch.js'
 import {babylonIndexes} from './fixture.js'
 
 /** A fetch that answers from a table and records what it was asked. */
@@ -247,4 +247,65 @@ test('no wikidata id means no request', async () => {
 
   assert.equal(await fetchWikidata(undefined, {lang: 'en', title: 'Babylon'}, {fetch}), undefined)
   assert.equal(calls.length, 0)
+})
+
+test('a category is read to the end, articles only', async () => {
+  const answers = [
+    {
+      query: {categorymembers: [{title: 'Assur'}, {title: 'Nineveh'}]},
+      continue: {cmcontinue: 'page|02'}
+    },
+    {query: {categorymembers: [{title: 'Ur'}]}}
+  ]
+  const calls = []
+  const fetch = (url) => {
+    calls.push(url)
+
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: {get: () => null},
+      text: () => Promise.resolve(JSON.stringify(answers[calls.length - 1]))
+    })
+  }
+
+  const titles = await fetchCategory('Ancient Assyrian cities', {lang: 'en', title: 'x'}, {
+    fetch,
+    delay: 0
+  })
+
+  assert.deepEqual(titles, ['Assur', 'Nineveh', 'Ur'])
+  assert.equal(calls.length, 2, 'a category bigger than one page is continued')
+  // A category holds its subcategories and its talk pages too, and neither is
+  // something to write a document from.
+  assert.match(calls[0], /cmnamespace=0/)
+  assert.match(calls[0], /cmtype=page/)
+  assert.match(calls[1], /cmcontinue=page%7C02/)
+  // The prefix is optional, and not doubled when it is given.
+  assert.match(calls[0], /cmtitle=Category%3AAncient/)
+})
+
+test('a rate limit is waited out rather than argued with', async () => {
+  const messages = []
+  let calls = 0
+  const fetch = () => {
+    calls += 1
+
+    return Promise.resolve(
+      calls === 1
+        ? {ok: false, status: 429, headers: {get: (name) => (name === 'retry-after' ? '0' : null)}}
+        : {ok: true, status: 200, headers: {get: () => null}, text: () => Promise.resolve('<html></html>')}
+    )
+  }
+
+  const page = await fetchPage({lang: 'en', title: 'Babylon'}, {
+    fetch,
+    cache: false,
+    delay: 0,
+    file: {message: (reason) => messages.push(reason)}
+  })
+
+  assert.equal(page.html, '<html></html>')
+  assert.equal(calls, 3, 'the summary is fetched too')
+  assert.match(messages[0], /Wikipedia asked to wait/)
 })

@@ -1,19 +1,38 @@
 #!/usr/bin/env node
 import {parseArgs} from 'node:util'
-import {writeFile} from 'node:fs/promises'
-import {wikipediaToMdy} from '../src/index.js'
+import {mkdir, readFile, writeFile} from 'node:fs/promises'
+import {dirname, join} from 'node:path'
+import {documentPath, importVault, wikipediaToMdy} from '../src/index.js'
 
 const usage = `mdy-wikipedia — import a Wikipedia page as an mdy document.
 
 Usage:
-  mdy-wikipedia <title | lang:title | url> [options]
+  mdy-wikipedia <title | lang:title | url>... [options]
 
   mdy-wikipedia Babylon > babylon.mdy
   mdy-wikipedia https://en.wikipedia.org/wiki/Babylon --out babylon.mdy
   mdy-wikipedia fr:Babylone --links wiki --out docs/babylone.mdy
 
+  mdy-wikipedia Babylon Nineveh Ur --out-dir vault
+  mdy-wikipedia --category "Ancient Assyrian cities" --out-dir vault --links wiki
+  mdy-wikipedia Babylon --follow 1 --max 25 --out-dir vault --links wiki
+
+More than one page makes a vault: a directory of documents whose infobox
+fields are queryable together, which is what --links wiki cross-links.
+
 Options:
-  --out <path>          write a file (default: stdout)
+  --out <path>          write a file (default: stdout); one page only
+  --out-dir <dir>       write one document per page, named as --links wiki
+                        links to it, so a vault cross-links itself
+  --category <name>     import every article in a category
+  --from <file>         import the titles in a file, one per line ("-" reads
+                        standard input)
+  --follow <depth>      also import the pages a document links to, to this
+                        depth (default: 0, none)
+  --max <n>             hard cap on documents written (default: 100). Following
+                        links is how importing one page becomes importing a
+                        thousand; Babylon alone links to 292
+  --delay <ms>          gap between network requests (default: 100)
   --lang <code>         wiki language (default: en, or the prefix/URL's)
   --links <mode>        how internal links are written (default: url)
                           url   https://en.wikipedia.org/wiki/Babylonia
@@ -54,6 +73,12 @@ const {values, positionals} = parseArgs({
   allowPositionals: true,
   options: {
     out: {type: 'string'},
+    'out-dir': {type: 'string'},
+    category: {type: 'string'},
+    from: {type: 'string'},
+    follow: {type: 'string'},
+    max: {type: 'string'},
+    delay: {type: 'string'},
     lang: {type: 'string'},
     links: {type: 'string'},
     sections: {type: 'string'},
@@ -77,7 +102,7 @@ const {values, positionals} = parseArgs({
   }
 })
 
-if (values.help || !positionals.length) {
+if (values.help || (!positionals.length && !values.category && !values.from)) {
   process.stdout.write(usage)
   process.exit(values.help ? 0 : 1)
 }
@@ -96,35 +121,143 @@ if (values.refs && !['footnotes', 'data', 'drop'].includes(values.refs)) {
 // the page held that an mdy document cannot, which is how the cleaner is
 // judged. They go to stderr so the document can still be piped.
 const messages = []
-const file = {message: (reason) => messages.push(String(reason))}
+const settings = {
+  lang: values.lang,
+  links: values.links ?? 'url',
+  sections: values.sections?.split(',').map((name) => name.trim()).filter(Boolean),
+  keepSections: values['keep-sections'],
+  refs: values.refs ?? 'footnotes',
+  wikidata: values.wikidata,
+  categories: values.categories,
+  langLinks: values['lang-links'],
+  infobox: !values['no-infobox'],
+  images: !values['no-images'],
+  wrap: values.wrap === undefined ? undefined : Number(values.wrap),
+  title: !values['no-title'],
+  cache: values['no-cache'] ? false : values.cache,
+  refresh: values.refresh,
+  contact: values.contact,
+  delay: values.delay === undefined ? undefined : Number(values.delay),
+  follow: values.follow === undefined ? 0 : Number(values.follow),
+  max: values.max === undefined ? undefined : Number(values.max),
+  file: {message: (reason) => messages.push(String(reason))}
+}
+
+const seeds = [...positionals]
+
+if (values.from) {
+  const list = values.from === '-'
+    ? await readStdin()
+    : await readFile(values.from, 'utf8')
+
+  for (const line of list.split('\n')) {
+    const title = line.trim()
+
+    if (title && !title.startsWith('#')) seeds.push(title)
+  }
+}
+
+// One page or many. The difference is not the count of arguments — following
+// links turns one seed into a vault — so it is whether an output directory was
+// named at all.
+const many = Boolean(values['out-dir'])
+
+if (!many && (values.category || settings.follow > 0 || seeds.length > 1)) {
+  process.stderr.write('mdy-wikipedia: importing more than one page needs --out-dir\n')
+  process.exit(1)
+}
 
 try {
-  const {source, counts} = await wikipediaToMdy(positionals[0], {
-    lang: values.lang,
-    links: values.links ?? 'url',
-    sections: values.sections?.split(',').map((name) => name.trim()).filter(Boolean),
-    keepSections: values['keep-sections'],
-    refs: values.refs ?? 'footnotes',
-    wikidata: values.wikidata,
-    categories: values.categories,
-    langLinks: values['lang-links'],
-    infobox: !values['no-infobox'],
-    images: !values['no-images'],
-    wrap: values.wrap === undefined ? undefined : Number(values.wrap),
-    title: !values['no-title'],
-    cache: values['no-cache'] ? false : values.cache,
-    refresh: values.refresh,
-    contact: values.contact,
-    file
-  })
+  if (many) await importMany(seeds)
+  else await importOne(seeds[0])
+} catch (error) {
+  process.stderr.write('mdy-wikipedia: ' + error.message + '\n')
+  process.exit(1)
+}
+
+/**
+ * @param {string} seed
+ */
+async function importOne(seed) {
+  const {source, counts} = await wikipediaToMdy(seed, settings)
 
   if (values.out) await writeFile(values.out, source)
   else process.stdout.write(source)
 
   if (!values.quiet) report(counts, messages, values.out)
-} catch (error) {
-  process.stderr.write('mdy-wikipedia: ' + error.message + '\n')
-  process.exit(1)
+}
+
+/**
+ * @param {Array<string>} seeds
+ */
+async function importMany(seeds) {
+  const out = values['out-dir']
+  const totals = {}
+  let written = 0
+  let failed = 0
+
+  for await (const page of importVault(seeds, {
+    ...settings,
+    category: values.category,
+    onProgress: (event) => {
+      if (event.kind === 'capped' && !values.quiet) {
+        process.stderr.write(
+          'stopped at --max ' + event.reached + '; ' + event.left + ' more were queued\n'
+        )
+      }
+    }
+  })) {
+    // Each page's messages are its own: which page could not say what is the
+    // only useful form of that, and the run's total says nothing.
+    messages.length = 0
+
+    if (page.error) {
+      failed += 1
+      process.stderr.write('  ! ' + page.target.title + ': ' + page.error.message + '\n')
+      continue
+    }
+
+    const path = join(out, page.path)
+
+    await mkdir(dirname(path), {recursive: true})
+    await writeFile(path, page.source)
+    written += 1
+
+    for (const [name, count] of Object.entries(page.counts)) {
+      totals[name] = (totals[name] ?? 0) + count
+    }
+
+    if (!values.quiet) {
+      const note = page.messages.length ? '  (' + page.messages.length + ' unwritable)' : ''
+
+      process.stderr.write('  ' + page.path + note + '\n')
+    }
+  }
+
+  if (values.quiet) return
+
+  process.stderr.write(
+    'wrote ' + written + ' document' + (written === 1 ? '' : 's') + ' to ' + out +
+      (failed ? ', ' + failed + ' failed' : '') + '\n'
+  )
+
+  const removed = Object.entries(totals)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => name + ' ' + count)
+    .join(', ')
+
+  if (removed) process.stderr.write('removed: ' + removed + '\n')
+}
+
+/**
+ * @returns {Promise<string>}
+ */
+async function readStdin() {
+  const chunks = []
+
+  for await (const chunk of process.stdin) chunks.push(chunk)
+
+  return Buffer.concat(chunks).toString('utf8')
 }
 
 /**
