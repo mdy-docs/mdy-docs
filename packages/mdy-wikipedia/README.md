@@ -7,9 +7,94 @@ YAML, where `res.data` can reach it.
 
 The design is [docs/wikipedia-plan.md](../../docs/wikipedia-plan.md).
 
-> **Phase 0 of that plan.** What is built is `toMdy`, the serialiser, and
-> `escapeInline`, the escaper it rests on. There is no fetching, no extraction
-> and no CLI yet — those are phases 1 to 4.
+> **Phases 0 and 1 of that plan.** A page fetches, cleans, and writes itself as
+> a document whose front matter says where it came from. What is not built is
+> extraction: the infobox, the section outline, the images and the citations are
+> removed rather than turned into data, which is phase 2.
+
+## Use
+
+```sh
+mdy-wikipedia Babylon > babylon.mdy
+mdy-wikipedia https://en.wikipedia.org/wiki/Babylon --out babylon.mdy
+mdy-wikipedia fr:Babylone --links wiki --sections lead --out babylone.mdy
+```
+
+```js
+import {wikipediaToMdy} from '@mdy-docs/mdy-wikipedia'
+
+const {source, counts} = await wikipediaToMdy('Babylon', {links: 'wiki'})
+```
+
+`mdy-wikipedia --help` lists the options. Two are worth knowing about here.
+
+**`--links`** decides how an internal link is written, and the default is the
+full URL rather than `/wiki/Babylonia`. That is not the obvious choice and it
+is the right one: mdy tidies a link to a page of your own by lower casing it
+(language rule 9), which is exactly right for pages you write and wrong for
+Wikipedia's, where `/wiki/Help:IPA/English` would arrive as
+`/wiki/help:ipa/english` and point at nothing. `--links path` is for a site
+whose pages these really are, and `--links wiki` writes `[[ Babylonia ]]`, which
+mdy records on `res.data.links` as it parses — the mode that makes a directory
+of imports behave like a vault.
+
+**Everything left out is reported**, on stderr, counted by rule:
+
+```
+removed: citations 161, plain 106, bookkeeping 79, chrome 32, file-links 30,
+sections 20, empty 12, banners 10, hatnotes 7, end-matter 5, infobox 1,
+legacy-anchors 1, media 1
+  1× A link with no label has no spelling, dropping it
+```
+
+Those two lines are the measure of the thing. The first says what of Wikipedia's
+half a megabyte was not the article; the second says what of the article MDY
+could not write, and for the whole of Babylon it is one link that never had a
+label.
+
+## Attribution
+
+Wikipedia's text is CC BY-SA 4.0, so `source` is written into every document
+whatever the options say — it is a licence term, not a setting:
+
+```yaml
+source:
+  site: Wikipedia
+  lang: en
+  title: Babylon
+  url: https://en.wikipedia.org/wiki/Babylon
+  page-id: 20609622
+  revision: '1369395047'
+  modified: 2026-08-14T18:33:29Z
+  retrieved: 2026-08-29
+  license: CC BY-SA 4.0
+  license-url: https://creativecommons.org/licenses/by-sa/4.0/
+  attribution: This document contains text from the Wikipedia article "Babylon"
+    (revision 1369395047), by Wikipedia contributors, used under CC BY-SA 4.0.
+```
+
+Pinning the revision is what makes the citation checkable and re-fetching
+reproducible. A layout renders `res.data.source.attribution` into a footer in
+one line, which is the whole point of putting it in the data rather than in a
+comment.
+
+## What the cleaner does
+
+Most of a Wikipedia page is not the article, so [`clean.js`](src/clean.js) is a
+list rather than a program: what to drop, what to unwrap, what to rewrite.
+Reading the list should be enough to know what comes out.
+
+The distinction that matters is **drop** versus **unwrap**. Dropping takes the
+element and its content; unwrapping takes the element and keeps the content. A
+navbox is dropped because none of it is the article. A
+`<span typeof="mw:Transclusion">` is unwrapped because all of it is — the span
+is Parsoid's bookkeeping around real prose. Getting these the wrong way round is
+how an importer silently loses paragraphs, so each rule says which it is and the
+tests count what each one took.
+
+One known limit: the sections dropped as end matter — See also, Notes,
+References, Further reading, External links — are named in English, so on
+another wiki they stay. `--sections` names what to keep instead.
 
 ## `toMdy` — hast → MDY
 

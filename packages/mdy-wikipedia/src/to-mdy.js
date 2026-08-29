@@ -534,12 +534,29 @@ function cells(node, tagName, context) {
     const align = alignment(child.properties ?? {})
 
     if (align === false) return
+    // A cell is one line of the source, so it can hold only what fits on one.
+    // A `<br>` or a list inside it is why the whole table gets written out as
+    // elements instead — Wikipedia's king lists are full of both.
+    if (!child.children.every(inlineOnly)) return
 
     aligns.push(align)
     out.push(cellText(child.children, context))
   }
 
   return {cells: out, aligns}
+}
+
+/**
+ * Whether a node and everything under it can sit on one line.
+ *
+ * @param {import('hast').ElementContent} node
+ * @returns {boolean}
+ */
+function inlineOnly(node) {
+  if (node.type === 'text') return true
+  if (node.type !== 'element') return false
+
+  return phrasing(node) && node.children.every(inlineOnly)
 }
 
 /**
@@ -867,7 +884,7 @@ function wrapLines(text, context) {
   const lines = []
   let line = ''
 
-  for (const word of text.split(' ')) {
+  for (const word of atoms(text)) {
     if (!line) {
       line = word
       continue
@@ -885,6 +902,49 @@ function wrapLines(text, context) {
   if (line) lines.push(line)
 
   return lines
+}
+
+/**
+ * Break a line into the pieces a wrap may fall between.
+ *
+ * Spaces, except the ones inside `[[ label | url ]]`, where a break would be
+ * legal — lines are rejoined with a space (rule 3) — but would leave the URL
+ * of a link split across two lines of source for somebody to read.
+ *
+ * @param {string} text
+ * @returns {Array<string>}
+ */
+function atoms(text) {
+  /** @type {Array<string>} */
+  const out = []
+  let index = 0
+  let word = ''
+
+  while (index < text.length) {
+    if (text.startsWith('[[', index)) {
+      const close = text.indexOf(']]', index)
+
+      if (close !== -1) {
+        word += text.slice(index, close + 2)
+        index = close + 2
+        continue
+      }
+    }
+
+    if (text.charAt(index) === ' ') {
+      if (word) out.push(word)
+      word = ''
+      index += 1
+      continue
+    }
+
+    word += text.charAt(index)
+    index += 1
+  }
+
+  if (word) out.push(word)
+
+  return out
 }
 
 /**

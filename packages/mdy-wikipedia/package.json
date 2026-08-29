@@ -19,7 +19,11 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
+    "hast-util-from-html": "^2.0.3",
     "mdy-docs": "file:../..",
     "yaml": "^2.9.0"
+  },
+  "bin": {
+    "mdy-wikipedia": "bin/mdy-wikipedia.js"
   }
 }

@@ -318,7 +318,7 @@ mdy-wikipedia Babylon --sections=lead      # just the lead section
 | `--lang <code>` | wiki language (default `en`, or the prefix/URL's) |
 | `--wikidata` | resolve and include Wikidata claims |
 | `--categories`, `--lang-links` | include those records |
-| `--links=wiki\|path\|url` | how internal links are written (default `path`) |
+| `--links=url\|path\|wiki` | how internal links are written (default `url`) |
 | `--no-refs` | drop citations instead of making footnotes |
 | `--sections=all\|lead\|<id>,…`, `--keep-sections` | what prose to include |
 | `--data-only` | front matter only |
@@ -364,7 +364,8 @@ hand-built trees and the round trip. No network, no Wikipedia. Exit: every
 
 **Phase 1 — fetch + clean + prose.** Babylon converts to a document whose
 body is right and whose front matter holds only `source:`. Exit:
-`mdy-wikipedia Babylon` renders to HTML that reads like the article.
+`mdy-wikipedia Babylon` renders to HTML that reads like the article. ✅ — see
+[what phase 1 landed](#what-phase-1-landed).
 
 **Phase 2 — extraction.** Infobox, sections, images, coordinates,
 references-as-footnotes. Exit: the YAML above, and `res.data.infobox.built`
@@ -448,3 +449,82 @@ Wikipedia's markup is full of: `<span>`s around transliterations, `<sup>`
 citations mid-sentence, images inside paragraphs. `toMdy` unwraps or relocates
 them and puts a message on the file rather than dropping them silently, so
 phase 4's cleaner can be judged by how few messages it leaves behind.
+
+## What phase 1 landed
+
+`mdy-wikipedia Babylon` writes a document. 63 tests, all offline: Babylon's
+Parsoid HTML is committed as a fixture (gzipped — half a megabyte of machine
+output nobody reads in a diff) and the fetch layer takes an injected `fetch`,
+so the suite never touches the network.
+
+The exit criterion is met, and the number that says so is the message count.
+For the whole of Babylon — 508 KB of HTML, 42,000 characters of prose, 387
+links, 23 figures — MDY cannot write **one** thing, a link that never had a
+label. The document parses back with no warnings from mdy at all.
+
+### Three defaults changed, all for the same kind of reason
+
+**`--links` defaults to the full URL, not `/wiki/Babylonia`.** mdy tidies a
+link to a page of your own by lower casing it (rule 9), which is right for
+pages you write and wrong for Wikipedia's: `/wiki/Help:IPA/English` arrives as
+`/wiki/help:ipa/english`, which is not a page. `path` is still there for a site
+whose pages these really are. This was invisible until the rendered HTML was
+read.
+
+**Headings are written as headings, which needs `headingId: false`.** Parsoid
+gives every heading Wikipedia's own id (`id="Names"`), and `toMdy` will only
+write `==` when the id is the one the parser would produce (`names`). So every
+heading in the first run came out as `<h2 id="Names"` — correct by phase 0's
+rule, and useless. The importer passes `headingId: false`, which says *the ids
+in this tree were not put there by a parser that assigns them*, and the
+cleaner takes them off. Wikipedia's anchors are not this document's anchors.
+
+**Inline formatting elements are stripped of their attributes.** Babylon's
+transliterations are `<i lang="ar-Latn">`, and an `<i>` with an attribute
+cannot be a `//` marker — markers carry nothing — so it would have to be
+written in element form, which is a *line*, in the middle of a sentence. The
+first run unwrapped 38 of them and lost the italics. Now the attribute goes and
+the emphasis stays, which for an importer is the right way round. `<i>` and
+`<b>` are renamed to `<em>` and `<strong>` on the way through, since those are
+what the markers produce.
+
+### The cleaner is a list, and it is short
+
+Eleven drop rules, four unwrap rules, two rewrites. The distinction that earns
+its keep is drop versus unwrap: a navbox is dropped because none of it is the
+article, a `<span typeof="mw:Transclusion">` is unwrapped because all of it is.
+Every rule counts what it took, which is what turns "is the cleaner any good?"
+into a number:
+
+```
+removed: citations 161, plain 106, bookkeeping 79, chrome 32, file-links 30,
+sections 20, empty 12, banners 10, hatnotes 7, end-matter 5, infobox 1,
+legacy-anchors 1, media 1
+```
+
+Four articles were used to shake it out, chosen for different shapes: Babylon
+(prose and figures), Ada Lovelace (quotations), Python (inline code and
+lists), and List of Assyrian kings (a 453-cell table). The last one found two
+things worth having. Wikipedia's tables are laid out in HTML 3.2, and `width`
+on a `<th>` is rejected by mdy's sanitizer on every single row — 34 warnings —
+so presentational attributes are now stripped from table elements. And a `<br>`
+inside a cell cannot be written in a pipe table, because a cell is one line of
+source; `toMdy` now checks that a cell's content fits on a line before choosing
+pipes, and writes the table out as elements when it does not.
+
+### What is knowingly left
+
+- **End matter is named in English.** `See also`, `References`, `External
+  links` and the rest are dropped by heading text, so on the French or German
+  wiki those sections stay. MediaWiki marks the reference list itself
+  (`mw:Extension/references`) and marks nothing else, and a heuristic — "a
+  section with no prose paragraphs" — would take a legitimate list-shaped
+  section with it. `--sections` names what to keep instead. Worth revisiting in
+  phase 4, where whole categories get imported and the section names are
+  whatever that wiki uses.
+- **An inline `<img>` is dropped inside a link or a marker span**, because
+  there is no line to put it on there. Six on the French Babylone, all flag
+  icons. Reported, not silent.
+- **`lang` and `dir` are lost** on the spans and `<i>`s they sit on. MDY has no
+  inline element syntax, so there is nowhere for them to go; the text is the
+  article and the annotation is not.
