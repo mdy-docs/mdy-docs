@@ -30,9 +30,7 @@
     "test:mdy-site": "npm --prefix packages/mdy-site test",
     "mdy-site": "npm --prefix packages/mdy-site run dev",
     "test:mdy-bus": "npm --prefix packages/mdy-bus test",
-    "test:mdy-wikipedia": "npm --prefix packages/mdy-wikipedia test",
-    "test:mdy-wikipedia-web": "npm --prefix packages/mdy-wikipedia-web test",
-    "mdy-wikipedia-web": "node packages/mdy-wikipedia-web/bin/mdy-wikipedia-web.js"
+    "test:mdy-wikipedia": "npm --prefix packages/mdy-wikipedia test"
   },
   "dependencies": {
     "@jsquash/jpeg": "^1.6.0",
