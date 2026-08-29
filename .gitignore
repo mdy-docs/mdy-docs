@@ -147,7 +147,9 @@ dist
 # lands here whenever the broker is started from the repo root.
 sukkal-data/
 
-# Its own repository now: github.com/belteshazzar/mdy-wikipedia-web. It is
-# checked out here because its dependencies on mdy-docs, mdy-wikipedia and
-# mdy-site are relative `file:` paths, and this is where they resolve.
+# Their own repositories now — github.com/belteshazzar/mdy-wikipedia and
+# github.com/belteshazzar/mdy-wikipedia-web. They are checked out here because
+# their dependencies on mdy-docs, and on each other, are relative `file:`
+# paths, and this is where they resolve.
+packages/mdy-wikipedia/
 packages/mdy-wikipedia-web/
