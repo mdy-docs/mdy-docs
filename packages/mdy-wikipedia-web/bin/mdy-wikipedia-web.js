@@ -74,7 +74,15 @@ const vite = values.dist
   ? undefined
   : await import('vite')
       .then((module) =>
-        module.createServer({root, appType: 'spa', server: {middlewareMode: true}})
+        module.createServer({
+          root,
+          appType: 'spa',
+          // Hung off the chosen port rather than vite's fixed default, so two
+          // readers — two wikis, say — can run beside each other. Well clear
+          // of it, not next to it: `port + 1` is the port the *next* reader
+          // would be started on.
+          server: {middlewareMode: true, hmr: {port: hmrPort(port)}}
+        })
       )
       .catch(() => undefined)
 
@@ -113,6 +121,14 @@ server.listen(port, () => {
       (values.vault ? '  (vault: ' + resolve(values.vault) + ')' : '') + '\n'
   )
 })
+
+/**
+ * @param {number} port
+ * @returns {number}
+ */
+function hmrPort(port) {
+  return port < 55000 ? port + 10000 : port - 10000
+}
 
 /**
  * @param {import('node:http').ServerResponse} response

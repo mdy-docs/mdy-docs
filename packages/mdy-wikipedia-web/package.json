@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "node bin/mdy-wikipedia-web.js",
+    "mdy-wikipedia-web": "node bin/mdy-wikipedia-web.js",
     "build": "vite build",
     "test": "node --test test/*.test.js"
   },

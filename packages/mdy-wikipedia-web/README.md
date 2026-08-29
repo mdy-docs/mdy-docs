@@ -4,8 +4,10 @@ Read Wikipedia as mdy. An article on the right, the MDY it was converted into
 on the left, and every link in it another article away.
 
 ```sh
-npm --prefix packages/mdy-wikipedia-web run dev
+npm run mdy-wikipedia-web          # from the repo root, or from here
 # → http://localhost:4400/
+
+npm run mdy-wikipedia-web -- --port 4500 --vault vault
 ```
 
 ## What it is
