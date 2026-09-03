@@ -168,7 +168,7 @@ export function extractImports(text) {
  * @returns {Promise<{ docs, find, findOne, render, resize, root: string }>}
  */
 export async function buildImportGraph(absDir, ctx, ancestors = new Set()) {
-  const { fs, buildNatives, onEmit, onPublish, onSource, cache, roots } = ctx;
+  const { fs, buildNatives, onEmit, onIngest, onPublish, onQuery, onSource, cache, roots } = ctx;
 
   if (ancestors.has(absDir)) {
     throw new Error(`mdy: import cycle detected — ${[...ancestors, absDir].join(' -> ')}`);
@@ -263,7 +263,30 @@ export async function buildImportGraph(absDir, ctx, ancestors = new Set()) {
       }
     };
 
-    const set = await openDocumentSet(sources, { natives: extraNatives, onEmit, onPublish, loadModule, canonicalizeModule });
+    // Core's hook says which document index queried, and an index only means
+    // something inside one set — an import graph has several. Naming the
+    // package and the file makes a query legible to something watching the
+    // whole graph, which is the only vantage point a site build has. `set` is
+    // not assigned yet where this closure is written, but a query only ever
+    // happens during a render, which is strictly later (same as onPublish in
+    // script-site.js).
+    let set;
+    const trackQuery = onQuery
+      ? ({ query, docIndex }) => {
+          const from = docIndex === null ? undefined : set.docs.find((d) => d.index === docIndex);
+          onQuery({ query, docIndex, path: from?.data?.path ?? null, root: absDir });
+        }
+      : undefined;
+
+    set = await openDocumentSet(sources, {
+      natives: extraNatives,
+      onEmit,
+      onPublish,
+      onQuery: trackQuery,
+      onIngest,
+      loadModule,
+      canonicalizeModule,
+    });
     roots.push(absDir);
     return { ...set, resize: extraNatives.resize, root: absDir };
   })();

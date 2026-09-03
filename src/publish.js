@@ -28,10 +28,11 @@
  * reason (mdy has no opinion on what "produce an output" means, and none
  * on what "send" means either). @mdy-docs/mdy-bus is one such embedder.
  *
- * Publishes are DEFERRED, which is not fastidiousness. A script-defined
- * site has no incremental cache (script-site.js), so `mdy dev` reruns
- * the entry from scratch on every save; a publish that went out during
- * the render would re-fire on every keystroke. The hook only ever
+ * Publishes are DEFERRED, which is not fastidiousness. `mdy dev` reruns the
+ * entry from scratch on every save (script-site.js); a publish that went out
+ * during the render would re-fire on every keystroke. Nor does the render
+ * memo quietly swallow one: a render that publishes is never stored, so its
+ * effect is always made afresh (src/mdy.js). The hook only ever
  * collects, and the caller flushes once the whole build has succeeded.
  * That is also why $.publish returns null instead of the message's index
  * in the log: at call time there is no index yet, because nothing has

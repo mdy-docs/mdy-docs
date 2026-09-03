@@ -33,9 +33,10 @@ import { buildImportGraph } from './imports.js';
  * HTML text and became one of the two front ends every document set has:
  * it returns a tree, the same as $.render does.
  *
- * Deliberately NOT wired into renderSite's incremental cache — a script's
- * output is only ever fully rebuilt, never reused verbatim (see build.js's
- * dispatch). See examples/blog for a real site defined this way.
+ * The entry itself is never reused: it is what decides which outputs exist,
+ * so a build that skipped it would produce no site. What IS reused is the
+ * work underneath it — see the ingest and render memos in src/mdy.js. See
+ * examples/blog for a real site defined this way.
  *
  * A script can also `% import name from "spec"` another mdy project —
  * a style/theme package, or anything else — entirely from its own code, no
@@ -66,6 +67,31 @@ import { buildImportGraph } from './imports.js';
  *   options.fs      a fs-provider.js provider (default: the real
  *                   filesystem) — memoryFsProvider works identically,
  *                   same as renderSite
+ *   options.onEmit(info)    fires as each output is produced, `{ path,
+ *                   docIndex, count }` — `count` being how many the build has
+ *                   emitted so far. The outputs Map is populated either way;
+ *                   this is notification, not interception. A build's own page
+ *                   count is not known ahead of time (the entry decides what
+ *                   exists), so this is what a progress display counts, and
+ *                   why it can only show a percentage once a previous build
+ *                   has said how many to expect.
+ *   options.onIngest(info)  fires as each document is inserted into its set,
+ *                   `{ done, total }` within that set. The only phase of a
+ *                   build whose size is known before it runs — and, until this
+ *                   existed, the one stretch a caller could not observe at
+ *                   all: every onSource has already fired and the entry has
+ *                   not started, so a build looked stopped for as long as it
+ *                   took.
+ *   options.onQuery(info)   fires for every `$.find`/`$.findOne` any document
+ *                   in the graph runs, as `{ query, docIndex, path, root }` —
+ *                   `path` is the file that asked and `root` the package it
+ *                   lives in, since a bare index only means something inside
+ *                   one set and an import graph has several. This is what a
+ *                   caller needs to know WHY a render came out as it did: a
+ *                   query is a document's dependency on documents it does not
+ *                   name. A render served from the render memo fires nothing,
+ *                   which is not a gap — a render that queried is never stored
+ *                   (see src/mdy.js).
  *   options.onSource(meta)  fires once per raw document, right after each
  *                   directory's walk and before anything is rendered —
  *                   every file under `root`, and under anything it (or
@@ -160,7 +186,14 @@ export async function openScriptSite(root, options = {}) {
   const set = await buildImportGraph(root, {
     fs,
     buildNatives,
-    onEmit: ({ path, content }) => outputs.set(path, typeof content === 'string' ? content : JSON.stringify(content)),
+    onEmit: ({ path, content, docIndex }) => {
+      outputs.set(path, typeof content === 'string' ? content : JSON.stringify(content));
+      // Chained, never replaced: collecting the output is this layer's own
+      // job and not the caller's to opt out of. What the caller gets is the
+      // notification — the one event a build produces per finished page, and
+      // so the only thing a progress display can honestly count.
+      options.onEmit?.({ path, docIndex, count: outputs.size });
+    },
     // `fromName` says which PAGE published, where core's hook says which
     // index — a message that outlives the process it was made in should
     // describe its sender the same way it describes its addressee. `set`
@@ -170,6 +203,8 @@ export async function openScriptSite(root, options = {}) {
       const from = set.docs.find((d) => d.index === docIndex);
       messages.push({ name, data, fromIndex: docIndex, fromName: from ? messageName(from.data) : null });
     },
+    onIngest: options.onIngest,
+    onQuery: options.onQuery,
     onSource: options.onSource,
     cache: new Map(),
     roots,

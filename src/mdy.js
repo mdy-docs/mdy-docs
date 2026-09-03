@@ -4,7 +4,7 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { parse as loadYaml } from 'yaml';
 
-import { fillTokens, heldTree, hold, holdToc, splice, spliceToc } from './compose.js';
+import { enterRender, exitRender, fillTokens, heldTree, hold, holdToc, splice, spliceToc } from './compose.js';
 import { markdownToHast } from './markdown.js';
 import { fromMdy } from './parse/block.js';
 import { compileScript, scriptLines, scriptOutput } from './parse/script.js';
@@ -77,8 +77,13 @@ import { runProgram } from './vm.js';
  * @returns {string} JavaScript statements
  */
 export function compileTemplateSource(template) {
-  return compileScript(String(template).split('\n')).source;
+  return compileTemplateSourceMemo(String(template));
 }
+
+const compileTemplateSourceMemo = memoize(
+  (template) => compileScript(template.split('\n')).source,
+  (source) => source
+);
 
 // JSON that is safe to embed directly in JavaScript source: U+2028/U+2029
 // are valid in JSON strings but line terminators in (older) JS.
@@ -237,7 +242,24 @@ function* codeNodes(node) {
  * @param {string} body raw template body
  * @returns {{ blocks: object[], template: string }}
  */
+// Could this body hold a ```data fence at all? A fenced block's info string
+// begins immediately after its run of backticks or tildes, and `lang` is that
+// string's first word — so a node with `lang === 'data'` is impossible unless
+// the text literally contains a fence run followed by optional spaces and
+// "data". Deliberately unanchored: a fence can open inside a blockquote or a
+// nested list, where the line starts with `>` or spaces-and-a-bullet, and
+// anchoring to the line start would miss those. Matching more than it must is
+// free (it just means the real parse runs); matching less would silently drop
+// somebody's data.
+//
+// This is worth a pre-test because the parse it skips is a full CommonMark
+// parse of every document in the site, and most sites have no data fences at
+// all: on a 10 MB corpus with none, 4.9 s of parsing to answer a question a
+// 9 ms scan answers.
+const MAYBE_DATA_FENCE = /(?:`{3,}|~{3,})[ \t]*data(?![\w-])/i;
+
 function extractDataBlocks(body) {
+  if (!MAYBE_DATA_FENCE.test(body)) return { blocks: [], template: body };
   const tree = fenceParser.parse(body);
   const blocks = [];
   const drop = new Set();
@@ -297,6 +319,83 @@ export function splitDocuments(source) {
   return kept.length > 0 ? kept : [''];
 }
 
+/*
+ * Ingest memo. parseDocument and compileTemplateSource are pure functions of
+ * their input text — front matter YAML, ```data fences, the markdown parse
+ * extractTags does to find inline hashtags, and the `%`-line compile. `mdy
+ * dev` walks the whole directory on every save — the entry decides what the
+ * site is, so it always reruns — which without this re-parsed every file in
+ * the site because one article changed. Keyed by the source text, so
+ * a hit is only ever a file whose bytes did not change; a miss costs one map
+ * write. Bounded, and cleared wholesale rather than evicted one at a time —
+ * this is a dev-loop cache, not a working set worth managing precisely.
+ *
+ * parseDocument's `data` is CLONED on the way out. The cached object would
+ * otherwise be handed to every caller that asked for the same text, and
+ * downstream code merges identity into it and inserts it into a collection;
+ * one mutation would poison every later rebuild. `content` is a string and
+ * needs no such care.
+ */
+/*
+ * A 64-bit FNV-1a in two lanes, base36. Deliberately not node:crypto — this
+ * file is bundled for the browser, and hashing here has to work there too.
+ * It names inputs, it does not defend against anybody choosing them.
+ */
+function hashString(input) {
+  let a = 0x811c9dc5;
+  let b = 0xc9dc5118;
+  for (let i = 0; i < input.length; i += 1) {
+    const c = input.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x85ebca6b);
+  }
+  return (a >>> 0).toString(36) + (b >>> 0).toString(36);
+}
+
+/*
+ * The render memo: a finished render, reusable by the NEXT build.
+ *
+ * A render is a pure function of three things — the document's own code, its
+ * own data, and the `req` it was handed — but only if it asked the host for
+ * nothing else along the way. A document that queries, renders another
+ * document, reads $.data, emits, publishes, or calls any embedder native has
+ * reached outside those three, and its result is not ours to keep (an emit
+ * skipped is an output that silently stops being produced). runDoc marks those
+ * renders impure and they are never stored. What is left — layouts, and any
+ * document that is only markup — is the bulk of a site's renders.
+ *
+ * Two generations rather than a bounded map: what a rebuild can reuse is the
+ * build before it, and nothing older is worth the memory. Rotating at the
+ * start of a build keeps at most two builds of trees alive, and those are the
+ * same tree objects compose.js is holding anyway.
+ */
+let renderMemoNow = new Map();
+let renderMemoPrev = new Map();
+
+/** Start a new generation. Called at the start of each build (see build.js);
+ * a caller that never calls it gets a memo that only grows within one build,
+ * which is correct, just not useful. */
+export function rotateRenderMemo() {
+  renderMemoPrev = renderMemoNow;
+  renderMemoNow = new Map();
+}
+
+const MEMO_MAX = 4096;
+
+// Exported for src/vault.js, which memoises its own YAML parse the same way.
+// Package-internal on purpose — it is not in index.js and is not API.
+
+export function memoize(fn, revive) {
+  const cache = new Map();
+  return (input) => {
+    if (cache.has(input)) return revive(cache.get(input));
+    const value = fn(input);
+    if (cache.size >= MEMO_MAX) cache.clear();
+    cache.set(input, value);
+    return revive(value);
+  };
+}
+
 /**
  * Split one document chunk into its YAML front matter data and markdown body.
  *
@@ -316,7 +415,7 @@ export function splitDocuments(source) {
  * @param {string} chunk
  * @returns {{ data: object, content: string }}
  */
-function parseDocument(chunk) {
+function parseDocumentUncached(chunk) {
   const lines = chunk.split('\n');
 
   /*
@@ -357,6 +456,11 @@ function parseDocument(chunk) {
   if (tags.length > 0 || parts.some((p) => 'tags' in p)) data.tags = tags;
   return { data, content };
 }
+
+const parseDocument = memoize(parseDocumentUncached, ({ data, content }) => ({
+  data: structuredClone(data),
+  content,
+}));
 
 /**
  * Parse a source file into its documents: front matter data + markdown body.
@@ -538,13 +642,18 @@ const h = (selector, properties, ...rest) => {
  * anywhere, and the module registry it populates lives host-side of the
  * document's own scope.
  *
- * `$` methods that need the host (find / findOne / render / text / emit /
- * publish / parse / markdown / html / table / toc, and any
+ * `$` methods that need the host (find / findOne / data / render / text /
+ * emit / publish / parse / markdown / html / table / toc, and any
  * `extraNativeNames`) call the
  * engine's `__hostcall` native: the VM suspends while the host's async native
  * runs, then resumes with the result — a synchronous-looking call from the
- * document's point of view. `$.documents` / `$.count` / `$.data` are
- * preloaded — no host round-trip.
+ * document's point of view. Only `$.count` is preloaded: it is one number, so
+ * it costs nothing to embed. There is deliberately no preloaded array of every
+ * document — `$.find({})` returns the whole set, in document order, and each
+ * result carries the identity `$.render`/`$.text` resolve without re-querying.
+ * The set used to be embedded in every program as a JSON literal, which made a
+ * build quadratic: n renders each parsing an n-sized prelude, so a 1 KB layout
+ * rendered once per page still paid for the entire corpus every time.
  *
  * `$.publish(name, data)` is `$.render(name, data)` in the other tense: the
  * same call, deferred and handed to whatever transport the embedder has, so
@@ -566,12 +675,7 @@ const h = (selector, properties, ...rest) => {
  * entirely the embedder-supplied native function's business), it only wires
  * the guest-side call shape.
  */
-function buildProgram({ body, selfData, ctx, documents, extraNativeNames = [] }) {
-  for (const name of extraNativeNames) {
-    if (!VALID_NATIVE_NAME.test(name)) {
-      throw new Error(`mdy: invalid native name ${JSON.stringify(name)} (must be a valid identifier)`);
-    }
-  }
+function buildProgram({ body, selfData, ctx, count, extraNativeNames = [] }) {
   const extraNativeLines = extraNativeNames
     .map((name) => `  ${name}: (...args) => __call(${JSON.stringify(name)}, args),`)
     .join('\n');
@@ -580,9 +684,8 @@ const __call = (method, args) => JSON.parse(__hostcall(method, JSON.stringify(ar
 const req = ${jsonForEval(ctx)};
 const res = { data: ${jsonForEval(selfData)}, doc: undefined };
 const $ = {
-  documents: ${jsonForEval(documents)},
-  count: ${documents.length},
-  data: (i) => { const m = $.documents.filter((d) => d.index === i)[0]; return m ? m.data : undefined; },
+  count: ${count},
+  data: (i) => __call("data", [i]),
   find: (q) => __call("find", [q === undefined ? {} : q]),
   findOne: (q) => __call("findOne", [q === undefined ? {} : q]),
   withTag: (t) => __call("find", [{ tags: String(t).toLowerCase() }]),
@@ -711,8 +814,17 @@ const fillHtml = (value) =>
  * }} [options]
  */
 async function buildDocumentSet(source, options = {}) {
-  const { onQuery, onEmit, onPublish, natives: extraNatives = {}, loadModule, canonicalizeModule } = options;
+  const { onQuery, onEmit, onIngest, onPublish, natives: extraNatives = {}, loadModule, canonicalizeModule } = options;
   const extraNativeNames = Object.keys(extraNatives);
+  // Checked once, when the set is built, rather than on every render that
+  // happens to reach buildProgram — it is a fact about the embedder's natives,
+  // not about any one render, and a render served from the memo never reaches
+  // buildProgram at all.
+  for (const name of extraNativeNames) {
+    if (!VALID_NATIVE_NAME.test(name)) {
+      throw new Error(`mdy: invalid native name ${JSON.stringify(name)} (must be a valid identifier)`);
+    }
+  }
   const docs = parseDocuments(source).map(({ data, content, format }, index) => ({
     index,
     data,
@@ -723,6 +835,21 @@ async function buildDocumentSet(source, options = {}) {
     content,
   }));
   const documents = docs.map(({ index, data }) => ({ index, data }));
+
+  // What a document IS, for the render memo: its code and its own data. Hashed
+  // once per build rather than per render — a document is rendered many times
+  // (a layout, once per page) and none of this changes between them.
+  //
+  // The native NAMES go in as well, because the memo is shared by every set in
+  // the process and two sets built from identical text would otherwise share
+  // its entries — including when one of them offers `$.resize` and the other
+  // does not, which is a different program for the same document.
+  const setSignature = extraNativeNames.join(',');
+  for (const doc of docs) {
+    doc.fingerprint = hashString(
+      `${setSignature}\u0000${doc.data?.path ?? doc.index}\u0000${doc.body ?? ''}\u0000${JSON.stringify(doc.data ?? null)}`
+    );
+  }
 
   // $.publish's address book: message name -> the documents deriving it.
   // An array rather than one document because two paths can collapse to the
@@ -753,7 +880,28 @@ async function buildDocumentSet(source, options = {}) {
   for (const doc of docs) {
     const { insertedId } = await collection.insertOne({ ...doc.data });
     idToIndex.set(String(insertedId), doc.index);
+    // The one phase of a build with a total known in advance, and the one a
+    // caller could not see at all: onSource has already fired for every file
+    // by now, and the entry has not started, so between them a build looked
+    // stopped. `done`/`total` are documents of THIS set, so a caller watching
+    // an import graph sees one run of it per package.
+    onIngest?.({ done: idToIndex.size, total: docs.length });
   }
+
+  // `path` is the natural key of a set built from a directory, and nisaba's
+  // `_id` cannot be one: it must be an ObjectId (the primary tree's keys are
+  // fixed-width OID bytes), and the error it throws for a string points here
+  // instead — "keep natural keys in their own field with a unique index".
+  // Every render written as `$.render({ path: … })` resolves through a query
+  // on this field, so without the index each one is a scan of the whole set:
+  // measured at 9.3 ms unindexed against 0.5 ms indexed, several hundred times
+  // per build.
+  //
+  // SPARSE because a document need not have a path at all — a set built from a
+  // bare string has none, and a non-sparse index rejects any document missing
+  // the field. NOT unique: one file can hold several documents (split on bare
+  // `---`), and they all carry the path of the file they came from.
+  await collection.createIndex({ path: 1 }, { sparse: true });
 
   const hostFind = async (query) => {
     const hits = await collection.find(query ?? {}).toArray();
@@ -827,12 +975,47 @@ async function buildDocumentSet(source, options = {}) {
   // nested render left behind becomes the tree it stands for.
   const compose = (out) => splice(fromMdy(scriptOutput(out).lines.join('\n'), PARSE));
 
+  // Every render is bracketed so compose.js knows whether any is in flight —
+  // that is what lets a later build reclaim held trees without stranding a
+  // token something is still going to look up (see releaseHeld).
   const runDoc = async (i, ctx, depth) => {
+    enterRender();
+    try {
+      return await runDocInner(i, ctx, depth);
+    } finally {
+      exitRender();
+    }
+  };
+
+  const runDocInner = async (i, ctx, depth) => {
     if (depth > MAX_RENDER_DEPTH) {
       throw new Error('mdy: render depth exceeded (cyclic $.render?)');
     }
     const doc = docs[i];
     if (!doc) throw new Error(`mdy: no document at index ${i}`);
+
+    // This render's identity: what the document is, plus what it was asked
+    // with. `req` is part of it because the same layout rendered with
+    // different data is a different render — and because a nested render
+    // reaches its parent as a token inside `req`, an input that changed
+    // downstream shows up here (see compose.js's `hold`).
+    const key = hashString(`${doc.fingerprint}\u0000${JSON.stringify(ctx)}`);
+    const memoized = renderMemoNow.get(key) ?? renderMemoPrev.get(key);
+    if (memoized !== undefined) {
+      renderMemoNow.set(key, memoized);
+      return memoized;
+    }
+    // Set by any native that reaches outside (code, data, req) — see the
+    // render memo's comment. A render that trips this is never stored.
+    let impure = false;
+    const taint = () => {
+      impure = true;
+    };
+    const keep = (result) => {
+      Object.defineProperty(result, 'key', { value: key });
+      if (!impure) renderMemoNow.set(key, result);
+      return result;
+    };
 
     // The other front end. A `.md` file is markup with no code in it, so
     // there is nothing to run: it goes straight to hast at its own boundary
@@ -843,7 +1026,7 @@ async function buildDocumentSet(source, options = {}) {
       const text = typeof doc.data.body === 'string' ? doc.data.body : doc.content;
       // Its own markdown is the text it wrote — there was no code to write
       // anything else — so `$.text` on a `.md` document gives back the file.
-      return finish(null, markdownToHast(text), text);
+      return keep(finish(null, markdownToHast(text), text));
     }
 
     // The `$` host natives for this render. Each may be async — the VM
@@ -854,15 +1037,26 @@ async function buildDocumentSet(source, options = {}) {
       runDoc(await resolveIndex(target, i), data ?? {}, depth + 1);
 
     const natives = {
-      find: (query) => trackedFind(query, i),
-      findOne: async (query) => (await trackedFind(query, i))[0] ?? null,
+      find: (query) => (taint(), trackedFind(query, i)),
+      // Backs `$.data(i)`: one document's data, positionally. A host call —
+      // there is no preloaded set in the program to read it out of, and a
+      // single document is a far smaller thing to send than all of them.
+      data: (index) => (taint(), docs[index]?.data ?? null),
+      findOne: async (query) => (taint(), (await trackedFind(query, i))[0] ?? null),
       // A nested render is a TREE, parked host-side; what crosses back is the
       // token standing for it (see src/compose.js).
-      render: async (target, data) => hold((await nested(target, data)).tree),
+      render: async (target, data) => {
+        taint();
+        const result = await nested(target, data);
+        // The token carries the child's render key, so a parent that holds it
+        // in `req` is re-keyed whenever the child's own inputs change.
+        return hold(result.tree, result.key);
+      },
       // …and the same render as the text its code wrote, for a document whose
       // output was never markup to begin with (a feed, a robots.txt).
-      text: async (target, data) => (await nested(target, data)).text,
+      text: async (target, data) => (taint(), (await nested(target, data)).text),
       emit: (path, content) => {
+        taint();
         onEmit?.({ path, content: typeof content === 'string' ? fillHtml(content) : content, docIndex: i });
         return null;
       },
@@ -870,6 +1064,7 @@ async function buildDocumentSet(source, options = {}) {
       // means a page of this set — after which the message is the
       // embedder's, exactly as an emitted output is.
       publish: (name, data) => {
+        taint();
         const problem = nameProblem(name);
         if (problem !== null) throw new Error(`mdy: publish: a message name ${problem}`);
         const targets = messagePages.get(name) ?? [];
@@ -937,8 +1132,11 @@ async function buildDocumentSet(source, options = {}) {
       // calling" hook, not specific to any one native (src/imports.js
       // resolves an import relative to the FILE that declared it, so its
       // native needs to know which document's data.path that was).
+      // An embedder's own native does who-knows-what — $.resize writes a file,
+      // an import renders out of another set entirely — so a render that calls
+      // one is never kept.
       ...Object.fromEntries(
-        Object.entries(extraNatives).map(([name, fn]) => [name, (...args) => fn(...args, i, doc.data)])
+        Object.entries(extraNatives).map(([name, fn]) => [name, (...args) => (taint(), fn(...args, i, doc.data))])
       ),
     };
 
@@ -947,7 +1145,10 @@ async function buildDocumentSet(source, options = {}) {
     // asking; module-to-module imports carry that in `referrer` instead.
     const moduleOptions = loadModule
       ? {
-          loadModule: (specifier, referrer) => loadModule(specifier, referrer, i, doc.data),
+          // A module's SOURCE is not part of this render's key, so a render
+          // that loads one cannot be kept — editing the module would other-
+          // wise keep serving the render made before the edit.
+          loadModule: (specifier, referrer) => (taint(), loadModule(specifier, referrer, i, doc.data)),
           canonicalizeModule: canonicalizeModule
             ? (specifier, referrer) => canonicalizeModule(specifier, referrer, i, doc.data)
             : undefined,
@@ -958,7 +1159,7 @@ async function buildDocumentSet(source, options = {}) {
       body: doc.body,
       selfData: doc.data,
       ctx,
-      documents,
+      count: documents.length,
       extraNativeNames,
     });
     const reply = await runProgram(program, natives, moduleOptions);
@@ -971,9 +1172,11 @@ async function buildDocumentSet(source, options = {}) {
     if (envelope.error !== undefined) {
       throw new Error(`mdy: document ${i} failed: ${envelope.error}`);
     }
-    return envelope.tree !== undefined
-      ? finish(null, envelope.tree, undefined)
-      : finish(envelope.out, undefined, undefined);
+    return keep(
+      envelope.tree !== undefined
+        ? finish(null, envelope.tree, undefined)
+        : finish(envelope.out, undefined, undefined)
+    );
   };
 
   return { docs: documents, messagePages, runDoc, hostFind, resolveIndex, trackedFind };
@@ -1130,7 +1333,6 @@ export async function openDocumentSet(source, options = {}) {
  *   $.text(target, data)   the same render as the text its code wrote
  *   $.withTag(tag)         shorthand for $.find({ tags: tag })
  *   $.data(i)              document i's data (positional)
- *   $.documents            [{ index, data }, …] (positional)
  *   $.count                number of documents
  *   $.parse(mdy)           MDY text → hast
  *   $.markdown(md)         markdown text → a token for its tree

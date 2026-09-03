@@ -13,6 +13,8 @@ import {
   renderScriptSite,
   buildSite,
   serveSite,
+  createProgress,
+  progressSupported,
 } from '../index.js';
 
 // Minimal ANSI color helpers — no dependency, since this is presentation
@@ -61,6 +63,12 @@ Usage:
       output.
   mdy dead <page-name> [--broker <url>] [--requeue <index>]
       what could not be rendered, and putting one back
+
+On a terminal, build and dev keep the [read]/[write] line per file and add
+a progress line beneath it — files read, documents ingested, then pages
+rendered, with a real percentage once a previous build has said how many
+pages to expect. Redirected output gets the per-file lines alone, so a
+pipeline reading them is unaffected.
 
 Every site is a script-defined site: site-dir's entry document (main.mdy,
 or --entry <path>) decides everything itself — content, URLs, layouts,
@@ -386,12 +394,12 @@ function makeBusLogger({ banner = true } = {}) {
  * so every rebuild re-walks and re-ingests everything; reporting all of it
  * again on every keystroke-triggered save would drown out what matters
  * (see makeServeLogger's `[change]` line for that instead). */
-function makeSourceLogger() {
+function makeSourceLogger(write = console.log) {
   const seen = new Set();
   return (meta) => {
     if (seen.has(meta.path)) return;
     seen.add(meta.path);
-    console.log(`${tagRead()} ${meta.path}`);
+    write(`${tagRead()} ${meta.path}`);
   };
 }
 
@@ -452,11 +460,24 @@ if (process.argv[2] === 'dead') {
       const { root, publish, broker, ...opts } = parseSiteArgs(siteRest);
       try {
         const started = Date.now();
+        // The per-file list scrolls and the moving line stays under it: every
+        // [read]/[write] goes through progress.log, which lifts the bar,
+        // prints, and puts it back. Off a terminal the bar is disabled and
+        // log() is a plain write, so redirected output is exactly what it
+        // always was.
+        const progress = createProgress();
         const { pages, outDir, messages } = await buildSite(root, {
           ...opts,
-          onSource: (meta) => console.log(`${tagRead()} ${meta.path}`),
-          onWrite: (file) => console.log(`${tagWrite()} ${file}`),
+          onSource: (meta) => {
+            progress.onSource(meta);
+            progress.log(`${tagRead()} ${meta.path}`);
+          },
+          onIngest: progress.onIngest,
+          onQuery: progress.onQuery,
+          onEmit: progress.onEmit,
+          onWrite: (file) => progress.log(`${tagWrite()} ${file}`),
         });
+        progress.finish();
         console.log(
           `${green('✓')} built ${bold(pages)} page(s) → ${cyan(outDir)} ${dim(`(${Date.now() - started}ms)`)}`
         );
@@ -496,10 +517,24 @@ if (process.argv[2] === 'dead') {
           maxBackoffMs: maxBackoff === undefined ? undefined : Number(maxBackoff),
         });
         const logger = makeServeLogger({ live: messaging !== null });
+        // Rebuilds are where this matters most: the first build at least
+        // printed a [read] line per file, but makeSourceLogger dedupes, so
+        // every rebuild after it said nothing at all until it was finished.
+        const progress = createProgress();
+        const sourceLogger = makeSourceLogger(progress.log);
         const { url } = await serveSite(root, {
           ...opts,
-          onSource: makeSourceLogger(),
+          onSource: (meta) => {
+            progress.onSource(meta);
+            sourceLogger(meta);
+          },
+          onIngest: progress.onIngest,
+          onQuery: progress.onQuery,
+          onEmit: progress.onEmit,
           onRebuild: (info) => {
+            // Clear the line before the rebuild's own report — the two must
+            // not land on top of each other.
+            progress.finish();
             logger(info);
             if (info.ok && messaging) messaging.rebuilt(info);
           },

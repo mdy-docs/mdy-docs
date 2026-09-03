@@ -42,5 +42,6 @@ export { renderSite, buildSite, urlToOutFile } from './src/build.js';
 export { serveSite } from './src/serve.js';
 export { slugify, normalizeDate, rfc822 } from './src/format.js';
 export { tokenize } from './src/search.js';
+export { createProgress, progressSupported } from './src/progress.js';
 export { createResizeNative } from './src/images.js';
 export { renderScriptSite, openScriptSite } from './src/script-site.js';

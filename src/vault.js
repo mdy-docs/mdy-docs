@@ -1,7 +1,7 @@
 import { nodeFsProvider } from './fs-provider.js';
 import { imageSize } from 'image-size';
 import { parse as loadYaml } from 'yaml';
-import { extractTags } from './mdy.js';
+import { extractTags, memoize } from './mdy.js';
 
 /*
  * vault — a directory of documents as a queryable set.
@@ -142,6 +142,25 @@ const IMAGE_EXTENSIONS = new Set([
  * @param {{ fs?: object }} [options]
  * @returns {Promise<{ text: string, meta: { path: string, name: string, ext: string, size: number, mtime: number, width?: number, height?: number, body?: string, tags?: string[] } }[]>}
  */
+/*
+ * A data file's YAML, parsed once per distinct text rather than once per walk.
+ *
+ * `mdy dev` re-walks the whole site on every save, and every .yaml in it was
+ * re-parsed each time however little had changed. That is fine for a handful
+ * of small records and not fine for one big one: a 2.2 MB manifest costs
+ * 461 ms to parse and 41 ms to clone, and it was being paid on every
+ * keystroke — about a tenth of a rebuild, for a file that had not been
+ * touched.
+ *
+ * Keyed by the file's own text, so a hit is only ever a file whose bytes did
+ * not change. Cloned on the way out for the same reason parseDocument's memo
+ * clones: the parsed value is merged into a document's data and handed to
+ * every later stage, and one mutation would poison every later rebuild.
+ */
+const parseYaml = memoize(loadYaml, (value) =>
+  value === null || typeof value !== 'object' ? value : structuredClone(value)
+);
+
 export async function walkRawSources(root, options = {}) {
   const fs = options.fs ?? nodeFsProvider();
   const files = (await walkFiles(root, { fs })).filter((f) => !NON_SOURCE.test(f.path));
@@ -163,7 +182,7 @@ export async function walkRawSources(root, options = {}) {
       if (ext === '.yaml' || ext === '.yml') {
         const text = await fs.read(root, file.path);
         try {
-          const parsed = text.trim() === '' ? null : loadYaml(text);
+          const parsed = text.trim() === '' ? null : parseYaml(text);
           if (parsed != null) {
             if (typeof parsed !== 'object' || Array.isArray(parsed)) {
               throw new Error(`${file.path} must be a YAML mapping`);

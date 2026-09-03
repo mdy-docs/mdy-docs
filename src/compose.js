@@ -21,28 +21,92 @@
 
 const OPEN = '\uE000';
 const CLOSE = '\uE001';
-const TOKEN = /\uE000([0-9]+)\uE001/g;
+// One definition of what an id looks like, because there are three regexes
+// below that have to agree about it — they did not, once, and a token whose id
+// stopped being purely numeric silently stopped being recognised as a token at
+// all (it rendered as `<p><h1>…</h1></p>`: matched by one pattern, missed by
+// the next). Base36, so `$.render`'s content-derived ids and the counter's
+// plain digits are both covered.
+const ID = '[0-9a-z]+';
+const TOKEN = new RegExp(`${OPEN}(${ID})${CLOSE}`, 'g');
+const ONE_TOKEN = new RegExp(`^\\s*${OPEN}(${ID})${CLOSE}\\s*$`);
+const ONLY_TOKENS = new RegExp(`^(?:\\s*${OPEN}${ID}${CLOSE})+\\s*$`);
 
 /*
- * Held trees live for the process, not the render. A token can be written
- * into a string, kept in a variable, dropped, or used twice, and nothing here
- * gets to decide when the last of those happened — so nothing is reclaimed.
- * The trees are the same objects the renders already produced; holding them
- * costs what having rendered them already cost.
+ * Held trees outlive the render that made them. A token can be written into a
+ * string, kept in a variable, dropped, or used twice, and nothing here gets to
+ * decide when the last of those happened — so within a render nothing is
+ * reclaimed. The trees are the same objects the renders already produced;
+ * holding them costs what having rendered them already cost.
+ *
+ * Across renders it is knowable, and has to be: `mdy dev` rebuilds the whole
+ * site on every save, and a store that only ever grew held every tree of every
+ * rebuild for the life of the process — measured at 115 MB retained per save,
+ * so a dev server left open through fifty of them carried about 6 GB of dead
+ * article trees. `releaseHeld` below is the reclaim point, and `live` is what
+ * makes it safe to use: every `hold` happens inside a render (they are all
+ * `$` natives), so with no render in flight no token can be created, and every
+ * token an earlier render made has already been composed into the text around
+ * it. A caller that reclaims mid-render would strand tokens that are still
+ * going to be looked up, which is why this counts rather than trusting the
+ * caller to know.
  */
 const held = new Map();
 let next = 0;
+let live = 0;
+
+/** Mark a render as started/finished — see `releaseHeld`. Paired in a
+ * `finally`, so a render that throws still decrements. */
+export function enterRender() {
+  live += 1;
+}
+
+export function exitRender() {
+  live -= 1;
+}
+
+/**
+ * Drop every held tree and start numbering again, if it is safe to: with a
+ * render in flight the store is still being read, so this does nothing and
+ * says so. Call it at the START of a build rather than the end — what the
+ * previous build handed back (a document set's own `text`, say) stays
+ * resolvable until the next one begins.
+ *
+ * @returns {boolean} whether the store was actually reclaimed
+ */
+export function releaseHeld() {
+  if (live > 0) return false;
+  held.clear();
+  next = 0;
+  return true;
+}
 
 /**
  * Park a tree and get the token that stands for it.
  *
+ * `id` names the tree by what it IS rather than by when it was parked, and a
+ * caller that can say so should. A token travels in the text a document hands
+ * back, and reaches its parent inside `req` — so the token IS part of the
+ * parent's input, and a cache keyed on that input is only correct if the token
+ * changes whenever the tree behind it does. Sequential numbering does not: two
+ * builds either side of an edit both call the article's render fifth, both get
+ * `5`, and the parent's input looks untouched while its content changed. That
+ * is a stale page, not a slow one. `$.render` passes the key of the render
+ * that made the tree (see mdy.js), which changes exactly when the document,
+ * its data, or its own input does.
+ *
+ * Without an `id` the counter still applies — for a tree a document built
+ * itself (`$.node`, `$.table`), which never leaves that document's own
+ * composition, and so has nothing to be stale to.
+ *
  * @param {import('hast').Root | import('hast').ElementContent} tree
+ * @param {string} [id] stable identity for the tree, if the caller has one
  * @returns {string}
  */
-export function hold(tree) {
-  const id = String(next++);
-  held.set(id, { kind: 'tree', tree });
-  return OPEN + id + CLOSE;
+export function hold(tree, id) {
+  const key = id === undefined ? String(next++) : id;
+  held.set(key, { kind: 'tree', tree });
+  return OPEN + key + CLOSE;
 }
 
 /**
@@ -73,7 +137,7 @@ export function holdToc() {
 export function heldTree(value) {
   if (typeof value !== 'string') return undefined;
 
-  const match = /^\s*\uE000([0-9]+)\uE001\s*$/.exec(value);
+  const match = ONE_TOKEN.exec(value);
   const entry = match ? held.get(match[1]) : undefined;
 
   return entry?.kind === 'tree' ? entry.tree : undefined;
@@ -291,7 +355,7 @@ function onlyTokens(node) {
         : undefined;
 
   if (text === undefined) return undefined;
-  if (!/^(?:\s*\uE000[0-9]+\uE001)+\s*$/.test(text)) return undefined;
+  if (!ONLY_TOKENS.test(text)) return undefined;
 
   return [...text.matchAll(TOKEN)].map((match) => match[1]);
 }

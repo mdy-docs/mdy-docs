@@ -47,7 +47,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { nodeFsProvider, parseDocuments, renderSite, walkFiles, walkRawSources } from 'mdy-docs';
+import { createProgress, nodeFsProvider, parseDocuments, renderSite, walkFiles, walkRawSources } from 'mdy-docs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -129,12 +129,24 @@ function scheduleRebuild() {
   building = building.then(async () => {
     if (seq !== buildSeq) return { ...lastBuild, skipped: true };
     const started = Date.now();
+    // The previous build's page count is the only estimate there is of this
+    // one's — the entry document decides what exists, so nothing knows the
+    // total in advance. Without it the display counts rather than measures.
+    const progress = createProgress({ expectedPages: lastBuild.ok ? lastBuild.pages : 0 });
     try {
-      site = await renderSite(root, buffer ? { fs: overlay } : {});
+      site = await renderSite(root, {
+        ...(buffer ? { fs: overlay } : {}),
+        onSource: progress.onSource,
+        onIngest: progress.onIngest,
+        onQuery: progress.onQuery,
+        onEmit: progress.onEmit,
+      });
       lastBuild = { ok: true, ms: Date.now() - started, pages: site.outputs.size, preview: Boolean(buffer) };
+      progress.finish(`mdy: rendered ${lastBuild.pages} page(s) in ${lastBuild.ms}ms`);
       for (const res of sseClients) res.write('data: reload\n\n');
     } catch (err) {
       lastBuild = { ok: false, error: err.message ?? String(err), preview: Boolean(buffer) };
+      progress.finish(`mdy: build failed — ${lastBuild.error}`);
     }
     return lastBuild;
   });
@@ -410,6 +422,7 @@ app.get(/.*/, async (req, res, next) => {
 });
 
 await scheduleRebuild();
-if (!lastBuild.ok) console.error(`mdy: first build failed — ${lastBuild.error}`);
-else console.log(`mdy: rendered ${lastBuild.pages} page(s) in ${lastBuild.ms}ms from ${root}`);
+// scheduleRebuild's progress display has already reported the outcome; this
+// only adds where it was built from.
+if (lastBuild.ok) console.log(`mdy: serving ${root}`);
 app.listen(port, () => console.log(`site on http://localhost:${port} — editor on http://localhost:${port}/__edit`));

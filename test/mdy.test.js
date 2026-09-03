@@ -570,8 +570,8 @@ test('$.render of a reference from another set (unknown _id) is a clear error', 
 
 test('$.render by index still works (positional)', async () => {
   const src = [
-    '% for (const m of $.documents.slice(2)) {',
-    '{{ $.render(1, m.data) }}',
+    '% for (const m of $.find({}).slice(2)) {',
+    '{{ $.render(1, m) }}',
     '% }',
     '---',
     '- {{ req.name }} is {{ req.age }}',
@@ -1173,9 +1173,40 @@ test('natives: coexist with find/findOne/render — no interference either direc
   assert.equal((await set.renderText(0)).trim(), '#1');
 });
 
+test('data fences are found wherever CommonMark allows one to open', async () => {
+  // extractDataBlocks skips its CommonMark parse when the body cannot hold a
+  // data fence. The test that decides is deliberately looser than 'a line
+  // starting with a fence' — a fence can open inside a blockquote or a nested
+  // list, and missing one there would silently drop a document's data.
+  const cases = [
+    ['plain', '+++\ntitle: t\n+++\n```data\nn: 1\n```\n'],
+    ['blockquote', '+++\ntitle: t\n+++\n> ```data\n> n: 1\n> ```\n'],
+    ['nested list', '+++\ntitle: t\n+++\n- a\n  - b\n    ```data\n    n: 1\n    ```\n'],
+    ['tildes', '+++\ntitle: t\n+++\n~~~data\nn: 1\n~~~\n'],
+    ['four backticks', '+++\ntitle: t\n+++\n````data\nn: 1\n````\n'],
+    ['spaced info string', '+++\ntitle: t\n+++\n```   data\nn: 1\n```\n'],
+  ];
+  for (const [label, src] of cases) {
+    const set = await openDocumentSet(src);
+    assert.equal(set.docs[0].data.n, 1, `data fence not picked up: ${label}`);
+  }
+});
+
+test('a fence that only looks like data is left as display content', async () => {
+  const a = await openDocumentSet('+++\ntitle: t\n+++\n```database\nnot: data\n```\n');
+  assert.equal(a.docs[0].data.not, undefined);
+  const b = await openDocumentSet('+++\ntitle: t\n+++\n```data extra\nnot: data\n```\n');
+  assert.equal(b.docs[0].data.not, undefined);
+});
+
 test('natives: an invalid native name rejects with a clear error rather than a broken program', async () => {
-  const set = await openDocumentSet('hi', { natives: { 'not valid': () => 1 } });
-  await assert.rejects(set.renderText(0), /invalid native name/);
+  // At set construction, not at the first render: the name is a fact about the
+  // embedder's natives, and a render served from the render memo never reaches
+  // the code that builds a program at all.
+  await assert.rejects(
+    openDocumentSet('hi', { natives: { 'not valid': () => 1 } }),
+    /invalid native name/
+  );
 });
 
 test('natives: without the option, nothing breaks (default: none extra)', async () => {

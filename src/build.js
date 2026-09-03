@@ -1,4 +1,6 @@
 import { nodeFsProvider } from './fs-provider.js';
+import { releaseHeld } from './compose.js';
+import { rotateRenderMemo } from './mdy.js';
 import { renderScriptSite } from './script-site.js';
 
 /*
@@ -35,10 +37,12 @@ export function urlToOutFile(url) {
  * maps output file paths to raw bytes (Uint8Array) — $.resize results
  * (images.js). No filesystem writes — buildSite persists to dist/, the dev
  * server serves straight from here. `stats: { reused: string[], rebuilt:
- * string[] }` — a script-defined site has no incremental cache (every
- * build/rebuild walks the whole directory and reruns the entry from
- * scratch; see script-site.js's own file-level comment), so `reused` is
- * always empty.
+ * string[] }` — every build reruns the entry from scratch (it is what
+ * decides the site exists at all; see script-site.js's own file-level
+ * comment) and so re-emits every output, which is why `reused` is always
+ * empty. That is about OUTPUTS. Work is reused underneath: an unchanged file
+ * is not re-parsed and an unchanged render is not re-run (the ingest and
+ * render memos, both in src/mdy.js).
  *
  * Options: `entry` (default 'main.mdy'). `drafts`/`future` thread through
  * as plain context booleans for the entry script to interpret itself, not
@@ -48,7 +52,8 @@ export function urlToOutFile(url) {
  * entirely in-browser, which is also why `root` is only
  * resolve()d against the real filesystem's cwd when no custom provider is
  * given — a browser root is just a virtual string, not an OS path.
- * `onSource` — see renderScriptSite; passed straight through.
+ * `onSource`/`onQuery`/`onEmit`/`onIngest` — see renderScriptSite; passed
+ * straight through.
  *
  * Also returns `roots`: every directory in `root`'s import graph (see
  * script-site.js/imports.js), `root` itself last — buildSite/serveSite use
@@ -56,6 +61,16 @@ export function urlToOutFile(url) {
  * root's.
  */
 export async function renderSite(root, options = {}) {
+  // A build is a closed episode: everything it emits is composed to HTML on
+  // the way out, so no token it made is live once it ends. Reclaiming here, at
+  // the START of the next one, is what stops `mdy dev` from accumulating every
+  // tree of every rebuild — and it is a no-op if a render is somehow still
+  // running, so a caller rendering from a set between builds cannot be cut off
+  // mid-flight (see src/compose.js).
+  releaseHeld();
+  // …and start a new memo generation, so this build can reuse the last one's
+  // renders and nothing older stays alive (see mdy.js's render memo).
+  rotateRenderMemo();
   if (!options.fs) root = (await import('node:path')).resolve(root);
   const fs = options.fs ?? nodeFsProvider();
   const entry = options.entry ?? 'main.mdy';
@@ -65,6 +80,9 @@ export async function renderSite(root, options = {}) {
     entry,
     now: options.now,
     context: { drafts: Boolean(options.drafts), future: Boolean(options.future) },
+    onEmit: options.onEmit,
+    onIngest: options.onIngest,
+    onQuery: options.onQuery,
     onSource: options.onSource,
   });
 

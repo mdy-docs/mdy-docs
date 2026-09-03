@@ -9,10 +9,12 @@ import { renderSite } from './build.js';
  * renderSite's binaryOutputs Map; static/ is served from disk. Nothing
  * touches dist/. One recursive watcher on the site root (nodeFsProvider's
  * watch(), mdy-docs' own fs-provider.js — the same recursive fs.watch this
- * file used to call directly) triggers a debounced full rebuild — a
- * script-defined site has no incremental cache (see script-site.js), so
- * every save re-walks the whole directory and reruns the entry from
- * scratch. Browsers hold an SSE connection (/__mdy__/events) and reload
+ * file used to call directly) triggers a debounced full rebuild — the entry
+ * is what decides the site exists (see script-site.js), so every save
+ * re-walks the whole directory and reruns it from scratch. It does not redo
+ * all the work, though: unchanged files come back from the ingest memo and
+ * unchanged renders from the render memo (src/mdy.js). Browsers hold an SSE
+ * connection (/__mdy__/events) and reload
  * when a rebuild lands; a failed rebuild logs the error and keeps serving
  * the last good build.
  *
@@ -85,7 +87,8 @@ const defaultOnRebuild = (info) => {
  * { server, port, url, stats, close } — close() stops the watcher, drops
  * SSE clients, and shuts the server down. `stats` is a live getter for the
  * most recent build's `{ reused, rebuilt }` output-file lists (see
- * build.js's renderSite — `reused` is always empty; no incremental cache).
+ * build.js's renderSite — `reused` is always empty: every output is
+ * re-emitted, whatever was reused to produce it).
  *
  * `options.onRebuild(info)` — fires after every rebuild attempt, including
  * the first (`info.first`): `{ ok: true, first, changed, pages, ms, reused,
@@ -98,11 +101,14 @@ const defaultOnRebuild = (info) => {
  * paths that triggered this rebuild — empty for the first (nothing changed
  * yet, it just ran). Defaults to plain `console.log`/`console.error` text
  * (defaultOnRebuild, above) — a hook, not policy, same shape as
- * onQuery/onEmit elsewhere. `options.onSource` — see renderSite/
- * renderScriptSite; passed straight through, so it fires on every rebuild,
- * not just the first (a script-defined site has no incremental cache —
- * see script-site.js — so every rebuild re-walks and re-ingests the whole
- * directory).
+ * onQuery/onEmit elsewhere. `options.onSource`/`options.onQuery` — see
+ * renderSite/renderScriptSite; passed straight through, so they fire on every
+ * rebuild, not just the first. A rebuild still re-walks the whole directory
+ * and reruns the entry from scratch — the entry is what decides the site
+ * exists, so there is no rebuilding part of it — but it does not redo all the
+ * work: unchanged files come back from the ingest memo, and a render whose
+ * document, data and `req` are all unchanged comes back from the render memo
+ * (both in src/mdy.js).
  */
 export async function serveSite(root, options = {}) {
   const { createServer } = await import('node:http');
@@ -169,9 +175,10 @@ export async function serveSite(root, options = {}) {
         reused: stats.reused.length,
         rebuilt: stats.rebuilt.length,
         // What the site WOULD have published. The dev server never sends:
-        // there is no incremental cache here, so every save reruns the
-        // entry from scratch and a publish that went out would re-fire on
-        // every keystroke (see src/publish.js). But dropping them without
+        // every save reruns the entry from scratch, so a publish that went
+        // out would re-fire on every keystroke (see src/publish.js). The
+        // render memo does not change that — a render that publishes is
+        // never stored, precisely because its effect has to happen again. But dropping them without
         // a word made $.publish look like it did nothing at all, which is
         // the one thing it must not look like.
         messages: rendered.messages,

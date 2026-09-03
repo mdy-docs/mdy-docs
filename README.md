@@ -466,14 +466,13 @@ attributes**, MongoDB-style:
 
 | Call | Result |
 | --- | --- |
-| `$.find(query)` | data of the documents matching `query`, in document order (full Mongo operators: `{ age: { $gt: 35 } }`, array-contains, …) |
+| `$.find(query)` | data of the documents matching `query`, in document order (full Mongo operators: `{ age: { $gt: 35 } }`, array-contains, …). `$.find()` with no query is the whole set — each result carries the identity `$.render`/`$.text` resolve without re-querying, so `$.find()[2]` addresses document 2 even when it has no front matter to match on |
 | `$.findOne(query)` | first match, or `null` |
 | `$.render(target, data?)` | run the document `target` with `data` as its `req` (its own data stays separate, on its `res.data`), and return a token standing for its finished **tree**. `target` is a `$.find`/`$.findOne` result (rendered by identity, no re-query — `$.render($.findOne({ template: 'card' }), m)`), an index, or a query object as shorthand for its first match. There is no `indent`: the parser knows which element is open where the token lands, so there is no column to compute |
 | `$.text(target, data?)` | the same render as the text its code wrote, byte for byte — for a document that deliberately is not markup (a feed, a robots.txt) |
 | `$.withTag(tag)` | shorthand for `$.find({ tags: tag })` (see Hashtags) |
 | `$.emit(path, content)` | produce a named output as a side effect of this render — see `openDocumentSet`'s `onEmit` below; a no-op if the embedder didn't ask for it |
 | `$.data(i)` | document `i`'s data (positional) |
-| `$.documents` | `[{ index, data }, …]` (positional) |
 | `$.count` | number of documents |
 | `$.parse(mdy)` | MDY text → a [hast](https://github.com/syntax-tree/hast) tree (plain JSON), through the same front end the document itself came from |
 | `$.markdown(md)` | markdown text → a token for its tree, through the OTHER front end — a `.md` file's body, or any markdown a document is holding |
@@ -564,7 +563,7 @@ items:
 
 `renderDocumentSet`/`render` behave exactly like a single
 file: the entry document renders and can address every document — including
-those from other sources — through `$` (`$.documents`, `$.data(i)`,
+those from other sources — through `$` (`$.find()`, `$.data(i)`,
 `$.render(i, data)`), and the `entry` argument indexes into the combined set.
 See [`examples/invoice.mdy`](examples/invoice.mdy) and
 [`examples/invoice-data.mdy`](examples/invoice-data.mdy) (run together via
