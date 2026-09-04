@@ -31,8 +31,24 @@ import * as esbuild from 'esbuild';
 const require = createRequire(import.meta.url);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Packages whose WASM has to travel with the bundle. */
-const WASM_PACKAGES = ['@mdy-docs/lamassu-js', '@mdy-docs/nisaba-db'];
+/*
+ * Packages whose WASM has to travel with the bundle.
+ *
+ * The image codecs are here for a reason worth remembering: src/images.js
+ * imports them at module scope, so they are in every bundle whether or not a
+ * site ever calls `$.resize`, and they fetch their binaries by bare filename
+ * beside the bundle exactly as the engines do. Leaving them out does not
+ * produce a missing-file error — a host that answers unknown paths with
+ * index.html (Tauri does) returns 200 and some HTML, and the failure surfaces
+ * much later as `WebAssembly.Module doesn't parse at byte 0`.
+ */
+const WASM_PACKAGES = [
+  '@mdy-docs/lamassu-js',
+  '@mdy-docs/nisaba-db',
+  '@jsquash/png',
+  '@jsquash/jpeg',
+  '@jsquash/resize',
+];
 
 /** The directory a package resolves to — the nearest ancestor of its entry
  * point holding a package.json. Not `require.resolve(pkg + '/package.json')`,

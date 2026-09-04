@@ -1,7 +1,25 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the app's own frontend may ask the shell for. `core:default` covers invoking commands and listening for events — the preview is driven by an `mdy://request` event per page, so listening is not optional.",
+  "description": "What the app's own frontend may ask the shell for.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "fs:allow-read-dir",
+    "fs:allow-read-text-file",
+    "fs:allow-read-file",
+    "fs:allow-stat",
+    "fs:allow-write-text-file",
+    "fs:allow-write-file",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "fs:allow-exists",
+    "fs:allow-watch",
+    "fs:allow-unwatch",
+    {
+      "identifier": "fs:scope",
+      "description": "A site is wherever the user keeps it, so the scope is their home directory rather than an app-owned folder. Deliberately broad and deliberately not `/**`: nothing here needs to read outside $HOME, and a capability is the one place that limit is stated.",
+      "allow": [{ "path": "$HOME/**" }]
+    }
+  ]
 }

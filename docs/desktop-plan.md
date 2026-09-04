@@ -225,6 +225,39 @@ latency proves worse than the copy.
 Exit: the reference corpus opens in the app, produces the same 93 pages the CLI
 does, and the preview can be navigated from the index to an article and back.
 
+**The provider is done, and so is serving.**
+[../packages/mdy-app/web/tauri-fs-provider.js](../packages/mdy-app/web/tauri-fs-provider.js)
+implements the nine methods over Tauri's `fs` plugin, and the app renders a real
+directory with the unmodified site layer: `examples/blog`, 16 files in, **16
+pages in 399 ms**, served over `mdy://` with `static/` passing through — page,
+stylesheet and script all 200.
+
+Three things this phase turned up, none of them predicted:
+
+- **`static/` is not in `outputs`.** renderSite returns what documents made;
+  every root's `static/` is a passthrough that `buildSite` copies and
+  `serveSite` reads from disk. A preview without it is a site with no
+  stylesheet, so the app does what serveSite does — outputs first, then each
+  root's `static/`, its own before anything it imports.
+- **The image codecs were never shipped.** `src/images.js` imports @jsquash at
+  module scope, so it is in every browser bundle whether or not a site calls
+  `$.resize` — and Phase 0's build copied only the two engines. Worse than a
+  missing file: Tauri answers unknown paths with index.html, so the fetch
+  returned **200 and some HTML**, and the failure surfaced much later as
+  `WebAssembly.Module doesn't parse at byte 0`. Fixed at the source, and the
+  browser test now names the codecs.
+- **Timers do not fire during a render.** The VM holds the event loop, so a
+  `setInterval` heartbeat stops and a `setTimeout` watchdog never lands. That
+  is why `src/progress.js` paints from the hooks and keeps its ticker only as a
+  fallback — a decision made for Node that turns out to be load-bearing here.
+
+**The reference corpus does not render in the webview yet.** 139 articles reach
+about 40 pages and then stop, with the WebContent process at 1.1 GB and idle —
+against 265–400 MB for the same build under Node. Small sites are fine; this
+is a memory ceiling to investigate rather than a bug in the wiring, and it is
+the same constraint the plan already expected to meet on iOS, arriving earlier
+than expected.
+
 **Serving is done.** [../packages/mdy-app](../packages/mdy-app) registers
 `mdy://` with an asynchronous handler that asks the webview per request, and a
 link inside a served page reaches another served page — verified by the second

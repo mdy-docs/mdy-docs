@@ -6,10 +6,15 @@
   "license": "BSD-2-Clause",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build"
+    "build:web": "node scripts/build-web.mjs",
+    "dev": "npm run build:web && tauri dev",
+    "build": "npm run build:web && tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-fs": "^2.5.2",
+    "mdy-docs": "file:../.."
   }
 }

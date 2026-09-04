@@ -65,6 +65,14 @@ fn respond(
     responder.respond(response);
 }
 
+/// The directory to open, given on the command line: `mdy-app <site-dir>`.
+/// A native application would ask with a file dialog; taking an argument keeps
+/// this runnable from a terminal, which is what makes it checkable.
+#[tauri::command]
+fn site_root() -> Option<String> {
+    std::env::args().nth(1)
+}
+
 /// A line from the webview, printed as it happens. `report` ends the run;
 /// this one does not, so the frontend can narrate what it is doing while it
 /// still has the chance — a window that stops responding says nothing at all
@@ -85,6 +93,7 @@ fn report(result: String) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
         .manage(Pending::default())
         .register_asynchronous_uri_scheme_protocol("mdy", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
@@ -110,7 +119,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![respond, report, log])
+        .invoke_handler(tauri::generate_handler![respond, report, log, site_root])
         .run(tauri::generate_context!())
         .expect("mdy-app failed to start");
 }

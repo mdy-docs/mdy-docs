@@ -140,12 +140,21 @@ test('the browser bundle renders a script-defined site in WebKit', async (t) => 
   }
 });
 
-test('the wasm engines ship beside the bundle', async () => {
-  // Their loaders fetch by filename relative to the bundle, so this is the
-  // difference between a working artifact and one that fails in a webview.
+test('every wasm the bundle can reach for ships beside it', async () => {
+  /*
+   * Loaders fetch by filename relative to the bundle, so this is the
+   * difference between a working artifact and one that fails in a webview —
+   * and the failure is worse than a missing file. A host that answers unknown
+   * paths with index.html (Tauri does) returns 200 and some HTML, which
+   * surfaces later and elsewhere as `WebAssembly.Module doesn't parse at byte
+   * 0`. The image codecs were missing for exactly that reason: src/images.js
+   * imports them at module scope, so they are in every bundle whether or not a
+   * site calls $.resize.
+   */
   const { outDir, wasm } = await buildBrowser({ minify: true });
-  const names = wasm.map((w) => w.file).sort();
-  assert.ok(names.includes('lamassu.wasm'), `lamassu.wasm missing from ${outDir}: ${names}`);
-  assert.ok(names.includes('nisaba.wasm'), `nisaba.wasm missing from ${outDir}: ${names}`);
+  const names = wasm.map((w) => w.file);
+  for (const required of ['lamassu.wasm', 'nisaba.wasm', 'squoosh_png_bg.wasm', 'mozjpeg_dec.wasm']) {
+    assert.ok(names.includes(required), `${required} missing from ${outDir}: ${names.join(', ')}`);
+  }
   for (const w of wasm) assert.ok(w.bytes > 0, `${w.file} is empty`);
 });
