@@ -187,24 +187,40 @@ render to a `Map`, answer requests out of it, never touch `dist/`. The question
 is where that `Map` lives when there is no HTTP server, and there are three
 answers:
 
-- **A Service Worker in the webview.** The outputs stay in JavaScript, the
-  worker answers `fetch` for the preview's origin, and an `<iframe>` navigates
-  the site normally. No Rust involved and no copy of the outputs anywhere.
-  Verified working in WebKit — a served page, a link click, and a real
-  navigation to `/site/uruk/` — see *What is already true*. The open question
-  is whether registration is permitted under Tauri's own origin, which is a
-  custom protocol rather than `http://`, and that is the first thing Phase 1
-  should find out because everything else depends on it.
-- **A custom protocol handler in Rust.** The webview pushes outputs over IPC
-  after each build and Rust answers `mdy://` from them. Certain to work, at the
-  cost of copying every output across the boundary on every rebuild — about
-  4 MB for the reference corpus — and of the outputs existing twice.
+- **A Service Worker in the webview.** ❌ Ruled out, and cheaply. The model
+  itself works — verified in WebKit, a served page and a real navigation to
+  `/site/uruk/`, see *What is already true* — but not under Tauri's own origin.
+  A shell that does nothing but call `navigator.serviceWorker.register`
+  reported:
+
+  ```
+  origin: tauri://localhost
+  result: REFUSED — TypeError: serviceWorker.register() must be called with a
+          script URL whose protocol is either HTTP or HTTPS
+  ```
+
+  This is not a Tauri setting that can be changed. `use_https_scheme` in
+  tauri-utils' config affects **Windows and Android only**; macOS and Linux
+  always serve the app from `<scheme>://localhost`, and WKWebView will not
+  register a worker on a custom scheme. Note the trap: under `tauri dev` the
+  frontend is served from a localhost HTTP dev server, where registration
+  *succeeds* — so this question cannot be answered in dev mode, only by
+  running the built binary.
+- **A custom protocol handler in Rust.** ✅ The route. Rust answers `mdy://`
+  and the `<iframe>` navigates it normally, which is the one thing `srcdoc`
+  cannot do. Two shapes, and the second is better than the plan first assumed:
+  the webview can *push* every output over IPC after each build — simple, but
+  about 4 MB per rebuild and the outputs then exist twice — or the handler can
+  be asynchronous (`register_asynchronous_uri_scheme_protocol`) and ask the
+  webview for one page at a time. A reader navigates to one page at a time, so
+  that is roughly one round trip per navigation rather than 93 per rebuild, and
+  the outputs stay in JavaScript where they were built.
 - **`srcdoc` or a blob URL.** Simplest, and wrong: no navigation between pages,
   and relative URLs for `static/` assets have nothing to resolve against.
 
-Take the Service Worker if Tauri's origin permits it, the Rust handler if not.
-The decision is worth making early and explicitly, because the second answer
-puts the outputs in Rust and changes what the shell is.
+So the shell owns the protocol and the webview owns the outputs. Start with the
+asynchronous handler; fall back to pushing the whole map only if per-request
+latency proves worse than the copy.
 
 Exit: the reference corpus opens in the app, produces the same 93 pages the CLI
 does, and the preview can be navigated from the index to an article and back.
@@ -279,15 +295,6 @@ Exit: the app opens a document set on a phone. Memory is the thing to watch.
   artifact to test; not sharing means the CLI keeps `worker_threads` and real
   filesystem throughput. This does not have to be decided to start, but it
   should be decided before the two drift.
-
-- **Service Workers under Tauri's origin.** The preview design above rests on
-  one. Registration is fine over `http://`, which is what the WebKit check
-  used, but Tauri serves the app from a custom protocol on macOS and Linux and
-  from `http://tauri.localhost` on Windows, and WKWebView has historically been
-  strict about which schemes may register a worker. If it refuses, the Rust
-  custom-protocol handler is the fallback and the outputs move into Rust. This
-  is the highest-value unknown in the plan and the cheapest to answer: it needs
-  a Tauri shell that does nothing but call `navigator.serviceWorker.register`.
 
 - **WebKitGTK version variance.** The system webview on Linux is whatever the
   distribution ships, and it varies more than the other two platforms combined.

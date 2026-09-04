@@ -1,0 +1,15 @@
+{
+  "name": "@mdy-docs/mdy-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "mdy as a native application: a window on the system webview, the browser bundle inside it, and the filesystem reached through Tauri.",
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

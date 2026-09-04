@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mdy — service worker probe</title>
+<style>
+  body { font: 15px/1.5 ui-monospace, Menlo, monospace; padding: 2rem; }
+  pre { white-space: pre-wrap; }
+</style>
+<h1>Service worker probe</h1>
+<pre id="out">running…</pre>
+<script type="module">
+  const out = document.getElementById('out');
+  const say = async (result) => {
+    out.textContent = `origin: ${location.origin}\n${result}`;
+    // Reported to the host so the answer lands in a terminal, not a window.
+    try { await window.__TAURI__.core.invoke('report', { origin: location.origin, result }); } catch (e) {}
+  };
+  try {
+    if (!('serviceWorker' in navigator)) {
+      await say('UNSUPPORTED — navigator.serviceWorker is not present');
+    } else {
+      const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+      await navigator.serviceWorker.ready;
+      await say(`REGISTERED — scope ${reg.scope}, controller ${navigator.serviceWorker.controller ? 'yes' : 'not yet'}`);
+    }
+  } catch (err) {
+    await say(`REFUSED — ${err && err.name}: ${err && err.message}`);
+  }
+</script>
