@@ -10,12 +10,19 @@
 #
 #   1. it compiles                — the toolchain and the C
 #   2. `make native`, 17 checks   — the engines, the filesystem, guest import
-#   3. the example diffs          — byte-for-byte against what node produces
+#   3. `make check-golden`        — byte-for-byte against committed output
 #
 # The third is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
 # that is the failure to expect: `src/imports.js` compares absolute paths by
 # string prefix, and `path` is a natural key in nisaba.
+#
+# The reference is committed (packages/mdy-native/golden/) rather than produced
+# by running the node CLI alongside. The node path needs lamassu.wasm and
+# nisaba.wasm, which are emscripten build products and are not in git, so on a
+# Windows runner there would be nothing to compare against — and requiring an
+# emscripten toolchain on three platforms to answer a question about C is the
+# wrong trade. See that directory's README.
 
 name: native
 
@@ -57,6 +64,10 @@ jobs:
         with:
           msystem: MINGW64
           update: true
+          # The Windows PATH has to come through, or the node that
+          # setup-node installs is invisible to this shell — `npm: command
+          # not found`, which is what the first run said.
+          path-type: inherit
           install: >-
             make
             mingw-w64-x86_64-gcc
@@ -80,9 +91,11 @@ jobs:
       - name: Build lamassu
         run: make -C third_party/lamassu-js libs
 
+      # `make build`, not `make build/mdy-native` — the binary's name carries
+      # .exe on Windows and the caller should not have to know that.
       - name: Build the backend
         working-directory: packages/mdy-native
-        run: make build/mdy-native
+        run: make build
 
       - name: Bundle mdy-docs for it
         working-directory: packages/mdy-native
@@ -92,45 +105,23 @@ jobs:
       # $.render onto a second lamassu instance, cuneiform through both
       # engines' UTF-8/UTF-16 conversion, the filesystem, and a guest import
       # that imports its own dependency. Non-zero exit on any failure.
+      # `make native` rather than naming the binary, for the .exe reason above.
       - name: Run the checks
         working-directory: packages/mdy-native
-        run: ./build/mdy-native build/mdy.js
+        run: make native
 
-      # The real regression test. Each example is built twice — once by the
-      # node CLI, once by the native backend — and compared byte for byte.
-      - name: Build every example both ways and diff
+      # The real regression test: three sites built natively and compared byte
+      # for byte against committed output from the node CLI.
+      - name: Check against the golden output
         working-directory: packages/mdy-native
-        run: |
-          set -e
-          fail=0
-          for site in fixture ../../examples/docs-site ../../examples/messaging; do
-            name=$(basename "$site")
-            rm -rf "build/ci-$name-node" "build/ci-$name-native"
-            node ../../bin/mdy.js build "$site" --out "build/ci-$name-node" > /dev/null
-            ./build/mdy-native build/site.js "$site" "build/ci-$name-native" > /dev/null
-            if diff -r "build/ci-$name-node" "build/ci-$name-native"; then
-              echo "  $name: identical"
-            else
-              echo "  $name: DIFFERS"
-              fail=1
-            fi
-          done
-          exit $fail
+        run: make check-golden
 
       - name: Report the binary
         run: ls -l packages/mdy-native/build/mdy-native*
 
-  # mdy-docs itself, which the native backend depends on being correct. Cheap,
-  # and it means a red native job is unambiguously about the native backend.
-  package:
-    name: mdy-docs tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: npm install --no-audit --no-fund
-      - run: npm test
+  # NOT HERE: mdy-docs' own 776 tests. They run the engines through
+  # WebAssembly, and lamassu.wasm/nisaba.wasm are emscripten build products
+  # that are not in git — so running them in CI means an emscripten toolchain,
+  # which is a workflow of its own and not this one's question. This job asks
+  # whether the NATIVE backend builds and is correct on three platforms; the
+  # golden outputs above are how it knows the answer without node.
