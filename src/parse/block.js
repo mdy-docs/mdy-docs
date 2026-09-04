@@ -285,6 +285,13 @@ export function fromMdy(document, options = {}) {
   })
 
   const children = parseBlocks(0, lines.length, 0)
+
+  // Numbering waits for the finished tree, because that is the only place
+  // reading order exists: a list is built before the paragraph above it is
+  // closed, so numbers handed out at reference time come out shuffled. See
+  // renumber() in footnote.js.
+  footnoteState?.renumber(children)
+
   const notes = footnoteState?.section()
 
   if (notes) children.push(notes)
