@@ -7,3 +7,6 @@
 [submodule "third_party/sukkal-msg"]
 	path = third_party/sukkal-msg
 	url = https://github.com/mdy-docs/sukkal-msg.git
+[submodule "packages/mdy-native/third_party/quickjs"]
+	path = packages/mdy-native/third_party/quickjs
+	url = https://github.com/bellard/quickjs.git

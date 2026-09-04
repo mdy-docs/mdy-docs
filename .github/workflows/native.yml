@@ -1,0 +1,130 @@
+# The native backend, on every platform it is meant to reach.
+#
+# What this is actually for: mdy-native is C, and the two engines under it are
+# C, so "does it build elsewhere" is a question no amount of local testing on
+# one machine answers. Windows is the reason this file exists — see
+# docs/desktop-plan.md, Phase 4 — but macOS and Linux run too, because a
+# Windows failure is only informative if the others are green.
+#
+# The checks are ordered so a failure says where it is:
+#
+#   1. it compiles                — the toolchain and the C
+#   2. `make native`, 17 checks   — the engines, the filesystem, guest import
+#   3. the example diffs          — byte-for-byte against what node produces
+#
+# The third is the one that catches a path bug. A build that produces DIFFERENT
+# pages rather than an error would pass every other check here, and on Windows
+# that is the failure to expect: `src/imports.js` compares absolute paths by
+# string prefix, and `path` is a natural key in nisaba.
+
+name: native
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false   # a Windows failure must not hide a Linux one
+      matrix:
+        include:
+          - { name: macOS,   os: macos-latest,  shell: bash }
+          - { name: Linux,   os: ubuntu-latest, shell: bash }
+          - { name: Windows, os: windows-latest, shell: 'msys2 {0}' }
+
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # QuickJS's own Makefile has an MSYSTEM branch, so mingw-w64 is a
+      # configuration its authors support. That is why this is MSYS2 and not
+      # MSVC: Bellard's QuickJS does not build under MSVC at all, and
+      # switching to the quickjs-ng fork to get it is a bigger decision than a
+      # CI job should make.
+      - name: Set up MSYS2
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            diffutils
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Both engines come from source. lamassu's archives are built by its own
+      # Makefile; nisaba's sources are compiled directly by ours.
+      - name: Build lamassu
+        run: make -C third_party/lamassu-js libs
+
+      - name: Build the backend
+        working-directory: packages/mdy-native
+        run: make build/mdy-native
+
+      - name: Bundle mdy-docs for it
+        working-directory: packages/mdy-native
+        run: node scripts-build.mjs && node scripts-build.mjs site
+
+      # 17 checks across every boundary: a $.find into nisaba, a nested
+      # $.render onto a second lamassu instance, cuneiform through both
+      # engines' UTF-8/UTF-16 conversion, the filesystem, and a guest import
+      # that imports its own dependency. Non-zero exit on any failure.
+      - name: Run the checks
+        working-directory: packages/mdy-native
+        run: ./build/mdy-native build/mdy.js
+
+      # The real regression test. Each example is built twice — once by the
+      # node CLI, once by the native backend — and compared byte for byte.
+      - name: Build every example both ways and diff
+        working-directory: packages/mdy-native
+        run: |
+          set -e
+          fail=0
+          for site in fixture ../../examples/docs-site ../../examples/messaging; do
+            name=$(basename "$site")
+            rm -rf "build/ci-$name-node" "build/ci-$name-native"
+            node ../../bin/mdy.js build "$site" --out "build/ci-$name-node" > /dev/null
+            ./build/mdy-native build/site.js "$site" "build/ci-$name-native" > /dev/null
+            if diff -r "build/ci-$name-node" "build/ci-$name-native"; then
+              echo "  $name: identical"
+            else
+              echo "  $name: DIFFERS"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Report the binary
+        run: ls -l packages/mdy-native/build/mdy-native*
+
+  # mdy-docs itself, which the native backend depends on being correct. Cheap,
+  # and it means a red native job is unambiguously about the native backend.
+  package:
+    name: mdy-docs tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm test
