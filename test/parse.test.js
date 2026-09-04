@@ -2051,7 +2051,13 @@ describe('script', () => {
     const file = mdy({script: true}).processSync('% missing.thing\ntext')
 
     expect(String(file)).toBe('<p>text</p>')
-    expect(file.messages[0].reason).toContain('missing is not defined')
+    // Matched loosely because the wording is the JS ENGINE's, not ours: V8
+    // says `missing is not defined` and QuickJS says `'missing' is not
+    // defined`. What this test is about is that the failure is reported and
+    // names the thing that was missing — script blocks run in the host
+    // runtime (`new Function`, see src/parse/script.js), so which runtime
+    // that is depends on where mdy-docs is running.
+    expect(file.messages[0].reason).toMatch(/'?missing'? is not defined/)
   })
 
   test('a raw span is not raw to the code stage, which runs first', () => {

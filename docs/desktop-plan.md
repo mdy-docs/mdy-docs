@@ -721,9 +721,28 @@ sets mtimes to checkout time.
 
 `fail-fast: false`, so a Windows failure cannot hide a Linux one.
 
-**Not in this workflow: mdy-docs' own 776 tests.** They run the engines through
-WebAssembly, so they need an emscripten toolchain — a workflow of its own, and
-a different question from whether the C builds.
+**mdy-docs' own tests run against the native backend too** — 684 of the 776, on
+all three platforms, from the same files `npm test` uses rather than a copy or
+a rewrite. Only what `node:test`, `node:assert`, `node:fs` and friends resolve
+to changes; see [../packages/mdy-native/tests-entry.mjs](../packages/mdy-native/tests-entry.mjs).
+That is the strongest evidence for the claim this whole phase rests on, which
+is that the backend runs mdy-docs *unchanged*.
+
+The 91 that do not run are properties of the runtime, not gaps in the port: a
+subprocess (`cli.test.js`), a `node:http` server (`serve.test.js`), OPFS, a
+browser DOM, and WebAssembly for the image codecs — plus `build.test.js`, which
+builds `examples/blog` at module top level and that example calls `$.resize`.
+
+Porting the suite paid for itself four times over, and each is recorded in that
+package's README: a collection with no lifetime (fixed with a GC finalizer, the
+same lifetime the WASM binding gets), a rejected host call wrapped rather than
+propagated (which buried a cyclic-render error under a dozen copies of its own
+prefix), no `setTimeout` at all, and one test coupled to V8's exact wording of
+a `ReferenceError`.
+
+Still not in any workflow: running the suite through **WebAssembly**, which is
+what `npm test` does locally. That needs an emscripten toolchain and is a
+workflow of its own.
 
 Exit: an installable artifact on each platform, and the reference corpus
 building byte-identically on all three.

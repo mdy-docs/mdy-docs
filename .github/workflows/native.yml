@@ -10,7 +10,10 @@
 #
 #   1. it compiles                — the toolchain and the C
 #   2. `make native`, 17 checks   — the engines, the filesystem, guest import
-#   3. `make check-golden`        — byte-for-byte against committed output
+#   3. `make test`, 684 tests     — mdy-docs' OWN suite, run against this
+#                                   backend from the same files `npm test`
+#                                   uses (see packages/mdy-native/tests-entry.mjs)
+#   4. `make check-golden`        — byte-for-byte against committed output
 #
 # The third is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
@@ -106,7 +109,7 @@ jobs:
 
       - name: Bundle mdy-docs for it
         working-directory: packages/mdy-native
-        run: node scripts-build.mjs && node scripts-build.mjs site
+        run: node scripts-build.mjs && node scripts-build.mjs site && node scripts-build.mjs tests
 
       # 17 checks across every boundary: a $.find into nisaba, a nested
       # $.render onto a second lamassu instance, cuneiform through both
@@ -119,6 +122,15 @@ jobs:
 
       # The real regression test: three sites built natively and compared byte
       # for byte against committed output from the node CLI.
+      # mdy-docs' own test suite, against this backend. Not a copy and not a
+      # rewrite — the same files `npm test` runs, with node:test, node:assert
+      # and node:fs aliased to shims over the C. That is the strongest evidence
+      # for the backend's actual claim, which is that it runs mdy-docs
+      # unchanged.
+      - name: Run mdy-docs' own test suite natively
+        working-directory: packages/mdy-native
+        run: make test
+
       # A golden site whose output moves would go red for something that is not
       # a regression, so the property is proved rather than trusted: build,
       # touch every source, build again, diff.
