@@ -132,12 +132,14 @@ is emscripten's wrapper: the first attempt failed on
 `await import("node:module")` inside `lamassu.mjs`, which is the glue, not the
 engine.
 
-The honest caveat: 8× applies to the JavaScript layer only. The whole-build
-number cannot be measured until the bindings exist, and the hottest component
-is the MDY front end at 8.8× — our own 4,441 lines, which produce hast
-directly. If throughput ever becomes the constraint, porting that one component
-to C is the targeted answer, and it would not cost rehype, since markdown would
-still arrive through remark.
+The honest caveat: 8× applies to the JavaScript layer only, and it was measured
+on the ingest phase. **Now that the bindings exist, the whole-build number is a
+wash** — see Phase 1b. A build spends most of its time inside lamassu, and
+native lamassu gains back about what QuickJS gives up. The hottest JS component
+is still the MDY front end at 8.8× — our own 4,441 lines, which produce hast
+directly — so if throughput ever does become the constraint, porting that one
+component to C is the targeted answer, and it would not cost rehype, since
+markdown would still arrive through remark.
 
 ## Architecture — a window, a provider, and the bundle you already have
 
@@ -384,6 +386,36 @@ changes is that it talks to a backend instead of being one.
 
 Exit: the reference corpus builds to the same 93 pages the CLI produces,
 outside a browser, in a binary that does not link a renderer.
+
+**mdy-docs renders on it, and the cost has been measured.** `make native` in
+[../packages/mdy-native](../packages/mdy-native) bundles the package with the
+two engine imports aliased to shims and runs `renderDocumentSet` inside the
+host — a `$.find` crossing into nisaba, a nested `$.render` recursing onto a
+second lamassu VM, cuneiform surviving both engines' UTF-8/UTF-16 boundary.
+Nothing in mdy-docs was changed; the substitution is two esbuild aliases, and
+the shims behind them are 130 lines together.
+
+The same 200-document set both ways, on the same machine:
+
+|                     | wall  | peak RSS | runtime on disk |
+| ------------------- | ----- | -------- | --------------- |
+| node + WASM engines | 300ms | 138 MB   | ~110 MB (node)  |
+| mdy-native          | 314ms | 21 MB    | 1.8 MB stripped |
+
+**Time is a wash and memory is 6.6× smaller** — a better result than the 8×
+estimate above, and the reason corrects it. That 8× was the JavaScript layer
+measured alone, on the ingest phase. A build of a real document set does not
+spend its time there; it spends it inside lamassu running templates, which is
+now C instead of WebAssembly. What lamassu gains back is very nearly what
+QuickJS gives up.
+
+The memory number does not cancel, and memory is what this was for: the webview
+died at page 45 against a 1146 MB ceiling. This does the same work in a seventh
+of the space with no ceiling above it.
+
+What remains before the corpus itself builds is a filesystem provider over
+QuickJS's `std`/`os` and a module loader for guest `import()`. Neither is
+structural.
 
 **The bridge and async host calls are done.**
 [../packages/mdy-native](../packages/mdy-native) links QuickJS and lamassu in
