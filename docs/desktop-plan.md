@@ -385,6 +385,22 @@ changes is that it talks to a backend instead of being one.
 Exit: the reference corpus builds to the same 93 pages the CLI produces,
 outside a browser, in a binary that does not link a renderer.
 
+**The bridge and async host calls are done.**
+[../packages/mdy-native](../packages/mdy-native) links QuickJS and lamassu in
+one 1.8 MB binary, and a lamassu program calls out to a function implemented in
+QuickJS — which is what every `$` becomes. The async contract holds without
+touching mdy-docs or the language: the native pumps QuickJS's job queue until
+the promise settles and returns synchronously, so `$.find(q)` still returns
+documents. Re-entrant `$.render` works, because the inner run takes its own VM
+exactly as the pool does. A promise that cannot settle is reported rather than
+hung on.
+
+Two integration costs worth knowing before starting: lamassu and QuickJS share
+the `js_` namespace and collide both in headers (`JS_TAG_STRING` is a macro in
+one and an enum member in the other) and in symbols (both define `js_dtoa`), so
+each engine is wrapped in its own translation unit and the archives are
+pre-linked with the internal symbol localised.
+
 ### Phase 5 — the same shell on iOS
 
 Tauri 2 targets iOS and Android from the same project. This is the phase
