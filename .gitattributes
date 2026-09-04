@@ -1,11 +1,24 @@
-# The golden outputs are compared BYTE FOR BYTE against what the native backend
-# writes, and the backend writes exactly the bytes a document produced — it
-# opens output files in binary mode on every platform. Git's autocrlf is on by
-# default on Windows runners, so without this the checkout would rewrite every
-# line ending in golden/ and the comparison would fail on Windows for a reason
-# that has nothing to do with the code under test.
+# LINE ENDINGS ARE BUILD OUTPUT HERE, so git must not rewrite them.
+#
+# Windows runners default to core.autocrlf=true. That is usually harmless, and
+# here it is not: `static/` is copied through byte for byte (buildSite reads and
+# writes it with readBinary/writeBinary, and the native backend opens files in
+# binary mode on every platform), so a stylesheet checked out with CRLF is a
+# stylesheet emitted with CRLF. Comparing that against a reference committed
+# with LF fails on Windows for a reason that has nothing to do with the code —
+# which is exactly what the first green-on-Linux run reported.
+#
+# The rule is: anything whose bytes reach the output, and the output itself.
+
+# The committed reference the native backend is checked against.
 packages/mdy-native/golden/** -text
 
-# Same reasoning for the sources those outputs are built from: a .mdy file
-# checked out with CRLF is a different document.
-*.mdy -text
+# Copied through verbatim by buildSite — see the note above.
+**/static/** -text
+
+# Document sources. A .mdy file checked out with CRLF is a different document:
+# the `%`-line compiler and front-matter fences are line-oriented.
+*.mdy  -text
+*.md   -text
+*.yaml -text
+*.yml  -text
