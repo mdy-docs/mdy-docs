@@ -83,8 +83,15 @@ jobs:
       # makes `npm ci` fail for a reason that has nothing to do with what this
       # workflow is testing. The registry dependencies are still resolved
       # through the lockfile.
+      # --ignore-scripts, and it is not belt-and-braces. `@mdy-docs/nisaba-db`
+      # pulls in node-opfs, which pulls in fs-ext, which has a binding.gyp —
+      # so a plain install runs node-gyp and fails on Windows for want of
+      # Visual Studio. Nothing on this path uses it: the native backend
+      # reaches the filesystem through C, and node is here only to run
+      # esbuild, which resolves its platform binary from optionalDependencies
+      # and needs no install script (verified).
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install --ignore-scripts --no-audit --no-fund
 
       # Both engines come from source. lamassu's archives are built by its own
       # Makefile; nisaba's sources are compiled directly by ours.
@@ -112,6 +119,13 @@ jobs:
 
       # The real regression test: three sites built natively and compared byte
       # for byte against committed output from the node CLI.
+      # A golden site whose output moves would go red for something that is not
+      # a regression, so the property is proved rather than trusted: build,
+      # touch every source, build again, diff.
+      - name: Check the golden sites are deterministic
+        working-directory: packages/mdy-native
+        run: make check-determinism
+
       - name: Check against the golden output
         working-directory: packages/mdy-native
         run: make check-golden

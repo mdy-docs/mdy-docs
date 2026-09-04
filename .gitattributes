@@ -1,0 +1,11 @@
+# The golden outputs are compared BYTE FOR BYTE against what the native backend
+# writes, and the backend writes exactly the bytes a document produced — it
+# opens output files in binary mode on every platform. Git's autocrlf is on by
+# default on Windows runners, so without this the checkout would rewrite every
+# line ending in golden/ and the comparison would fail on Windows for a reason
+# that has nothing to do with the code under test.
+packages/mdy-native/golden/** -text
+
+# Same reasoning for the sources those outputs are built from: a .mdy file
+# checked out with CRLF is a different document.
+*.mdy -text
