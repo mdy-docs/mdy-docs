@@ -591,11 +591,13 @@ the four `bj_io` callbacks the host supplies. The entire platform-specific
 surface is 361 lines of our own: [fsx.c](../packages/mdy-native/src/fsx.c) and
 [nis.c](../packages/mdy-native/src/nis.c).
 
-**It builds on all three, and the output is byte-identical.** ✅
+**It builds on all three, the output is byte-identical, and mdy-docs' own test
+suite passes on every one.** ✅
 
 ```
 success  macOS      success  Linux      success  Windows
   all 17 checks passed
+  # native: 684 passed, 0 failed, 1 skipped
   fixture: identical to golden
   fixture-pkg: identical to golden
   messaging: identical to golden
@@ -676,7 +678,8 @@ Not yet exercised: case-insensitivity (two spellings of one file becoming two
 documents, since `path` is a natural key in nisaba) and `\\?\` long paths.
 Both remain open questions.
 
-**Three things CI found that reasoning had not.**
+**Five things CI found that reasoning had not.** The last two came from
+porting the test suite, and only Windows could have found them.
 
 - **glibc hides POSIX declarations under `-std=c11`** — `strdup` came back as
   an implicit declaration and `st_mtim` as an unknown field. Both compile on
@@ -691,6 +694,20 @@ Both remain open questions.
   stylesheet checked out with CRLF is a stylesheet emitted with CRLF, and
   Windows runners default to `core.autocrlf=true`. `.gitattributes` marks
   everything whose bytes reach the output, and the output itself, as `-text`.
+- **A timer that is not due yet is not "nothing left to run".** Windows' clock
+  has ~15.6 ms granularity and `Sleep` can return early, so the host's event
+  loop would wake from a 10 ms timer with the clock reading the same tick, fire
+  nothing, and report a promise as unsettleable. A timer existing means
+  progress is guaranteed, so waiting *is* progress. macOS's finer clock hid
+  this completely.
+- **`/C:/…` is a drive path with a spurious leading slash** — and this is the
+  open question above arriving as a concrete failure. mdy-docs says "this path
+  is absolute" by passing it as `fs.read('/', absolutePath)`, and
+  `nodeFsProvider` joins the two before reaching the filesystem; on Windows
+  that produces `/D:/…`, which names nothing, and every guest `import` failed.
+  Node's own win32 `join` produces the same thing — it is not a case it was
+  built for. Stripping leading slashes before a drive letter is the same rule
+  `fileURLToPath` applies to `file:///C:/x`.
 
 Then packaging: sign and notarise on macOS; AppImage or `.deb` on Linux; MSI or
 NSIS on Windows. Tauri's updater plugin if updates are wanted. And a real icon
