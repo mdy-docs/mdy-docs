@@ -106,28 +106,38 @@ export async function renderSite(root, options = {}) {
  * policy — e.g. the CLI's own "[write] <path>" logging; see bin/mdy.js).
  * Returns { pages, outDir, messages } — `messages` is every $.publish the
  * build made, in call order, unsent (see src/publish.js).
+ *
+ * Every write goes through the fs provider, so a host with no node:fs runs
+ * this function unchanged rather than reimplementing it — see the note inside.
  */
 export async function buildSite(root, options = {}) {
-  const { dirname, join, resolve } = await import('node:path');
-  const { existsSync } = await import('node:fs');
-  const { cp, mkdir, writeFile } = await import('node:fs/promises');
-  const { walkFiles } = await import('./vault.js');
+  /*
+   * Writes go through the SAME provider reads do. That is not tidiness: it is
+   * what lets a host with no node:fs at all — the native backend in
+   * packages/mdy-native, which reaches a POSIX filesystem through five C
+   * calls — run this function rather than reimplementing it beside it. The
+   * only thing still node-only is resolving a relative root against a real
+   * cwd, and that is already conditional for the same reason (see renderSite).
+   */
+  const fs = options.fs ?? nodeFsProvider();
+  if (!options.fs) {
+    const { resolve, join } = await import('node:path');
+    root = resolve(root);
+    options = { ...options, outDir: resolve(options.outDir ?? join(root, 'dist')) };
+  } else if (!options.outDir) {
+    options = { ...options, outDir: `${String(root).replace(/\/+$/, '')}/dist` };
+  }
+  const outDir = options.outDir;
 
-  root = resolve(root);
-  const outDir = resolve(options.outDir ?? join(root, 'dist'));
-  const { outputs, binaryOutputs, messages, roots } = await renderSite(root, options);
+  const { outputs, binaryOutputs, messages, roots } = await renderSite(root, { ...options, fs });
   const onWrite = options.onWrite;
 
   for (const [file, html] of outputs) {
-    const dest = join(outDir, file);
-    await mkdir(dirname(dest), { recursive: true });
-    await writeFile(dest, html);
+    await fs.write(outDir, file, html);
     onWrite?.(file);
   }
   for (const [file, bytes] of binaryOutputs) {
-    const dest = join(outDir, file);
-    await mkdir(dirname(dest), { recursive: true });
-    await writeFile(dest, bytes);
+    await fs.writeBinary(outDir, file, bytes);
     onWrite?.(file);
   }
 
@@ -143,24 +153,19 @@ export async function buildSite(root, options = {}) {
   //
   // Every root in the import graph gets its own static/ copied the same
   // way, root itself LAST (roots' own order — see script-site.js) — so
-  // root's own static/ overwrites (cp's default) any same-named file an
-  // import provides, matching Hugo/Jekyll's "site overrides theme".
-  const notSidecar = (src) => !src.endsWith('.mdy');
+  // root's own static/ overwrites any same-named file an import provides,
+  // matching Hugo/Jekyll's "site overrides theme".
+  //
+  // Byte-for-byte through readBinary/writeBinary rather than a recursive
+  // copy: `cp` is faster, but it is node's, and a static/ is assets rather
+  // than a corpus. A missing static/ lists as [] — the provider contract
+  // says so — which is why there is no existence check here.
   for (const dir of roots) {
-    const staticDir = join(dir, 'static');
-    if (!existsSync(staticDir)) continue;
-    if (onWrite) {
-      // A plain inventory pass, purely for reporting — cp() below does the
-      // actual copy; this never reads file content (walkFiles), so it's
-      // cheap even for a static/ full of images. walkFiles' own paths are
-      // already relative to staticDir and '/'-separated, which is exactly
-      // the dist-relative path once static/'s contents are flattened to
-      // the dist root (static/logo.png → dist/logo.png).
-      for (const f of await walkFiles(staticDir)) {
-        if (f.ext !== '.mdy') onWrite(f.path);
-      }
+    for (const file of await fs.list(dir, 'static', { extensions: null })) {
+      if (file.endsWith('.mdy')) continue;
+      await fs.writeBinary(outDir, file, await fs.readBinary(dir, `static/${file}`));
+      onWrite?.(file);
     }
-    await cp(staticDir, outDir, { recursive: true, filter: notSidecar });
   }
 
   // Messages are handed back rather than sent: they are the build's

@@ -373,7 +373,7 @@ that the shell fixes it.
 Exit: an installable artifact on each platform, with the reference corpus
 building correctly on Windows.
 
-### Phase 1b — the backend as a native binary
+### Phase 1b — the backend as a native binary ✅
 
 A host embedding QuickJS, with lamassu and nisaba linked as C rather than
 loaded as WebAssembly, running mdy-docs' own JavaScript. No renderer, no
@@ -387,35 +387,60 @@ changes is that it talks to a backend instead of being one.
 Exit: the reference corpus builds to the same 93 pages the CLI produces,
 outside a browser, in a binary that does not link a renderer.
 
-**mdy-docs renders on it, and the cost has been measured.** `make native` in
-[../packages/mdy-native](../packages/mdy-native) bundles the package with the
-two engine imports aliased to shims and runs `renderDocumentSet` inside the
-host — a `$.find` crossing into nisaba, a nested `$.render` recursing onto a
-second lamassu VM, cuneiform surviving both engines' UTF-8/UTF-16 boundary.
-Nothing in mdy-docs was changed; the substitution is two esbuild aliases, and
-the shims behind them are 130 lines together.
+**Done. The exit criterion is met.** The reference corpus builds to the same 93
+pages the CLI produces, outside a browser, in a 2 MB binary that links no
+renderer — and `diff -r` against the CLI's output says IDENTICAL. So do
+`examples/docs-site` (guest `import()` included) and `examples/messaging`.
 
-The same 200-document set both ways, on the same machine:
+Nothing in mdy-docs was forked to get there. The substitution is two esbuild
+aliases; the three shims behind them are 260 lines together. `buildSite` now
+writes through the fs provider rather than node:fs, so the native backend runs
+the CLI's own build function instead of a copy of it.
 
-|                     | wall  | peak RSS | runtime on disk |
-| ------------------- | ----- | -------- | --------------- |
-| node + WASM engines | 300ms | 138 MB   | ~110 MB (node)  |
-| mdy-native          | 314ms | 21 MB    | 1.8 MB stripped |
+**What it costs, on two workloads, because one number would mislead:**
 
-**Time is a wash and memory is 6.6× smaller** — a better result than the 8×
-estimate above, and the reason corrects it. That 8× was the JavaScript layer
-measured alone, on the ingest phase. A build of a real document set does not
-spend its time there; it spends it inside lamassu running templates, which is
-now C instead of WebAssembly. What lamassu gains back is very nearly what
-QuickJS gives up.
+|                                 | node   | native | ratio        |
+| ------------------------------- | ------ | ------ | ------------ |
+| reference corpus, 93 pages      | 10.6 s | 62.5 s | 5.9× slower  |
+| peak RSS                        | 816 MB | 593 MB | 1.4× smaller |
+| 200 templates (`make bench`)    | 305 ms | 297 ms | a wash       |
+| peak RSS                        | 139 MB | 19 MB  | 7.3× smaller |
+| runtime on disk                 | ~110 MB (node) | 2.0 MB | 55× smaller |
 
-The memory number does not cancel, and memory is what this was for: the webview
-died at page 45 against a 1146 MB ceiling. This does the same work in a seventh
-of the space with no ceiling above it.
+The spread between those rows is the whole finding. QuickJS has no JIT and runs
+mdy-docs' JavaScript several times slower than V8; lamassu is now C rather than
+WebAssembly and is faster. Which wins depends on the site. A template-heavy set
+is lamassu's work and the two cancel exactly. The corpus is 145 files of
+long-form prose — micromark, remark, hast, the MDY front end, JavaScript all of
+it — and there QuickJS's cost shows undiluted. A `sample` of the running build
+is unambiguous: every frame is `JS_CallInternal`, `js_array_flatten`,
+`js_array_every`, generators. No native call appears at all.
 
-What remains before the corpus itself builds is a filesystem provider over
-QuickJS's `std`/`os` and a module loader for guest `import()`. Neither is
-structural.
+So: **prose-heavy sites are slower here, template-heavy sites are not, and both
+use a fraction of the memory.** The 8× estimate above was right about the
+JavaScript layer and wrong to be read as a whole-build number in either
+direction.
+
+Memory is what this was for, and it holds on both. The webview died at page 45
+of this corpus against a 1146 MB ceiling; this finishes all 93, in less space
+than node, with nothing above it.
+
+If the corpus number ever needs to come down, the profile names the target and
+it is the one this document already named: the MDY front end, 4,441 lines of
+our own producing hast directly, measured at 8.8×. Porting that one component
+to C would not cost rehype — markdown still arrives through remark.
+
+**The filesystem and guest `import` are both shipped.** The provider is five
+POSIX calls in C behind the nine-method contract in
+[../src/fs-provider.js](../src/fs-provider.js); `watch` is deliberately absent,
+since a native recursive watcher is kqueue, inotify and
+`ReadDirectoryChangesW` — three implementations, and Phase 3's work. Guest
+`import` is `js_set_module_loader` routed out to mdy-docs' own loader, which
+still reads through the provider and still enforces the package boundary.
+
+**`$.resize` cannot work on this backend.** Its image codecs are WebAssembly,
+and QuickJS has none. mdy-docs now says so at the point it is true rather than
+failing as a missing `node:fs` and then again as a null tree.
 
 **The bridge and async host calls are done.**
 [../packages/mdy-native](../packages/mdy-native) links QuickJS and lamassu in

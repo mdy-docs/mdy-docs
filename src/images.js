@@ -54,6 +54,20 @@ let readyPromise;
 async function ensureCodecsReady() {
   if (!readyPromise) {
     readyPromise = (async () => {
+      /*
+       * The codecs are WebAssembly, so a runtime without it cannot resize at
+       * all — packages/mdy-native runs mdy-docs on QuickJS, which has no
+       * WebAssembly by design. Said here, where it is true, because the
+       * failure otherwise arrives as whatever the codec loader happens to trip
+       * over first (a missing node:fs, a module that will not instantiate) and
+       * then again, unrecognisably, as a null tree in whatever page used it.
+       */
+      if (typeof WebAssembly === 'undefined') {
+        throw new Error(
+          '$.resize needs WebAssembly for its image codecs, and this runtime has none. ' +
+            'Resize the image ahead of time, or build on a runtime that does.'
+        );
+      }
       if (typeof window !== 'undefined') return; // browser: jsquash self-inits lazily
       const [{ readFile }, { fileURLToPath }] = await Promise.all([
         import('node:fs/promises'),
