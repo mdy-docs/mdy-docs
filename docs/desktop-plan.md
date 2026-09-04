@@ -36,6 +36,12 @@ Byte-identical to the ordinary disk build, at the same speed, with
 MDY front end, remark/rehype/unified, yaml, lowlight — through esbuild for the
 browser: **858 KB raw, 264 KB gzipped**, in 127 ms.
 
+**Serving from memory works in the browser.** A Service Worker holding a `Map`
+of outputs, an `<iframe>` pointed at it, a link clicked, and a real navigation
+to `/site/uruk/` — the same shape [../src/serve.js](../src/serve.js) uses from
+Node, with no HTTP server and no Rust. Verified in WebKit over `http://`; see
+Phase 1 for the part that is not yet verified.
+
 **It runs in WebKit.** That bundle, plus `lamassu.wasm` (1008 KB) and
 `nisaba.wasm` (571 KB), loaded in WebKit — the same JavaScriptCore as WKWebView
 — rendering a two-document set with a cross-package import through
@@ -169,13 +175,39 @@ Four things the implementation settled that the plan had left implicit:
 It also emits `manifest.json` next to the bundle — what ships and how big —
 so a packaging step does not have to re-derive it.
 
-### Phase 1 — the shell and `tauriFsProvider`
+### Phase 1 — the shell, `tauriFsProvider`, and serving
 
 A Tauri app that opens a directory chooser, renders the site it is given, and
-serves the result into the webview from memory. No editing yet.
+**serves** it into a preview that can be navigated like a website. No editing
+yet, but the serving is not deferred: the app is a development environment, and
+watching a change appear is the thing it is for.
 
-Exit: the reference corpus opens in the app and produces the same 93 pages the
-CLI does.
+Serving from memory is what [../src/serve.js](../src/serve.js) already does —
+render to a `Map`, answer requests out of it, never touch `dist/`. The question
+is where that `Map` lives when there is no HTTP server, and there are three
+answers:
+
+- **A Service Worker in the webview.** The outputs stay in JavaScript, the
+  worker answers `fetch` for the preview's origin, and an `<iframe>` navigates
+  the site normally. No Rust involved and no copy of the outputs anywhere.
+  Verified working in WebKit — a served page, a link click, and a real
+  navigation to `/site/uruk/` — see *What is already true*. The open question
+  is whether registration is permitted under Tauri's own origin, which is a
+  custom protocol rather than `http://`, and that is the first thing Phase 1
+  should find out because everything else depends on it.
+- **A custom protocol handler in Rust.** The webview pushes outputs over IPC
+  after each build and Rust answers `mdy://` from them. Certain to work, at the
+  cost of copying every output across the boundary on every rebuild — about
+  4 MB for the reference corpus — and of the outputs existing twice.
+- **`srcdoc` or a blob URL.** Simplest, and wrong: no navigation between pages,
+  and relative URLs for `static/` assets have nothing to resolve against.
+
+Take the Service Worker if Tauri's origin permits it, the Rust handler if not.
+The decision is worth making early and explicitly, because the second answer
+puts the outputs in Rust and changes what the shell is.
+
+Exit: the reference corpus opens in the app, produces the same 93 pages the CLI
+does, and the preview can be navigated from the index to an article and back.
 
 ### Phase 2 — editing
 
@@ -248,14 +280,24 @@ Exit: the app opens a document set on a phone. Memory is the thing to watch.
   filesystem throughput. This does not have to be decided to start, but it
   should be decided before the two drift.
 
+- **Service Workers under Tauri's origin.** The preview design above rests on
+  one. Registration is fine over `http://`, which is what the WebKit check
+  used, but Tauri serves the app from a custom protocol on macOS and Linux and
+  from `http://tauri.localhost` on Windows, and WKWebView has historically been
+  strict about which schemes may register a worker. If it refuses, the Rust
+  custom-protocol handler is the fallback and the outputs move into Rust. This
+  is the highest-value unknown in the plan and the cheapest to answer: it needs
+  a Tauri shell that does nothing but call `navigator.serviceWorker.register`.
+
 - **WebKitGTK version variance.** The system webview on Linux is whatever the
   distribution ships, and it varies more than the other two platforms combined.
   Worth establishing a minimum version early, from what the WASM engines and
   CodeMirror actually require, rather than discovering it from a bug report.
 
-- **Whether the app builds or serves.** Rendering the whole site on every
-  keystroke is what `mdy dev` does and it is 2.5 s on the reference corpus.
-  In an app, rendering only the document being edited — which
-  `openDocumentSet` already supports without the site layer — may be the
-  better loop, with a full build on demand. That is a product decision, and it
-  changes how much of the site layer the app needs at all.
+- **Whether the app builds or serves.** ✅ Settled: it serves. The app is a
+  development environment and live updates are the point, so the whole site
+  layer is in scope rather than only `openDocumentSet`. What remains is a
+  performance question rather than a design one — a full render is 2.5 s on the
+  reference corpus, so if that proves too slow to sit behind a keystroke, the
+  answer is to render the edited document alone for the preview and the whole
+  site on a debounce, not to serve less.
