@@ -50,6 +50,19 @@ development browser for `mdy-live-preview` all along, so Asyncify in JSC was
 never really in doubt; this confirms the *site* layer, which that demo does not
 exercise.
 
+**It also runs with no JavaScript runtime at all.** Phase 1b: mdy-docs' own
+JavaScript in QuickJS, with lamassu and nisaba linked as C rather than loaded
+as WebAssembly, building the same 93 pages the CLI produces — `diff -r` says
+IDENTICAL — from a 2.0 MB binary that links no renderer and no node. The
+substitution is two esbuild aliases and 260 lines of shim.
+
+**Neither engine needs porting.** lamassu and nisaba contain zero platform
+`#ifdef`s between them: lamassu is portable C, and nisaba's I/O is entirely
+behind the four `bj_io` callbacks a host supplies. The whole platform-specific
+surface of the native backend is 361 lines of our own host code. This is the
+fact Phases 4 and 5 rest on, and it is why "five platforms" is a smaller
+problem than it sounds.
+
 ## Why not Electron, a bundled runtime, or C
 
 **Electron** ships Chromium and Node: 100–150 MB, and the Chromium update
@@ -132,39 +145,88 @@ is emscripten's wrapper: the first attempt failed on
 `await import("node:module")` inside `lamassu.mjs`, which is the glue, not the
 engine.
 
+That prediction held. It also has one consequence this section did not
+anticipate: **`$.resize` cannot work on the native backend at all**, because
+its image codecs are WebAssembly and there is no engine underneath them.
+mdy-docs now says so at the point it is true. See the open questions.
+
 The honest caveat: 8× applies to the JavaScript layer only, and it was measured
-on the ingest phase. **Now that the bindings exist, the whole-build number is a
-wash** — see Phase 1b. A build spends most of its time inside lamassu, and
-native lamassu gains back about what QuickJS gives up. The hottest JS component
-is still the MDY front end at 8.8× — our own 4,441 lines, which produce hast
-directly — so if throughput ever does become the constraint, porting that one
-component to C is the targeted answer, and it would not cost rehype, since
-markdown would still arrive through remark.
+on the ingest phase. **The whole-build number turned out to depend entirely on
+what the site is** — see Phase 1b for both measurements. A template-heavy set
+is a wash, because that work is lamassu's and native lamassu gains back what
+QuickJS gives up. A prose-heavy one is 5.9× slower, because that work is
+micromark, remark, hast and the MDY front end, and all of it is JavaScript.
 
-## Architecture — a window, a provider, and the bundle you already have
+The hottest component is the one this estimate already named — the MDY front
+end at 8.8×, our own 4,441 lines producing hast directly — and a profile of a
+native corpus build has now confirmed it rather than merely predicted it. See
+Phase 6.
 
-Three pieces, and only the middle one is new.
+## Architecture — one frontend, two backends, one protocol
 
-**The shell** is [Tauri](https://tauri.app) 2.x: a Rust host that opens a
-window on the system webview and exposes capabilities to it. WKWebView on
-macOS, WebKitGTK on Linux, WebView2 on Windows. Little Rust beyond
-configuration and the `fs` plugin.
+The original shape here was "the browser bundle runs in a webview". Phase 1b
+changed that: on every platform with a filesystem, the build now happens in a
+native binary and the webview is only a window. The web has no such binary and
+never will, so there are two backends — and the whole point of the design is
+that there are two rather than five.
 
-**`tauriFsProvider`** is the new code, and it is small. The provider contract in
-[../src/fs-provider.js](../src/fs-provider.js) is nine methods —
-`list`, `read`, `readBinary`, `mtime`, `size`, `write`, `writeBinary`,
-`remove`, and `watch`, the last already optional at every call site
-(`fs.watch?.(…)`). Tauri's `fs` and `fs-watch` plugins supply all of them.
-Expect 100–150 lines.
+| target  | backend                    | shell                  |
+| ------- | -------------------------- | ---------------------- |
+| web     | WASM engines in a Worker   | browser                |
+| macOS   | native C                   | Tauri / WKWebView      |
+| Linux   | native C                   | Tauri / WebKitGTK      |
+| Windows | native C                   | Tauri / WebView2       |
+| iOS     | native C, as a static lib  | Tauri iOS / WKWebView  |
 
-**The application** is the existing browser bundle, running in the webview,
-calling `renderSite(root, { fs: tauriFsProvider() })`. Everything above the
-provider is untouched.
+**The seam already exists**, which is why this is tractable. It is two esbuild
+aliases: `@mdy-docs/lamassu-js` and `@mdy-docs/nisaba-db` resolve to the real
+WASM packages for a browser bundle and to
+[../packages/mdy-native/shims/](../packages/mdy-native/shims/) for a native
+one. Everything above them — the parser, the document engine, the query
+engine, the site layer — is one codebase compiled twice, and the 776 tests
+cover the shared part. The same is true one layer down: file access has gone
+through the nine-method provider in [../src/fs-provider.js](../src/fs-provider.js)
+since long before any of this, and there are now five implementations of it
+(node, memory, OPFS, Tauri, native C) with nothing above them aware of which
+is present.
 
-Two things follow from this that are worth stating plainly. The webview *is*
-the JavaScript runtime, so there is nothing to ship one. And Tauri 2's
-capability system makes the shell declare which paths the frontend may touch —
-the same posture lamassu takes toward template code, one layer out.
+**A new platform is a new host, not a new port.** The 361 lines that know what
+platform they are on are all ours —
+[fsx.c](../packages/mdy-native/src/fsx.c) and
+[nis.c](../packages/mdy-native/src/nis.c) — and they sit in exactly the places
+both engines left for them: nisaba's `bj_io` callbacks, and the filesystem the
+site layer has always taken as an argument. Adding Windows means writing a
+second version of those two files, not touching anything above or below.
+
+**What is missing is the protocol.** The frontend and the backend currently
+talk in whatever shape each phase needed — mdy-app asks the webview for pages
+through a Tauri event round trip, because in Phase 1 the webview held them.
+That has to become one narrow interface, specified once and implemented twice:
+
+```
+open(root)                 → session
+build()                    → { pages, messages }
+outputs(path)              → bytes | null
+list/read/write/remove/…   → the fs-provider nine
+watch()                    → change events
+```
+
+Native, that is Tauri commands over the QuickJS host. On the web, it is a
+Worker holding the WASM bundle. Above it, the editor, the file tree and the
+preview are written once for five targets. See Phase 1c.
+
+**The preview is the same iframe both ways, served differently.** Natively it
+is a custom protocol, which Phase 1 already proved. On the web it is a Service
+Worker — and the earlier "Service Workers are refused" finding needs reading
+precisely: the refusal is specific to a custom scheme like `tauri://localhost`,
+and on a real https origin registration is fine. Two implementations of "answer
+a request for an output path", one consumer.
+
+**The shell** stays [Tauri](https://tauri.app) 2.x on all four native targets:
+a Rust host that opens a window on the system webview — WKWebView on macOS and
+iOS, WebKitGTK on Linux, WebView2 on Windows — and exposes capabilities to it.
+The earlier reason to doubt it was the webview memory ceiling, and that concern
+dissolved when the build moved out of the webview.
 
 ## The editor is CodeMirror
 
@@ -183,22 +245,27 @@ open questions.
 
 ## What the webview costs
 
-**Every read is an IPC call.** A build of the reference corpus reads 192 files;
-at roughly 0.1–1 ms per Tauri round trip that is 50–200 ms of overhead on a
-cold build. The ingest memo in [../src/mdy.js](../src/mdy.js) means a rebuild
-re-reads but does not re-parse, so the recurring cost is smaller than the first.
-If it bites, the answer is a batched read added to the provider contract — an
-extension, not a workaround.
+Written when the webview was going to do the building. Most of it no longer
+applies, and saying which is the useful part.
 
-**No `worker_threads`.** Web Workers exist and each can hold its own WASM
-instance, so the parallel-render idea survives; it is spelled differently.
+**Every read is an IPC call** — obsolete natively. The build reads files
+through C now, not through Tauri. It is still true on the web, where the
+backend is a Worker, and there the answer is unchanged: a batched read added to
+the provider contract, an extension rather than a workaround.
 
-**Memory.** The reference corpus peaked at 265–400 MB of heap under Node.
-Comfortable on a desktop. It is the binding constraint on iOS, not here.
+**No `worker_threads`** — still true in both backends, and still fine. Web
+Workers exist on the web; natively the host owns its own threads if it ever
+wants them. The parallel-render idea survives in both, spelled differently.
 
-**No File System Access API in WebKit.** Irrelevant, because file access goes
-through the shell on every platform anyway — which means one code path rather
-than a Chromium one and a WebKit one.
+**Memory** — the constraint that drove Phase 1b, and it is worth restating with
+the measurement rather than the estimate. In the webview the reference corpus
+died at page 45 against a 1146 MB ceiling. The native backend finishes all 93
+at 593 MB peak, against node's 816 MB. Comfortable on a desktop. **Still the
+binding constraint on iOS**, where 593 MB would be killed — see Phase 5.
+
+**No File System Access API in WebKit** — irrelevant, and now doubly so. File
+access goes through the provider on every platform, and natively it does not
+touch the webview at all.
 
 ## Phases
 
@@ -340,39 +407,6 @@ needs a capability (`core:default`), and the shell cannot inspect its own
 preview — a live reload will have to be a `postMessage` or a reassigned `src`,
 not a reach into the document.
 
-### Phase 2 — editing
-
-CodeMirror, the file list, save, and the optimistic-concurrency check `mdy-web`
-already implements (send the mtime you loaded; a file that moved underneath
-answers with the current state rather than being clobbered). Live preview on
-the debounce, as `mdy-web` does it.
-
-Exit: a document can be opened, edited, previewed and saved, and a save that
-would clobber somebody else's is refused.
-
-### Phase 3 — watching
-
-`tauriFsProvider.watch` via the `fs-watch` plugin, wired to the same rebuild
-path `mdy dev` uses. The progress display in [../src/progress.js](../src/progress.js)
-already reports through hooks rather than a terminal, so an in-app progress
-line is a different renderer over the same events, not new instrumentation.
-
-Exit: editing a file in an external editor rebuilds the site in the app.
-
-### Phase 4 — three platforms
-
-Build, sign and notarise on macOS; AppImage or `.deb` on Linux; MSI or NSIS on
-Windows. Tauri's updater plugin if updates are wanted.
-
-This is also where Windows path handling finally has to exist. It does not
-today — [../src/imports.js](../src/imports.js) does POSIX string maths on
-purpose and says so — and no amount of packaging substitutes for writing it.
-Doing it here rather than earlier is a choice about sequencing, not a claim
-that the shell fixes it.
-
-Exit: an installable artifact on each platform, with the reference corpus
-building correctly on Windows.
-
 ### Phase 1b — the backend as a native binary ✅
 
 A host embedding QuickJS, with lamassu and nisaba linked as C rather than
@@ -473,14 +507,194 @@ one and an enum member in the other) and in symbols (both define `js_dtoa`), so
 each engine is wrapped in its own translation unit and the archives are
 pre-linked with the internal symbol localised.
 
-### Phase 5 — the same shell on iOS
+### Phase 1c — one protocol, two backends
 
-Tauri 2 targets iOS and Android from the same project. This is the phase
+The piece that decides whether the next three phases are written once or five
+times, so it comes before them.
+
+Today the frontend and the backend talk in whatever shape each phase needed.
+mdy-app asks the *webview* for pages through a Tauri event round trip, because
+in Phase 1 the webview held them; mdy-native has no frontend at all and takes a
+directory on argv. Neither is the interface, and writing the editor against
+either would bake in the wrong one.
+
+Specify it once — narrow, and shaped like what a document set actually is:
+
+```
+open(root)                 → session
+build()                    → { pages, messages }
+outputs(path)              → bytes | null
+list/read/write/remove/…   → the fs-provider nine
+watch()                    → change events
+```
+
+Then implement it twice. **Natively** it is Tauri commands into the QuickJS
+host; `site-entry.mjs` becomes a long-lived session rather than a one-shot
+build, which is mostly a matter of keeping the document set open between
+requests instead of dropping it. **On the web** it is a Worker holding the
+browser bundle, which Phase 0 already produces.
+
+The preview is part of this and is the same iframe both ways: a custom protocol
+natively (Phase 1 proved it), a Service Worker on the web. The Phase 1 finding
+that Service Workers are refused reads precisely — the refusal is specific to a
+custom scheme like `tauri://localhost`. On a real https origin, registration is
+fine.
+
+Getting this right is what makes Phases 2 and 3 one implementation for five
+targets. Getting it wrong is how the web build and the desktop build become two
+applications that happen to share a renderer.
+
+Exit: the same frontend code opens a document set, builds it and serves its
+preview, against both backends, with nothing above the protocol knowing which.
+
+### Phase 2 — editing
+
+CodeMirror, the file list, save, and the optimistic-concurrency check `mdy-web`
+already implements (send the mtime you loaded; a file that moved underneath
+answers with the current state rather than being clobbered). Live preview on
+the debounce, as `mdy-web` does it.
+
+Written against Phase 1c's protocol, so this is one implementation for five
+targets rather than a desktop editor and a web editor that drift.
+
+Exit: a document can be opened, edited, previewed and saved — in a browser and
+in the app, from the same code — and a save that would clobber somebody else's
+is refused.
+
+### Phase 3 — watching
+
+The rebuild path `mdy dev` already uses, driven by whichever `watch` the
+protocol is sitting on. The progress display in [../src/progress.js](../src/progress.js)
+already reports through hooks rather than a terminal, so an in-app progress
+line is a different renderer over the same events, not new instrumentation.
+
+Two implementations again, and this is the one place the native side is
+*behind* the others. `tauriFsProvider.watch` exists (the `fs-watch` plugin);
+`nativeFsProvider` has no `watch` at all, deliberately — it is optional at
+every call site, and a native recursive watcher is kqueue on macOS, inotify on
+Linux and `ReadDirectoryChangesW` on Windows. Three implementations, and this
+is where they belong. On the web there is nothing to watch: the editor knows
+what it changed.
+
+Exit: editing a file in an external editor rebuilds the site in the app, on all
+four native targets.
+
+### Phase 4 — Linux and Windows
+
+Two jobs that used to be one: making the native backend *compile and behave*
+elsewhere, and making an installable artifact. The first is the real work and
+it is smaller than it looks.
+
+**Nothing in either engine needs porting.** lamassu and nisaba contain zero
+platform `#ifdef`s between them — lamassu is portable C, nisaba's I/O is behind
+the four `bj_io` callbacks the host supplies. The entire platform-specific
+surface is 361 lines of our own: [fsx.c](../packages/mdy-native/src/fsx.c) and
+[nis.c](../packages/mdy-native/src/nis.c).
+
+Four things stand in the way, in order:
+
+1. **Vendor QuickJS.** The Makefile points at
+   `/usr/local/Cellar/quickjs/2026-06-04/`. A pinned submodule instead.
+2. **Make `js_dtoa` `static` upstream in lamassu.** It is declared in an
+   internal header and referenced from nowhere outside `js_number.c`, so hiding
+   it is a one-word change — and it deletes the
+   `ld -r -arch x86_64 -unexported_symbol` pre-link step, which is ld64-only
+   and the single most non-portable line in the build.
+3. **CMake.** The Makefile cannot reach MSVC or Xcode, and Phase 5 needs the
+   latter.
+4. **The Win32 branch**: `FindFirstFileW` for the walk, `CreateFileW` +
+   `OVERLAPPED` for `pread`/`pwrite`, `SetEndOfFile` for `ftruncate`,
+   `GetTempFileNameW` for the collection's backing file. The UTF-8/UTF-16
+   conversion it needs already exists in
+   [lam.c](../packages/mdy-native/src/lam.c) and should be lifted into a shared
+   util rather than written twice.
+
+**Spike Windows first, not last.** It is the only genuine unknown here and
+everything else is mechanical — but the risk is not the syscalls, it is the
+semantics. [../src/imports.js](../src/imports.js) decides a module is inside
+its package by *string prefix* on an absolute path, and drive letters,
+backslashes and a case-insensitive filesystem all bear on that; `path` is
+additionally a natural key in nisaba, where two spellings of one file must not
+become two documents. That code does POSIX string maths on purpose and says so.
+No amount of packaging substitutes for deciding what it means on Windows.
+
+Then packaging: sign and notarise on macOS; AppImage or `.deb` on Linux; MSI or
+NSIS on Windows. Tauri's updater plugin if updates are wanted. And a real icon
+set — `packages/mdy-app/src-tauri/icons/icon.png` is a generated placeholder
+that exists only because `generate_context!()` will not link without one.
+
+CI on all three, running `make native` (17 checks, non-zero exit) and the
+example diffs against the CLI's output. Those diffs are the real regression
+test: they are byte-for-byte, and they are what would catch a path bug that
+merely produces *different* pages rather than an error.
+
+Exit: an installable artifact on each platform, and the reference corpus
+building byte-identically on all three.
+
+### Phase 5 — iOS
+
+Tauri 2 targets iOS from the same project. This is the phase
 [site-plan.md](site-plan.md) was pointing at when it said the stack should
 power "an iOS note-taking/query app", and it is the reason the webview route
 was chosen over a sidecar.
 
-Exit: the app opens a document set on a phone. Memory is the thing to watch.
+**Why this route exists at all**, and it is worth stating because it is the
+whole justification for QuickJS over a faster engine: QuickJS is a pure
+interpreter. It needs no W^X-violating JIT pages, which is exactly what makes
+an embedded JavaScript engine shippable on iOS. Anything V8-based cannot go
+outside a webview there. The 5.9× we pay on prose is the price of a target that
+is otherwise closed.
+
+Two small pieces of work and one real one.
+
+Small: the backend becomes a **static library** rather than a binary — `main()`
+becomes `mdy_open`/`mdy_build`, which is an afternoon. And `/tmp` is hardcoded
+in [nis.c](../packages/mdy-native/src/nis.c) for the collection's backing file;
+on iOS that must be the app sandbox's temp directory.
+
+Real: **memory**. 593 MB peak on the reference corpus gets a process killed on
+a phone, and no amount of porting changes that — it is a property of holding
+every document's hast tree at once. This is the one place where the answer is
+architectural rather than mechanical, and Phase 6 is where it lives.
+
+Exit: the app opens a document set on a phone, and builds one sized to it.
+
+### Phase 6 — where the time and the memory go
+
+Two items, both measured rather than guessed, and both paying across every
+target at once. Sequenced last because nothing is blocked on them — but the
+iOS memory ceiling makes the first one a prerequisite for Phase 5 rather than a
+nicety.
+
+**Persist the collection.** [nis.c](../packages/mdy-native/src/nis.c) opens an
+unlinked temp file, so the whole document set is ingested from scratch on every
+cold start. Making it a real file keyed by mtime is the on-disk version of the
+ingest memo [../src/mdy.js](../src/mdy.js) already keeps in RAM, and it turns a
+cold start into an incremental one. It also caps peak memory, which is the iOS
+blocker: a set that lives in a B+tree does not have to live in the heap.
+
+The precedent is encouraging. Making `createIndex` real — it was a no-op until
+Phase 1b closed — took the corpus from 68.4 s to 62.5 s and **system time from
+9.1 s to 1.7 s**, because several hundred full scans per build stopped walking
+the collection file.
+
+**The MDY front end in C.** The one component where a port pays on all five
+targets simultaneously: native on four, WASM on the web. This document has
+named it twice as a hypothesis and the profile has now confirmed it — 4,441
+lines of our own producing hast directly, measured at 8.8×, and `sample` on a
+native corpus build shows every frame in `JS_CallInternal`,
+`js_array_flatten`, `js_array_every` and generators, with no native call
+appearing at all. That is where the 60 seconds are.
+
+It would not cost rehype. Markdown still arrives through remark; what moves is
+our own parser, which already produces hast and would keep producing it.
+
+This is also the honest answer to "is QuickJS fast enough". On template-heavy
+sites it already is — native lamassu pays for it exactly. On prose it is not,
+and the fix is not a faster JavaScript engine, because the JavaScript is ours.
+
+Exit: a cold corpus build reuses the previous ingest, and peak memory is a
+function of the working set rather than the corpus.
 
 ## Open questions
 
@@ -490,13 +704,20 @@ Exit: the app opens a document set on a phone. Memory is the thing to watch.
   hand-written stream mode for less. A third option is to keep shiki purely as
   a highlighter over decorations and accept that the editor does not understand
   the language it is showing. Deciding this decides how much of Phase 2 is
-  editor work rather than shell work, and it is the largest unknown in the plan.
+  editor work rather than shell work, and it is the largest unknown on the
+  frontend side — as Windows path semantics is on the backend side.
 
 - **Where the `.wasm` files come from.** ✅ for this repo's own build — Phase 0
-  copies them through the package graph and throws when one is absent. Still
-  open for the *app*: whichever bundler the shell uses has to answer it again,
-  and Vite answering it automatically is the reason
-  `packages/mdy-live-preview` never had to.
+  copies them through the package graph and throws when one is absent. Now a
+  *web-only* question: the native backend has no `.wasm` at all. Whichever
+  bundler the web frontend uses has to answer it again, and Vite answering it
+  automatically is the reason `packages/mdy-live-preview` never had to.
+
+- **What Windows paths mean.** The largest unknown on the backend side, and it
+  is semantic rather than mechanical — see Phase 4. `imports.js` compares absolute paths by
+  string prefix to enforce the package boundary, and `path` is a natural key in
+  nisaba. Drive letters, backslashes, case-insensitivity and `\\?\` long paths
+  all bear on both. Deciding this is a spike, not a port.
 
 - **What `$.emit` means in an app.** In a build it writes a file. In the
   delivery runtime it has nowhere to go, which
@@ -505,11 +726,23 @@ Exit: the app opens a document set on a phone. Memory is the thing to watch.
   are editing it is either an error, a preview, or a write, and the three are
   not close together.
 
-- **Whether the CLI shares the bundle.** `bin/mdy.js` could keep importing
-  `src/` under Node, or could run the same browser bundle. Sharing means one
-  artifact to test; not sharing means the CLI keeps `worker_threads` and real
-  filesystem throughput. This does not have to be decided to start, but it
-  should be decided before the two drift.
+- **Whether the CLI shares an artifact.** There are now three ways to run
+  mdy-docs: `bin/mdy.js` importing `src/` under node, the browser bundle, and
+  the native binary. The last two are the same source through two esbuild
+  configurations, so they cannot drift; the CLI can. Folding it onto the native
+  backend would make `mdy build` a 2 MB binary with no node at all — attractive,
+  and it costs `worker_threads` and V8's speed on prose, which is the same
+  trade Phase 6 is about. Not urgent, but it should be a decision rather than
+  an accident.
+
+- **`$.resize` on the native backend.** It cannot work: the codecs are
+  WebAssembly and QuickJS has none. mdy-docs now says so where it is true, and
+  `examples/blog` is the one example the native binary will not build. Three
+  ways out — link a C codec (lodepng plus a resampler, which is the shape the
+  rest of the stack already takes), shell out to the platform's imaging
+  library, or declare resize a build-time concern that belongs to the CLI. Not
+  urgent; it does become a real gap the day the app is meant to replace the
+  CLI.
 
 - **WebKitGTK version variance.** The system webview on Linux is whatever the
   distribution ships, and it varies more than the other two platforms combined.
@@ -519,7 +752,9 @@ Exit: the app opens a document set on a phone. Memory is the thing to watch.
 - **Whether the app builds or serves.** ✅ Settled: it serves. The app is a
   development environment and live updates are the point, so the whole site
   layer is in scope rather than only `openDocumentSet`. What remains is a
-  performance question rather than a design one — a full render is 2.5 s on the
-  reference corpus, so if that proves too slow to sit behind a keystroke, the
-  answer is to render the edited document alone for the preview and the whole
-  site on a debounce, not to serve less.
+  performance question rather than a design one, and Phase 1b sharpened it: a
+  full native build of the reference corpus is 62.5 s, which is far too slow to
+  sit behind a keystroke. The answer is unchanged in shape — render the edited
+  document alone for the preview and the whole site on a debounce — but the
+  margin is thinner than it looked, and Phase 6's persistent collection is what
+  makes an incremental rebuild the common case rather than the lucky one.

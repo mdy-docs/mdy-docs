@@ -86,3 +86,8 @@ order and the reasoning.
 `tauri::generate_context!()` will not link without one and requires **RGBA**
 specifically. Phase 4 needs a real icon set (`.icns`, `.ico`, and the several
 PNG sizes) before anything is bundled.
+
+Note that this package's design predates the backend split. It renders inside
+the webview, which Phase 1b superseded: the build now belongs in the native
+binary and this becomes the window in front of it. See the plan's Phase 1c for
+the protocol between them.
