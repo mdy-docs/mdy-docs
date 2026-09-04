@@ -126,7 +126,7 @@ than a Chromium one and a WebKit one.
 
 ## Phases
 
-### Phase 0 — the browser bundle becomes a build target
+### Phase 0 — the browser bundle becomes a build target ✅
 
 A checked-in browser build of `index.js`, and a test that renders a document
 set through `memoryFsProvider` in headless WebKit. Playwright is already a dev
@@ -141,6 +141,33 @@ before.
 
 Exit: `npm run build:browser` emits a bundle plus its `.wasm` files, and a test
 asserts it renders correctly under WebKit.
+
+**Done.** [../scripts/build-browser.mjs](../scripts/build-browser.mjs) bundles
+`index.js` to `dist/browser/` — 858 KB, node builtins external — and copies the
+engines beside it; [../test/browser/render.test.js](../test/browser/render.test.js)
+renders a two-root document set in WebKit and checks the artifact is complete.
+`npm run build:browser` and `npm run test:browser`, the latter kept out of
+`npm test` so the main suite still needs no browser.
+
+Four things the implementation settled that the plan had left implicit:
+
+- **esbuild was never a declared dependency.** It resolved from
+  `node_modules` transitively and would have vanished on a clean install. Now
+  in `devDependencies`, where anything a build step calls belongs.
+- **The wasm copy fails loudly at build time.** This was an open question below
+  — a missing `.wasm` fails at runtime, in a fetch, inside a webview. The build
+  resolves each engine through the package graph rather than by hardcoded path
+  and throws if a package that should carry one does not, so the failure moved
+  to where it can be read.
+- **`dist/browser/` needs no ignore rule.** `.gitignore`'s bare `dist` already
+  covers it, which is why the output goes there rather than to `dist-browser/`.
+- **The test has teeth, and that was checked rather than assumed.** Adding a
+  static `import … from 'node:fs'` to [../src/compose.js](../src/compose.js)
+  fails it; removing it passes. A browser test that cannot fail is worse than
+  none, because it reads as coverage.
+
+It also emits `manifest.json` next to the bundle — what ships and how big —
+so a packaging step does not have to re-derive it.
 
 ### Phase 1 — the shell and `tauriFsProvider`
 
@@ -202,10 +229,11 @@ Exit: the app opens a document set on a phone. Memory is the thing to watch.
   the language it is showing. Deciding this decides how much of Phase 2 is
   editor work rather than shell work, and it is the largest unknown in the plan.
 
-- **Where the `.wasm` files come from.** Vite emits them next to the bundle;
-  esbuild does not, and the WebKit check above only worked once they were
-  copied by hand. Whichever bundler the app uses, this is a step that has to be
-  deliberate, and a missing `.wasm` fails at runtime rather than at build time.
+- **Where the `.wasm` files come from.** ✅ for this repo's own build — Phase 0
+  copies them through the package graph and throws when one is absent. Still
+  open for the *app*: whichever bundler the shell uses has to answer it again,
+  and Vite answering it automatically is the reason
+  `packages/mdy-live-preview` never had to.
 
 - **What `$.emit` means in an app.** In a build it writes a file. In the
   delivery runtime it has nowhere to go, which
