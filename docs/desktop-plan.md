@@ -579,7 +579,7 @@ what it changed.
 Exit: editing a file in an external editor rebuilds the site in the app, on all
 four native targets.
 
-### Phase 4 — Linux and Windows
+### Phase 4 — Linux and Windows ✅ (the backend; packaging remains)
 
 Two jobs that used to be one: making the native backend *compile and behave*
 elsewhere, and making an installable artifact. The first is the real work and
@@ -591,7 +591,18 @@ the four `bj_io` callbacks the host supplies. The entire platform-specific
 surface is 361 lines of our own: [fsx.c](../packages/mdy-native/src/fsx.c) and
 [nis.c](../packages/mdy-native/src/nis.c).
 
-**The build no longer needs macOS.** ✅
+**It builds on all three, and the output is byte-identical.** ✅
+
+```
+success  macOS      success  Linux      success  Windows
+  all 17 checks passed
+  fixture: identical to golden
+  fixture-pkg: identical to golden
+  messaging: identical to golden
+```
+
+Windows through MSYS2/mingw-w64, a 7.7 MB `mdy-native.exe`. The four blockers
+below are done; what remains in this phase is packaging, not portability.
 
 1. **QuickJS is a submodule**, built from its five core sources rather than
    linked from Homebrew. `quickjs-libc` is deliberately excluded — it is the
@@ -645,29 +656,74 @@ and its own iOS/Android CI.
 which is enough for Phase 4; Phase 5 needs Xcode and that is where it becomes
 unavoidable.
 
-**Spike Windows first, not last.** It is the only genuine unknown here and
-everything else is mechanical — but the risk is not the syscalls, it is the
-semantics. [../src/imports.js](../src/imports.js) decides a module is inside
-its package by *string prefix* on an absolute path, and drive letters,
-backslashes and a case-insensitive filesystem all bear on that; `path` is
-additionally a natural key in nisaba, where two spellings of one file must not
-become two documents. That code does POSIX string maths on purpose and says so.
-No amount of packaging substitutes for deciding what it means on Windows.
+**The path semantics held.** This was the predicted risk —
+[../src/imports.js](../src/imports.js) decides a module is inside its package
+by *string prefix* on an absolute path, and drive letters, backslashes and a
+case-insensitive filesystem all bear on that. `golden/fixture-pkg` exists to
+test exactly it: a site importing a package whose layouts and JS modules
+resolve against that package's directory rather than its own. It comes out
+byte-identical on Windows.
+
+What made that work is keeping `/` as the separator everywhere and translating
+the one backslash the OS hands back, so nothing above the host ever sees a
+Windows-shaped path. The drive letter is handled in two places and both were
+found by reasoning rather than by CI: `fsx.c`'s path join, where an absolute
+`rel` under a root of `/` would otherwise produce `/C:/Users/…`, and
+`site-entry.mjs`, where `C:/work` would otherwise be treated as relative and
+get the cwd prepended.
+
+Not yet exercised: case-insensitivity (two spellings of one file becoming two
+documents, since `path` is a natural key in nisaba) and `\\?\` long paths.
+Both remain open questions.
+
+**Three things CI found that reasoning had not.**
+
+- **glibc hides POSIX declarations under `-std=c11`** — `strdup` came back as
+  an implicit declaration and `st_mtim` as an unknown field. Both compile on
+  macOS, which exposes them regardless, so this was invisible on the
+  development machine. `gnu11` now, which also suits mingw.
+- **`npm install` runs node-gyp and fails on Windows** for want of Visual
+  Studio: `@mdy-docs/nisaba-db` → `node-opfs` → `fs-ext` has a `binding.gyp`.
+  Worth flagging against this document's own first stated fact — "nothing in
+  the tree is native" — which was true when written and is not now. Nothing on
+  the native path uses it, so CI installs with `--ignore-scripts`.
+- **Line endings are build output.** `static/` is a verbatim passthrough, so a
+  stylesheet checked out with CRLF is a stylesheet emitted with CRLF, and
+  Windows runners default to `core.autocrlf=true`. `.gitattributes` marks
+  everything whose bytes reach the output, and the output itself, as `-text`.
 
 Then packaging: sign and notarise on macOS; AppImage or `.deb` on Linux; MSI or
 NSIS on Windows. Tauri's updater plugin if updates are wanted. And a real icon
 set — `packages/mdy-app/src-tauri/icons/icon.png` is a generated placeholder
 that exists only because `generate_context!()` will not link without one.
 
-CI on all three — [.github/workflows/native.yml](../.github/workflows/native.yml) —
-running `make native` (17 checks, non-zero exit) and then building every
-example twice, once by the node CLI and once natively, and diffing byte for
-byte. Those diffs are the real regression test, and they are what would catch a
-path bug that merely produces *different* pages rather than an error. On
-Windows that is the failure to expect: it would pass every other check in the
-job.
+CI on all three — [.github/workflows/native.yml](../.github/workflows/native.yml)
+— running `make native` (17 checks, non-zero exit) and then `make check-golden`,
+which builds three sites natively and compares them byte for byte against
+committed output. That comparison is the real regression test: it catches a
+path bug that produces *different* pages rather than an error, which would pass
+every other check in the job.
+
+The reference is **committed** rather than produced by running the node CLI
+alongside. The node path loads the engines through WebAssembly, and
+`lamassu.wasm`/`nisaba.wasm` are emscripten build products that are not in git
+— so on a Windows runner there would be nothing to compare against, and
+requiring an emscripten toolchain on three platforms to answer a question about
+C is the wrong trade. A fixed reference is also the stronger check: output that
+changes shows up as a diff in a pull request rather than two sides moving
+together and agreeing.
+
+`make check-determinism` runs first and proves each golden site is stable
+across an mtime change, because a golden site whose output moves goes red for
+something that is not a regression. `examples/docs-site` is not one of them for
+exactly that reason — it renders `formatDate(p.raw.mtime)`, and a git checkout
+sets mtimes to checkout time.
 
 `fail-fast: false`, so a Windows failure cannot hide a Linux one.
+
+**Not in this workflow: mdy-docs' own 776 tests.** They run the engines through
+WebAssembly, so they need an emscripten toolchain — a workflow of its own, and
+a different question from whether the C builds.
 
 Exit: an installable artifact on each platform, and the reference corpus
 building byte-identically on all three.
