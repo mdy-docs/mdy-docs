@@ -147,7 +147,7 @@ try {
     fs: provider,
     onSource: () => { if (++reads % 40 === 0) step(`ingested ${reads} source(s)`); },
     onIngest: ({ done, total }) => { if (done === total) step(`inserted ${total} document(s)`); },
-    onEmit: ({ count }) => { if (count % 20 === 0) step(`emitted ${count} page(s)`); },
+    onEmit: ({ count }) => { if (count % 5 === 0) { const v = globalThis.__vmStats || {}; step(`emitted ${count} page(s) — vms created=${v.created} discarded=${v.created - (v.live||0)}`); } },
   });
   outputs = site.outputs;
   // root's own static/ first, matching buildSite's last-write-wins copy order.

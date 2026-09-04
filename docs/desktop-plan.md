@@ -71,6 +71,74 @@ possibly never.
 
 The webview route is the only one that is small, keeps hast, and reaches iOS.
 
+## The backend is not a webview
+
+The plan above put the whole application in a webview: the shell opens a
+window, the browser bundle builds the site inside it. That was right about the
+frontend and wrong about the backend, and the reference corpus is what proved
+it — 139 articles reach page 45 and stop, the WebContent process pinned at
+1146 MB, no CPU, no progress, no error.
+
+The correction is a split, and it is the same split the repository already
+makes by having two packages. **mdy-docs is a backend** — documents, queries,
+rendering — and needs a JavaScript runtime, not a renderer. **mdy-web is a
+frontend** — an editor, a preview — and is a web application, wherever it is
+hosted. Running the build inside the process that draws the UI put a build tool
+on a memory budget sized for a web page.
+
+### Which runtime, measured
+
+The same ingest over the reference corpus — 189 sources, 10 MB of text: parse
+front matter and ```data fences, extract hashtags, compile every `%` line, then
+run the MDY front end over forty bodies. Identical output from all three (189
+documents, 3255 nodes), so this is the same work three ways.
+
+| | total | peak RSS | shipped size |
+| --- | --- | --- | --- |
+| Node (V8) | **2.2 s** | 362 MB | ~110 MB |
+| JavaScriptCore | 3.0 s | **530 MB** | 0 on macOS (system framework) |
+| QuickJS | 17.2 s | **131 MB** | ~1–3 MB |
+
+Two things fall out of that table, and the second is the one that decides.
+
+**Yes, there are JIT runtimes to embed.** V8 through `deno_core`/`rusty_v8`,
+and JavaScriptCore, which on macOS is a system framework — free, JIT, with
+WebAssembly, and reachable without a webview at all. On Linux it is
+libjavascriptcoregtk; on Windows there is no system JSC and V8 is the answer.
+
+**But the JIT is where the memory went.** JavaScriptCore standalone, doing only
+the ingest, peaks at 530 MB — four times QuickJS. That reframes the 1146 MB
+wall: it is not mainly a `WebContent` budget being stingy, it is what this
+workload costs in JSC. Embedding JSC directly would remove the cap and let it
+use the gigabyte, which is not the same as fixing it.
+
+So the trade is real and it is not the usual one. QuickJS is **8× slower and
+uses a third of the memory of V8, a quarter of JSC's**. For a tool whose
+failure mode has been running out of memory, that is the right side of the
+trade — and it comes with a ~1–3 MB runtime instead of ~110 MB.
+
+### What QuickJS costs, and what it does not
+
+It runs everything. Verified, not assumed: micromark, remark, unified, hast,
+rehype-stringify, yaml, lowlight and linkify all work unmodified, as do the MDY
+front end, front matter, ```data fences, hashtags and the `%`-line compiler.
+The only shim needed was `structuredClone`, and two of its four uses are ours.
+
+What it cannot do is WebAssembly — which is why this design wants the engines
+native rather than as WASM. lamassu, nisaba and baru-re are all C with working
+native builds already, so this is a binding exercise rather than a port, and
+native should beat the WASM they replace. The one thing that must be replaced
+is emscripten's wrapper: the first attempt failed on
+`await import("node:module")` inside `lamassu.mjs`, which is the glue, not the
+engine.
+
+The honest caveat: 8× applies to the JavaScript layer only. The whole-build
+number cannot be measured until the bindings exist, and the hottest component
+is the MDY front end at 8.8× — our own 4,441 lines, which produce hast
+directly. If throughput ever becomes the constraint, porting that one component
+to C is the targeted answer, and it would not cost rehype, since markdown would
+still arrive through remark.
+
 ## Architecture — a window, a provider, and the bundle you already have
 
 Three pieces, and only the middle one is new.
@@ -302,6 +370,20 @@ that the shell fixes it.
 
 Exit: an installable artifact on each platform, with the reference corpus
 building correctly on Windows.
+
+### Phase 1b — the backend as a native binary
+
+A host embedding QuickJS, with lamassu and nisaba linked as C rather than
+loaded as WebAssembly, running mdy-docs' own JavaScript. No renderer, no
+webview, no ceiling. `structuredClone` is the one shim; the emscripten
+wrappers are the one thing that must be replaced.
+
+This supersedes the webview for BUILDING. Phases 2 and 3 — the editor, and
+watching — remain a web frontend, which is what mdy-web already is; what
+changes is that it talks to a backend instead of being one.
+
+Exit: the reference corpus builds to the same 93 pages the CLI produces,
+outside a browser, in a binary that does not link a renderer.
 
 ### Phase 5 — the same shell on iOS
 
