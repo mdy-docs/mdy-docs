@@ -66,8 +66,14 @@ jobs:
         with:
           node-version: '22'
 
+      # `npm install`, not `npm ci`. This package links eight sibling packages by
+      # `file:` path — the engines, the bus, the editors — and their versions
+      # move whenever a submodule does, which puts the lockfile out of sync and
+      # makes `npm ci` fail for a reason that has nothing to do with what this
+      # workflow is testing. The registry dependencies are still resolved
+      # through the lockfile.
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       # Both engines come from source. lamassu's archives are built by its own
       # Makefile; nisaba's sources are compiled directly by ours.
@@ -126,5 +132,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm ci
+      - run: npm install --no-audit --no-fund
       - run: npm test

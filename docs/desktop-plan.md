@@ -591,23 +591,59 @@ the four `bj_io` callbacks the host supplies. The entire platform-specific
 surface is 361 lines of our own: [fsx.c](../packages/mdy-native/src/fsx.c) and
 [nis.c](../packages/mdy-native/src/nis.c).
 
-Four things stand in the way, in order:
+**The build no longer needs macOS.** ✅
 
-1. **Vendor QuickJS.** The Makefile points at
-   `/usr/local/Cellar/quickjs/2026-06-04/`. A pinned submodule instead.
-2. **Make `js_dtoa` `static` upstream in lamassu.** It is declared in an
-   internal header and referenced from nowhere outside `js_number.c`, so hiding
-   it is a one-word change — and it deletes the
-   `ld -r -arch x86_64 -unexported_symbol` pre-link step, which is ld64-only
-   and the single most non-portable line in the build.
-3. **CMake.** The Makefile cannot reach MSVC or Xcode, and Phase 5 needs the
-   latter.
-4. **The Win32 branch**: `FindFirstFileW` for the walk, `CreateFileW` +
-   `OVERLAPPED` for `pread`/`pwrite`, `SetEndOfFile` for `ftruncate`,
-   `GetTempFileNameW` for the collection's backing file. The UTF-8/UTF-16
-   conversion it needs already exists in
-   [lam.c](../packages/mdy-native/src/lam.c) and should be lifted into a shared
-   util rather than written twice.
+1. **QuickJS is a submodule**, built from its five core sources rather than
+   linked from Homebrew. `quickjs-libc` is deliberately excluded — it is the
+   `std`/`os` module layer, this host supplies its own natives, and leaving it
+   out leaves out most of what would have needed porting. `gnu11` rather than
+   `c11`, because `quickjs.c` uses `asm volatile` in its spin hint.
+2. **`js_dtoa` is `static`** in lamassu as of 52f0bfd, so the archives link
+   directly and the ld64-only `ld -r -all_load -unexported_symbol` pre-link is
+   gone. Worth recording how small that turned out to be: comparing the two
+   archives' symbol tables — 181 exports against 273 — `js_dtoa` was the *only*
+   name they had in common, so one word was the whole fix rather than the first
+   of a series.
+3. **Two regex engines, which the old build was papering over.** This was not
+   on the list and is the more serious of the two symbol problems. nisaba
+   vendors `mdy-docs/regex-engine`; lamassu has moved to `mdy-docs/baru-re`,
+   its successor — same ancestry, *different version*. Neither prefixes its
+   symbols and four names collide. The old build pre-linked lamassu into one
+   relocatable object, which loads every symbol unconditionally, so nisaba's
+   `regexp.o` was never pulled at all and any call it made to one of those four
+   resolved to **lamassu's differently versioned implementation**. Silent, and
+   the wrong kind of wrong.
+
+   They are renamed at compile time for now, which keeps each engine's calls
+   inside its own engine and fails loudly if the overlap ever grows. **The real
+   fix is for nisaba to use baru-re too**, so there is one regex engine in the
+   binary instead of two — an API migration (baru-re 0.5.0 lets the embedder
+   supply the allocator) and a task of its own.
+4. **The Win32 branch.** `FindFirstFileW` for the walk, `OVERLAPPED` for
+   `pread`/`pwrite`, `SetEndOfFile` for `ftruncate`,
+   `FILE_FLAG_DELETE_ON_CLOSE` for the collection's backing file — which is the
+   same self-deleting lifetime `mkstemp` + `unlink` gives on POSIX.
+
+   Two decisions inside it worth keeping. **Every path crosses this boundary as
+   UTF-8 and every Win32 call is the wide variant**: the narrow entry points go
+   through the process code page, which cannot spell most of what the reference
+   corpus is named. And **`/` stays the separator everywhere**, because Win32
+   accepts it in every path it is given — so the one place a backslash can
+   enter the system is `fsx_cwd`, where the OS hands one back, and it is
+   translated there rather than in the twenty places it would otherwise
+   surface.
+
+**MSYS2/mingw-w64, not MSVC**, and the reason is upstream rather than
+preference: Bellard's QuickJS does not build under MSVC at all, while its
+Makefile has an `MSYSTEM` branch — mingw is a configuration its authors
+support. Getting MSVC would mean switching to the `quickjs-ng` fork, which is a
+larger decision than a build system should make on its own. It is the obvious
+fallback if mingw proves unworkable, and `quickjs-ng` would also bring CMake
+and its own iOS/Android CI.
+
+**CMake is deferred**, not dropped. The Makefile reaches mingw through MSYS2,
+which is enough for Phase 4; Phase 5 needs Xcode and that is where it becomes
+unavoidable.
 
 **Spike Windows first, not last.** It is the only genuine unknown here and
 everything else is mechanical — but the risk is not the syscalls, it is the
@@ -623,10 +659,15 @@ NSIS on Windows. Tauri's updater plugin if updates are wanted. And a real icon
 set — `packages/mdy-app/src-tauri/icons/icon.png` is a generated placeholder
 that exists only because `generate_context!()` will not link without one.
 
-CI on all three, running `make native` (17 checks, non-zero exit) and the
-example diffs against the CLI's output. Those diffs are the real regression
-test: they are byte-for-byte, and they are what would catch a path bug that
-merely produces *different* pages rather than an error.
+CI on all three — [.github/workflows/native.yml](../.github/workflows/native.yml) —
+running `make native` (17 checks, non-zero exit) and then building every
+example twice, once by the node CLI and once natively, and diffing byte for
+byte. Those diffs are the real regression test, and they are what would catch a
+path bug that merely produces *different* pages rather than an error. On
+Windows that is the failure to expect: it would pass every other check in the
+job.
+
+`fail-fast: false`, so a Windows failure cannot hide a Linux one.
 
 Exit: an installable artifact on each platform, and the reference corpus
 building byte-identically on all three.
