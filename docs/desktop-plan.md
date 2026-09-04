@@ -225,6 +225,18 @@ latency proves worse than the copy.
 Exit: the reference corpus opens in the app, produces the same 93 pages the CLI
 does, and the preview can be navigated from the index to an article and back.
 
+**Serving is done.** [../packages/mdy-app](../packages/mdy-app) registers
+`mdy://` with an asynchronous handler that asks the webview per request, and a
+link inside a served page reaches another served page — verified by the second
+request arriving, since the preview is cross-origin from the shell and its DOM
+is deliberately out of reach. What remains of this phase is `tauriFsProvider`
+and rendering a real directory, which changes only where the outputs come from.
+
+Two costs the plan had not accounted for, both cheap once known: `event.listen`
+needs a capability (`core:default`), and the shell cannot inspect its own
+preview — a live reload will have to be a `postMessage` or a reassigned `src`,
+not a reach into the document.
+
 ### Phase 2 — editing
 
 CodeMirror, the file list, save, and the optimistic-concurrency check `mdy-web`

@@ -1,28 +1,137 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>mdy — service worker probe</title>
+<title>mdy</title>
 <style>
-  body { font: 15px/1.5 ui-monospace, Menlo, monospace; padding: 2rem; }
-  pre { white-space: pre-wrap; }
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    font: 14px/1.5 ui-monospace, Menlo, monospace;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+  }
+  header { padding: .75rem 1rem; border-bottom: 1px solid rgba(128,128,128,.35); }
+  #status { white-space: pre-wrap; }
+  iframe { border: 0; width: 100%; height: 100%; }
 </style>
-<h1>Service worker probe</h1>
-<pre id="out">running…</pre>
+
+<header><span id="status">starting…</span></header>
+<iframe id="preview" title="preview"></iframe>
+
 <script type="module">
-  const out = document.getElementById('out');
-  const say = async (result) => {
-    out.textContent = `origin: ${location.origin}\n${result}`;
-    // Reported to the host so the answer lands in a terminal, not a window.
-    try { await window.__TAURI__.core.invoke('report', { origin: location.origin, result }); } catch (e) {}
+  /*
+   * The webview half of the shell. It holds the built outputs and answers the
+   * shell's requests for them; the shell owns `mdy://` because a page cannot
+   * register a scheme. See src-tauri/src/main.rs.
+   *
+   * Every step narrates itself through `log`, because the failure mode of a
+   * window is silence.
+   *
+   * Two things learned building this:
+   *
+   *   - Listening for events needs a capability (`core:default`, in
+   *     src-tauri/capabilities/). Without it `event.listen` rejects, and since
+   *     the whole preview hangs off that one call the window just sits there.
+   *   - The preview is a DIFFERENT ORIGIN from this page — `mdy://localhost`
+   *     against `tauri://localhost` — so the shell cannot read the iframe's
+   *     DOM, and should not be able to. Anything it needs to know about the
+   *     preview is observed from the serving side or sent by postMessage.
+   *     That is why the served page follows its own link below: navigation is
+   *     proved by a second request arriving, not by inspecting the iframe.
+   */
+  const status = document.getElementById('status');
+  const preview = document.getElementById('preview');
+
+  const core = window.__TAURI__ && window.__TAURI__.core;
+  const say = (msg) => {
+    status.textContent = msg;
+    try { core.invoke('log', { msg: String(msg) }); } catch (e) {}
   };
+  const finish = (result) => {
+    status.textContent = JSON.stringify(result, null, 1);
+    try { core.invoke('report', { result: JSON.stringify(result) }); } catch (e) {}
+  };
+
+  // Armed first, so a hang anywhere below still produces an answer.
+  const trace = { tauri: Object.keys(window.__TAURI__ ?? {}), steps: [], served: [] };
+  const step = (s) => { trace.steps.push(s); say(s); };
+  setTimeout(() => finish({ ok: false, error: 'watchdog: never settled', ...trace }), 8000);
+
+  window.addEventListener('error', (e) => step(`window error: ${e.message}`));
+  window.addEventListener('unhandledrejection', (e) => step(`rejection: ${e.reason}`));
+
   try {
-    if (!('serviceWorker' in navigator)) {
-      await say('UNSUPPORTED — navigator.serviceWorker is not present');
-    } else {
-      const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
-      await navigator.serviceWorker.ready;
-      await say(`REGISTERED — scope ${reg.scope}, controller ${navigator.serviceWorker.controller ? 'yes' : 'not yet'}`);
-    }
+    step(`globals: ${trace.tauri.join(',')}`);
+    const { invoke } = core;
+    const ev = window.__TAURI__.event;
+    step(`event api: ${ev ? Object.keys(ev).join(',') : 'MISSING'}`);
+
+    /*
+     * The preview is a different origin from this page — `mdy://localhost`
+     * against `tauri://localhost` — so the shell cannot read the iframe's DOM,
+     * and should not be able to. That is the isolation working.
+     *
+     * Which means navigation has to be checked from the serving side instead:
+     * the first page follows its own link, and a second request arriving for
+     * `/uruk/` is the proof that a link inside a served page navigates to
+     * another served page. That is the thing `srcdoc` could not do and the
+     * reason for the protocol.
+     */
+    const outputs = new Map([
+      ['index.html', '<!doctype html><meta charset="utf-8"><title>Home</title>' +
+        '<h1>Home</h1><p><a id="go" href="/uruk/">Uruk</a></p>' +
+        '<script>addEventListener("load", () => document.getElementById("go").click())<\/script>'],
+      ['uruk/index.html', '<!doctype html><meta charset="utf-8"><title>Uruk</title>' +
+        '<h1>Uruk</h1><p><a href="/">Home</a></p>'],
+    ]);
+
+    /* A URL path to an output key, as src/serve.js does it. */
+    const keysFor = (path) => {
+      const p = path.replace(/^\/+/, '');
+      if (p === '') return ['index.html'];
+      if (p.endsWith('/')) return [`${p}index.html`];
+      return [p, `${p}/index.html`];
+    };
+
+    const unlisten = await ev.listen('mdy://request', async ({ payload }) => {
+      const [id, path] = payload;
+      const key = keysFor(path).find((k) => outputs.has(k));
+      trace.served.push({ path, key: key ?? null });
+      step(`request ${id} ${path} -> ${key ?? '404'}`);
+      const html = key ? outputs.get(key)
+        : `<!doctype html><meta charset="utf-8"><h1>404</h1><p>${path}</p>`;
+      await invoke('respond', {
+        id,
+        status: key ? 200 : 404,
+        contentType: 'text/html; charset=utf-8',
+        body: Array.from(new TextEncoder().encode(html)),
+      });
+      step(`responded ${id}`);
+    });
+    step('listening');
+
+    const navigated = new Promise((resolve) => {
+      const t = setInterval(() => {
+        if (trace.served.some((s) => s.path === '/uruk/')) { clearInterval(t); resolve(true); }
+      }, 50);
+      setTimeout(() => { clearInterval(t); resolve(false); }, 6000);
+    });
+
+    const loaded = new Promise((r) => preview.addEventListener('load', () => r(), { once: true }));
+    preview.src = 'mdy://localhost/';
+    step('iframe src set');
+    await loaded;
+    step('iframe loaded');
+
+    const followed = await navigated;
+    finish({
+      ok: followed,
+      error: followed ? undefined : 'the served page never asked for /uruk/',
+      note: 'checked from the serving side: the preview is cross-origin by design',
+      ...trace,
+    });
+
   } catch (err) {
-    await say(`REFUSED — ${err && err.name}: ${err && err.message}`);
+    finish({ ok: false, error: String((err && err.stack) || err), ...trace });
   }
 </script>

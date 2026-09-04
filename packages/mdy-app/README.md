@@ -13,11 +13,40 @@ npm run build    # tauri build
 
 ## What is here right now
 
-A shell that does one thing: report whether the webview will register a Service
-Worker. That was Phase 1's first question, because the preview design depended
-on the answer, and it is cheaper to ask than to assume.
+A shell that serves a site to a navigable preview. Rust owns `mdy://` and, for
+each request, asks the webview — which holds the built outputs — through an
+asynchronous protocol handler. Running it prints the round trip:
 
-**The answer is no, on macOS and Linux.**
+```
+[web] listening
+[web] request 0 / -> index.html
+[web] responded 0
+[web] iframe loaded
+[web] request 1 /uruk/ -> uruk/index.html
+[web] responded 1
+```
+
+The second request is the one that matters: a link clicked inside a served page
+reached another served page. That is what `srcdoc` cannot do and the reason for
+the protocol. The outputs are still a fixed pair of pages — rendering a real
+directory is next, and changes only where `outputs` comes from.
+
+Two things this cost a build cycle each, so they are written down:
+
+- **Listening for events needs a capability.** `core:default`, in
+  `src-tauri/capabilities/`. Without it `event.listen` rejects; and since the
+  preview hangs off that one call, the window sits there doing nothing rather
+  than reporting an error.
+- **The preview is a different origin from the shell** — `mdy://localhost`
+  against `tauri://localhost`. The shell cannot read the iframe's DOM, and
+  should not be able to. Anything it needs to know is observed from the serving
+  side or sent by postMessage. That is why the check above watches for a second
+  request instead of inspecting the page.
+
+## What the Service Worker probe found
+
+The preview design first rested on a Service Worker. **The answer is no, on
+macOS and Linux.**
 
 ```
 origin: tauri://localhost

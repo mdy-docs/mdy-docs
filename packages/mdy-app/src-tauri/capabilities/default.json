@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the app's own frontend may ask the shell for. `core:default` covers invoking commands and listening for events — the preview is driven by an `mdy://request` event per page, so listening is not optional.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
