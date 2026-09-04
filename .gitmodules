@@ -10,3 +10,6 @@
 [submodule "packages/mdy-native/third_party/quickjs"]
 	path = packages/mdy-native/third_party/quickjs
 	url = https://github.com/bellard/quickjs.git
+[submodule "packages/mdy-native/third_party/parse"]
+	path = packages/mdy-native/third_party/parse
+	url = https://github.com/mdy-docs/parse.git
