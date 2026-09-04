@@ -395,6 +395,21 @@ documents. Re-entrant `$.render` works, because the inner run takes its own VM
 exactly as the pool does. A promise that cannot settle is reported rather than
 hung on.
 
+**nisaba runs natively too.** All of its C compiles with `cc` unchanged — the
+`*_wasm.c` files included, since `EMSCRIPTEN_KEEPALIVE` is a no-op off-target
+and one of them holds the regex entry points rather than mere exports. Only
+`db_wasm.c` is genuinely the WASM export layer, and a native host is what
+replaces it. Insert and query both work against the filter shape
+`$.find({ path: … })` produces.
+
+Its storage is the interesting part. The shipped `bjio_host(fd)` reaches into
+`Module.bjioHandles`, a table of JS `FileSystemSyncAccessHandle` objects — the
+browser's storage, bridged through emscripten, unreachable natively. But
+`bj_io` is four callbacks, so a native host writes its own; what the JS side
+calls `MemoryStorageProvider` becomes a file, which is what nisaba's on-disk
+B+tree format is for anyway. And `_id` has to be minted by the host, which is
+the same rule met from the other side earlier in this repository's history.
+
 Two integration costs worth knowing before starting: lamassu and QuickJS share
 the `js_` namespace and collide both in headers (`JS_TAG_STRING` is a macro in
 one and an enum member in the other) and in symbols (both define `js_dtoa`), so
