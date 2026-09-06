@@ -1,11 +1,12 @@
-# The native backend, on every platform it is meant to reach — three native,
-# and the same C as WebAssembly for a browser.
+# The native backend, on every platform it is meant to reach — macOS on both
+# architectures, Linux, Windows, and the same C as WebAssembly for a browser.
 #
 # What this is actually for: mdy-native is C, and the two engines under it are
 # C, so "does it build elsewhere" is a question no amount of local testing on
 # one machine answers. Windows is the reason this file exists — see
 # docs/desktop-plan.md, Phase 4 — but macOS and Linux run too, because a
-# Windows failure is only informative if the others are green.
+# Windows failure is only informative if the others are green. The uploads
+# at the end of each job are the downloadable builds.
 #
 # The checks are ordered so a failure says where it is:
 #
@@ -51,10 +52,14 @@ jobs:
     strategy:
       fail-fast: false   # a Windows failure must not hide a Linux one
       matrix:
+        # macOS twice: macos-latest is Apple silicon, and the Intel build
+        # needs the runner GitHub keeps for it. Every artifact carries its
+        # architecture in its name, so a download says what it is.
         include:
-          - { name: macOS,   os: macos-latest,   shell: bash,        artifact: mdy-build-macos,   exe: '' }
-          - { name: Linux,   os: ubuntu-latest,  shell: bash,        artifact: mdy-build-linux,   exe: '' }
-          - { name: Windows, os: windows-latest, shell: 'msys2 {0}', artifact: mdy-build-windows, exe: .exe }
+          - { name: macOS arm64,   os: macos-latest,   shell: bash,        artifact: mdy-build-macos-arm64,    exe: '' }
+          - { name: macOS x86_64,  os: macos-15-intel, shell: bash,        artifact: mdy-build-macos-x86_64,   exe: '' }
+          - { name: Linux x86_64,  os: ubuntu-latest,  shell: bash,        artifact: mdy-build-linux-x86_64,   exe: '' }
+          - { name: Windows x86_64, os: windows-latest, shell: 'msys2 {0}', artifact: mdy-build-windows-x86_64, exe: .exe }
 
     defaults:
       run:
