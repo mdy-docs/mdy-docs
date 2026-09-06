@@ -5,8 +5,8 @@ layer, the parser, composition and the HTML are C; **lamassu runs only the code
 a document itself writes**, and no other JavaScript engine is linked.
 
 ```sh
-make build/mdy-build             # the engine, as a command
-./build/mdy-build <dir> --out <dir>
+make build/mdy             # the engine, as a command
+./build/mdy <dir> --out <dir>
 
 make check-engine                # its own checks, twice — see the target
 make check-parse                 # the front end's own checks, no node needed

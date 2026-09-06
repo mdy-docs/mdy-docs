@@ -110,6 +110,23 @@ void mdy_engine_on_binary(mdy_engine *engine,
  * not the engine's. Call before mdy_engine_render.
  */
 void mdy_engine_set_context_bool(mdy_engine *engine, const char *name, int value);
+/*
+ * A field on the entry document's `req` from JSON text — what `mdy -d k=v`
+ * and `--data-file` supply. Parsed by the guest's own JSON.parse at render,
+ * so a value means exactly what it would in mdy-docs; with `strict` off, text
+ * that is not JSON is the string it is, which is `-d name=ada`.
+ */
+void mdy_engine_set_context_json(mdy_engine *engine, const char *name,
+                                 const char *json, int strict);
+/* Forget every context field set so far — a watch re-reads them per pass. */
+void mdy_engine_clear_context(mdy_engine *engine);
+/*
+ * Called once per file the directory walk takes as a source, with its path
+ * relative to the root — mdy-docs' `onSource`, which is where a `[read]` line
+ * comes from. Set before mdy_engine_open_dir.
+ */
+void mdy_engine_on_source(mdy_engine *engine,
+                          void (*fn)(void *ud, const char *path), void *ud);
 
 /* How many documents the open set holds. */
 size_t mdy_engine_count(mdy_engine *engine);
@@ -136,5 +153,12 @@ void mdy_engine_on_emit(mdy_engine *engine,
  */
 char *mdy_engine_render(mdy_engine *engine, size_t index,
                         char *error, size_t error_len);
+/*
+ * The same render as the text its code wrote, before any parse — mdy-docs'
+ * `renderText`, for a document that is deliberately not markup: a feed, a
+ * robots.txt, a plain-text report. Caller frees; NULL on failure as above.
+ */
+char *mdy_engine_render_text(mdy_engine *engine, size_t index,
+                             char *error, size_t error_len);
 
 #endif

@@ -1,6 +1,6 @@
 /*
  * The golden sites, built through the wasm engine under node, diffed against
- * golden/ byte for byte — the same bar build/mdy-build is held to by
+ * golden/ byte for byte — the same bar build/mdy is held to by
  * `make check-golden`, so a difference here is the wasm build's alone.
  *
  *   make check-wasm

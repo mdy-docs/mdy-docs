@@ -2,7 +2,7 @@
  * A whole site, built twice, diffed byte for byte.
  *
  * mdy-docs builds it the way it always has — its own JavaScript, with the
- * templates running in lamassu's wasm build. `mdy-build` builds it with the C
+ * templates running in lamassu's wasm build. `mdy build` builds it with the C
  * engine: no second JavaScript engine, the same lamassu compiled natively,
  * and every stage in
  * between written in C. The two must agree exactly.
@@ -72,8 +72,8 @@ try {
         [join(here, '../../bin/mdy.js'), 'build', site, '--entry', entry, '--out', jsOut])) {
     process.exit();
   }
-  if (!await build('C', join(here, 'build/mdy-build'),
-        [site, '--entry', entry, '--out', cOut, '--quiet'])) {
+  if (!await build('C', join(here, 'build/mdy'),
+        ['build', site, '--entry', entry, '--out', cOut, '--quiet'])) {
     process.exit();
   }
 

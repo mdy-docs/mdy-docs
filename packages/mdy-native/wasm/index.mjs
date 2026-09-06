@@ -1,5 +1,5 @@
 /*
- * The engine in a browser: the same C as build/mdy-build, compiled with
+ * The engine in a browser: the same C as build/mdy, compiled with
  * emscripten, driven exactly as the command line drives it.
  *
  *   import { build } from './wasm/index.mjs';
@@ -66,7 +66,7 @@ export async function build(input, options = {}) {
   }
 
   const root = site ? `${ROOT}/${site.replace(/^\/+|\/+$/g, '')}` : ROOT;
-  const args = [root, '--out', OUT, '--entry', entry];
+  const args = ['build', root, '--out', OUT, '--entry', entry];
   if (drafts) args.push('--drafts');
   if (future) args.push('--future');
   if (quiet) args.push('--quiet');

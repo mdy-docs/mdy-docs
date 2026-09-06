@@ -9,7 +9,7 @@
 > before doing it. That backend is gone: the engine is C now — the walk, the
 > document store, composition and the output — with lamassu running only the
 > templates a document writes. `packages/mdy-native` builds one binary,
-> `mdy-build`, and links no other JavaScript engine.
+> `mdy build`, and links no other JavaScript engine.
 >
 > The measurements below are kept because they are why. They record what a
 > small interpreter cost against V8 and JSC, and that finding — the work is in

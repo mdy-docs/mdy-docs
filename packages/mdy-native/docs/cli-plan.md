@@ -1,4 +1,4 @@
-# mdy-build to `mdy`: the plan to parity with bin/mdy.js
+# mdy build to `mdy`: the plan to parity with bin/mdy.js
 
 What it would take for the C binary to do everything `node bin/mdy.js` does,
 in the order that pays soonest, with the check that says when each step is
@@ -19,11 +19,11 @@ pages — is at parity but for three things, and each is pinned to a number by
 | a resized image's bytes | different codecs on purpose; same dimensions, same paths |
 
 The command is where the distance is. `bin/mdy.js` has three subcommands and a
-document mode; `mdy-build` has one subcommand with the essentials:
+document mode; `mdy build` has one subcommand with the essentials:
 
-| bin/mdy.js | mdy-build |
+| bin/mdy.js | mdy build |
 | --- | --- |
-| `mdy build [dir] [--out] [--drafts] [--future] [--entry] [--publish [--broker]]` | `mdy-build <dir> --out <dir> [--entry] [--drafts] [--future] [--quiet]` |
+| `mdy build [dir] [--out] [--drafts] [--future] [--entry] [--publish [--broker]]` | `mdy build <dir> --out <dir> [--entry] [--drafts] [--future] [--quiet]` |
 | `mdy [path] [-o] [--html] [--emit-js] [-d k=v] [--data-file] [--watch]` | — |
 | `mdy dev [dir] [--port] [--broker] [--consumer] [--group] …` | — |
 | `mdy dead <name> [--broker] [--requeue]` | — |
@@ -53,7 +53,7 @@ Exit: the harness runs, and the number it prints is the honest starting point
 ## Phase 1 — `mdy build`, whole
 
 Small, and the first thing a user notices. The binary becomes `mdy` with
-`build` as a subcommand (`mdy-build` stays as an alias for CI and the golden
+`build` as a subcommand (`mdy build` stays as an alias for CI and the golden
 checks), and gains what the JavaScript has:
 
 - the site directory defaults to `.` and `--out` to `<site>/dist`;

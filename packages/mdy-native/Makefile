@@ -2,12 +2,13 @@
 # which runs the templates; the walk, the document store, composition and the
 # output are C. See ../../docs/desktop-plan.md.
 #
-#   make build/mdy-build          the engine, as a command
+#   make build/mdy                the engine, as the `mdy` command
 #   make check-engine             its unit checks, twice (see the target)
 #   make check-parse              the front end's own checks, no node needed
 #   make check-sites              every site here, built BOTH ways and diffed
 #   make check-site SITE=<dir>    one site, the same way
 #   make check-highlight          highlight.js in lamassu, against lowlight
+#   make check-cli                mdy-docs' CLI tests, run against build/mdy
 #   make wasm                     the same engine as WebAssembly (needs emcc)
 #   make check-wasm               the golden sites through it, under node
 #   make serve-wasm               and a page that builds a site in a browser
@@ -217,7 +218,14 @@ build/md4cprobe$(EXE): test/md4cprobe.c $(MD4C_SRCS)
 	$(CC) $(PARSE_CFLAGS) test/md4cprobe.c $(MD4C_SRCS) -o $@
 
 .PHONY: check-parse compare check-html check-script check-yaml check-links \
-        check-markdown corpus bench
+        check-markdown corpus bench check-cli
+
+# bin/mdy.js's own tests (test/cli.test.js), with this binary in its place:
+# every case spawns the CLI and asserts on its output and exit code, so the
+# same file is the specification for both. MDY_CLI is how the test file
+# swaps the executable. See docs/cli-plan.md.
+check-cli: build/mdy$(EXE)
+	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test ../../test/cli.test.js
 check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
 	@./build/parse-test$(EXE)
 	@./build/html-test$(EXE)
@@ -338,14 +346,14 @@ golden:
 # A golden site whose output moves is worse than no golden site: it goes red
 # for a reason that is not a regression. This proves each one is stable across
 # the thing a git checkout actually changes — every file's mtime.
-check-determinism: build/mdy-build$(EXE)
-	@bin=./build/mdy-build$(EXE); fail=0; \
+check-determinism: build/mdy$(EXE)
+	@bin=./build/mdy$(EXE); fail=0; \
 	for d in $(GOLDEN_SITES); do \
 	  n=`basename $$d`; \
 	  rm -rf build/det-$$n-a build/det-$$n-b; \
-	  $$bin $$d --out build/det-$$n-a --quiet || exit 1; \
+	  $$bin build $$d --out build/det-$$n-a --quiet || exit 1; \
 	  find $$d -type f -exec touch {} \; ; \
-	  $$bin $$d --out build/det-$$n-b --quiet || exit 1; \
+	  $$bin build $$d --out build/det-$$n-b --quiet || exit 1; \
 	  if diff -r build/det-$$n-a build/det-$$n-b > /dev/null; then \
 	    echo "  $$n: stable across an mtime change"; \
 	  else \
@@ -354,12 +362,12 @@ check-determinism: build/mdy-build$(EXE)
 	done; \
 	exit $$fail
 
-check-golden: build/mdy-build$(EXE)
-	@bin=./build/mdy-build$(EXE); fail=0; \
+check-golden: build/mdy$(EXE)
+	@bin=./build/mdy$(EXE); fail=0; \
 	for d in $(GOLDEN_SITES); do \
 	  n=`basename $$d`; \
 	  rm -rf build/check-$$n; \
-	  $$bin $$d --out build/check-$$n --quiet || exit 1; \
+	  $$bin build $$d --out build/check-$$n --quiet || exit 1; \
 	  if diff -r golden/$$n build/check-$$n > /dev/null; then \
 	    echo "  $$n: identical to golden"; \
 	  else \
@@ -394,17 +402,17 @@ build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/f
 # The same driver under AddressSanitizer. A use-after-free in the boundary
 # between the tree, the document store and the VM is invisible without it:
 # a freed key cell is silently reused and a property becomes a different one.
-build/mdy-build-asan$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/mdy-asan$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
 	$(CC) -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer \
 	  -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
-	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
+	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
-build/mdy-build$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/mdy$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
+	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # Twice: once normally, once collecting at EVERY safe point.
@@ -426,7 +434,7 @@ check-engine: build/engine-test$(EXE)
 # harnesses above read — but the corpus that matters is whichever one you have.
 #
 #   make check-site SITE=<dir>
-check-site: build/mdy-build$(EXE)
+check-site: build/mdy$(EXE)
 	@node scripts-compare-site.mjs "$(SITE)"
 
 # THE SUITE. Every site in this repository, built both ways and diffed.
@@ -451,7 +459,7 @@ check-site: build/mdy-build$(EXE)
 #                 do it, and the difference is blank lines around the block.
 CHECK_SITES := ../../examples/blog:1 ../../examples/docs-site:2 \
                ../../examples/messaging:0 fixture:0 fixture-pkg:0
-check-sites: build/mdy-build$(EXE)
+check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \
 	  dir=$${s%:*}; want=$${s##*:}; \
 	  printf '%-34s ' "$$dir"; \
@@ -506,10 +514,10 @@ build/wasm/libmdyparse.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS)
 	done
 	$(EMAR) rcs $@ build/wasm/parse/*.o
 
-$(WASM_OUT): src/build_main.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a $(HL_HDR)
+$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a $(HL_HDR)
 	@mkdir -p build/wasm
 	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
-	  src/build_main.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a \
+	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a \
 	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
 	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
 	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \

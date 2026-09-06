@@ -8,6 +8,12 @@ import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, '..', 'bin', 'mdy.js');
+// MDY_CLI names another executable to run these against — the native
+// binary (packages/mdy-native, `make check-cli`), which this file is then the
+// specification for. Unset, it is this package's own CLI under node.
+const cli = process.env.MDY_CLI ? [process.env.MDY_CLI] : ['node', bin];
+const spawnCli = (args, options) => spawn(cli[0], [...cli.slice(1), ...args], options);
+const spawnCliSync = (args, options) => spawnSync(cli[0], [...cli.slice(1), ...args], options);
 const example = (name) => join(here, '..', 'examples', name);
 const exampleBlog = join(here, '..', 'examples', 'blog');
 const exampleBlogStyleX = join(here, '..', 'examples', 'blog-style-x');
@@ -24,13 +30,12 @@ const site = () => {
 };
 
 // Run the CLI without throwing. Returns { status, stdout, stderr }.
-const run = (args, input) =>
-  spawnSync('node', [bin, ...args], { input, encoding: 'utf8' });
+const run = (args, input) => spawnCliSync(args, { input, encoding: 'utf8' });
 
 // Same, but in a given working directory instead of feeding stdin — for
 // the build/serve/new subcommands, which operate on a site directory
 // rather than stdin/positional file input.
-const runIn = (args, cwd) => spawnSync('node', [bin, ...args], { cwd, encoding: 'utf8' });
+const runIn = (args, cwd) => spawnCliSync(args, { cwd, encoding: 'utf8' });
 
 // Poll until `cond()` is true (up to `ms`), else throw.
 const waitFor = async (cond, ms = 15000) => {
@@ -278,7 +283,7 @@ test('--watch re-renders when an input file changes', async () => {
   const out = join(dir, 'out.mdy');
   writeFileSync(src, 'hello {{ 1 + 1 }}\n');
 
-  const child = spawn('node', [bin, src, '-o', out, '--watch']);
+  const child = spawnCli([src, '-o', out, '--watch']);
   try {
     await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('hello 2'));
     writeFileSync(src, 'changed {{ 2 + 2 }}\n');
@@ -294,7 +299,7 @@ test('--watch survives a render error and recovers on the next save', async () =
   const out = join(dir, 'out.mdy');
   writeFileSync(src, 'ok {{ 1 + 1 }}\n');
 
-  const child = spawn('node', [bin, src, '-o', out, '--watch']);
+  const child = spawnCli([src, '-o', out, '--watch']);
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
@@ -317,7 +322,7 @@ test('--watch re-renders when the --data-file changes', async () => {
   writeFileSync(src, 'env is {{ req.env }}\n');
   writeFileSync(data, 'env: dev\n');
 
-  const child = spawn('node', [bin, src, '--data-file', data, '-o', out, '--watch']);
+  const child = spawnCli([src, '--data-file', data, '-o', out, '--watch']);
   try {
     await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('env is dev'));
     writeFileSync(data, 'env: prod\n');
@@ -339,7 +344,7 @@ test('--watch on a directory re-renders when ANY file under it changes', async (
   writeFileSync(join(dir, 'main.mdy'), '% const o = $.findOne({ path: "other.mdy" })\nother says {{ o.text }}');
   writeFileSync(join(dir, 'other.mdy'), '+++\ntext: hi\n+++\n');
 
-  const child = spawn('node', [bin, dir, '-o', out, '--watch']);
+  const child = spawnCli([dir, '-o', out, '--watch']);
   try {
     await waitFor(() => existsSync(out) && readFileSync(out, 'utf8').includes('other says hi'));
     writeFileSync(join(dir, 'other.mdy'), '+++\ntext: bye\n+++\n');

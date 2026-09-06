@@ -126,8 +126,11 @@ struct mdy_engine {
     size_t resized_count;
     /* Extra fields for the entry's `req`, set by the embedder. */
     char **ctx_names;
-    char *ctx_bools;
+    char **ctx_json;            /* each a JSON text, parsed at render */
+    char *ctx_strict;           /* 0: text that is not JSON is a string */
     size_t ctx_count;
+    void (*on_source)(void *ud, const char *path);
+    void *on_source_ud;
     /* `_id` to index, in insertion order, so a hit maps back to its document. */
     uint8_t (*ids)[12];
 
@@ -1519,6 +1522,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         next = nl ? nl + 1 : NULL;
         if (nl) *nl = '\0';
         if (!*rel || !is_source(rel)) continue;
+        if (e->on_source) e->on_source(e->on_source_ud, rel);
 
         const char *name = basename_of(rel);
         const char *ext = extension_of(name);
@@ -2429,15 +2433,50 @@ void mdy_engine_on_binary(mdy_engine *e,
     e->on_binary_ud = ud;
 }
 
-void mdy_engine_set_context_bool(mdy_engine *e, const char *name, int value) {
+void mdy_engine_set_context_json(mdy_engine *e, const char *name, const char *json, int strict) {
     char **names = realloc(e->ctx_names, (e->ctx_count + 1) * sizeof *names);
-    char *bools = realloc(e->ctx_bools, e->ctx_count + 1);
     if (names) e->ctx_names = names;
-    if (bools) e->ctx_bools = bools;
-    if (!names || !bools) return;
+    char **texts = realloc(e->ctx_json, (e->ctx_count + 1) * sizeof *texts);
+    if (texts) e->ctx_json = texts;
+    char *stricts = realloc(e->ctx_strict, e->ctx_count + 1);
+    if (stricts) e->ctx_strict = stricts;
+    if (!names || !texts || !stricts) return;
     e->ctx_names[e->ctx_count] = strdup(name);
-    e->ctx_bools[e->ctx_count] = (char)(value ? 1 : 0);
+    e->ctx_json[e->ctx_count] = strdup(json);
+    e->ctx_strict[e->ctx_count] = (char)(strict ? 1 : 0);
     e->ctx_count++;
+}
+
+void mdy_engine_set_context_bool(mdy_engine *e, const char *name, int value) {
+    mdy_engine_set_context_json(e, name, value ? "true" : "false", 1);
+}
+
+void mdy_engine_clear_context(mdy_engine *e) {
+    for (size_t i = 0; i < e->ctx_count; i++) { free(e->ctx_names[i]); free(e->ctx_json[i]); }
+    e->ctx_count = 0;
+}
+
+void mdy_engine_on_source(mdy_engine *e, void (*fn)(void *ud, const char *path), void *ud) {
+    e->on_source = fn;
+    e->on_source_ud = ud;
+}
+
+/*
+ * A context value from its JSON text, through the guest's own JSON.parse —
+ * so `-d n=3` is the number 3 and `-d list=[1,2]` an array, exactly as
+ * mdy-docs reads them. Text that is not JSON is the string it is when the
+ * caller allowed that (`-d name=ada`), and undefined otherwise.
+ */
+static JsValue context_value(mdy_engine *e, const char *json, int strict) {
+    JsValue text = str(e->vm, json, strlen(json));
+    js_gc_protect(e->vm, &text);
+    JsValue JSON = js_object_get(e->vm, js_context_globals(e->ctx), key(e->vm, "JSON"));
+    JsValue parse = js_is_object(JSON) ? js_object_get(e->vm, JSON, key(e->vm, "parse")) : js_undefined();
+    JsValue out = js_undefined();
+    int ok = js_is_function(parse) && js_call(e->ctx, parse, JSON, &text, 1, &out);
+    js_gc_unprotect(e->vm, &text);
+    if (ok) return out;
+    return strict ? js_undefined() : str(e->vm, json, strlen(json));
 }
 
 /* ---- querying ---------------------------------------------------------------
@@ -4015,9 +4054,10 @@ void mdy_engine_free(mdy_engine *e) {
     free(e->module_spec);
     for (size_t i = 0; i < e->resized_count; i++) free(e->resized[i].path);
     free(e->resized);
-    for (size_t i = 0; i < e->ctx_count; i++) free(e->ctx_names[i]);
+    mdy_engine_clear_context(e);
     free(e->ctx_names);
-    free(e->ctx_bools);
+    free(e->ctx_json);
+    free(e->ctx_strict);
     free(e->root);
 
     close_set(e);
@@ -4397,7 +4437,17 @@ done:
     return out;
 }
 
+static char *render_public(mdy_engine *e, size_t index, int want_text, char *error, size_t error_len);
+
 char *mdy_engine_render(mdy_engine *e, size_t index, char *error, size_t error_len) {
+    return render_public(e, index, 0, error, error_len);
+}
+
+char *mdy_engine_render_text(mdy_engine *e, size_t index, char *error, size_t error_len) {
+    return render_public(e, index, 1, error, error_len);
+}
+
+static char *render_public(mdy_engine *e, size_t index, int want_text, char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
 
     /*
@@ -4421,12 +4471,24 @@ char *mdy_engine_render(mdy_engine *e, size_t index, char *error, size_t error_l
         today[10] = '\0';                    /* the date, without the time */
     }
     set_val(e, context, "today", str(e->vm, today, strlen(today)));
-    for (size_t i = 0; i < e->ctx_count; i++)
-        set_val(e, context, e->ctx_names[i], js_bool(e->ctx_bools[i] != 0));
+    for (size_t i = 0; i < e->ctx_count; i++) {
+        JsValue v = context_value(e, e->ctx_json[i], e->ctx_strict[i]);
+        if (!js_is_undefined(v)) set_val(e, context, e->ctx_names[i], v);
+    }
 
-    mdy_doc *doc = render_tree(e, index, context, error, error_len);
+    char *wrote = NULL;
+    mdy_doc *doc = render_tree_out(e, index, context, want_text ? &wrote : NULL, error, error_len);
     js_gc_unprotect(e->vm, &context);
-    if (!doc) { release_held(e); return NULL; }
+    if (!doc) { release_held(e); free(wrote); return NULL; }
+    if (want_text) {
+        /* The text its code wrote. A document that composed a tree through a
+         * transform wrote no lines the host still has; its HTML stands in. */
+        if (wrote) { mdy_free(doc); release_held(e); return wrote; }
+        char *html = mdy_to_html(mdy_root(doc), NULL);
+        mdy_free(doc);
+        release_held(e);
+        return html;
+    }
     char *html = mdy_to_html(mdy_root(doc), NULL);
     mdy_free(doc);
     /* Nothing a render parked outlives the render that asked for it. */

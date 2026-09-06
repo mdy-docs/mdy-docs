@@ -57,10 +57,10 @@ jobs:
         # needs the runner GitHub keeps for it. Every artifact carries its
         # architecture in its name, so a download says what it is.
         include:
-          - { name: macOS arm64,   os: macos-latest,   shell: bash,        artifact: mdy-build-macos-arm64,    exe: '' }
-          - { name: macOS x86_64,  os: macos-15-intel, shell: bash,        artifact: mdy-build-macos-x86_64,   exe: '' }
-          - { name: Linux x86_64,  os: ubuntu-latest,  shell: bash,        artifact: mdy-build-linux-x86_64,   exe: '' }
-          - { name: Windows x86_64, os: windows-latest, shell: 'msys2 {0}', artifact: mdy-build-windows-x86_64, exe: .exe }
+          - { name: macOS arm64,   os: macos-latest,   shell: bash,        artifact: mdy-macos-arm64,    exe: '' }
+          - { name: macOS x86_64,  os: macos-15-intel, shell: bash,        artifact: mdy-macos-x86_64,   exe: '' }
+          - { name: Linux x86_64,  os: ubuntu-latest,  shell: bash,        artifact: mdy-linux-x86_64,   exe: '' }
+          - { name: Windows x86_64, os: windows-latest, shell: 'msys2 {0}', artifact: mdy-windows-x86_64, exe: .exe }
 
     defaults:
       run:
@@ -124,7 +124,7 @@ jobs:
 
       - name: Build the engine
         working-directory: packages/mdy-native
-        run: make build/mdy-build$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
+        run: make build/mdy$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
         shell: bash
 
       # The front end alone: no node, no engine, no store. It is the port
@@ -174,7 +174,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: packages/mdy-native/build/mdy-build${{ matrix.exe }}
+          path: packages/mdy-native/build/mdy${{ matrix.exe }}
           if-no-files-found: error
 
   # The fourth target: the same sources through emscripten, held to the same

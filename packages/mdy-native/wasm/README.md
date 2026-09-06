@@ -1,6 +1,6 @@
 # The engine in a browser
 
-The fourth target. `build/mdy-build` is C with one platform surface — POSIX
+The fourth target. `build/mdy` is C with one platform surface — POSIX
 file access in `src/fsx.c` — and its document store is memory already, so the
 same sources compile with emscripten unchanged and run against an in-memory
 filesystem. A build in the browser is: put the site's files into that
