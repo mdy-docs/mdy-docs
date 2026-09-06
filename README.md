@@ -774,6 +774,15 @@ what a document set looks like as a live React subtree: edits patch the tree
 instead of rebuilding it, mermaid fences are components, and a template error
 shows in a bar above the last good render rather than replacing it.
 
+**Live preview demo, native**
+([`packages/mdy-live-preview-native`](packages/mdy-live-preview-native/)):
+the same demo with the C engine in place of the JavaScript one —
+`packages/mdy-native` compiled to WebAssembly, one module carrying the
+template VM, the query engine, the broker and the highlighter, driven as
+the command line is. The preview pane is the HTML the engine wrote, and
+the messages pane is its `--publish` log. `npm run live-preview-native`,
+after `make -C packages/mdy-native wasm`.
+
 **React** ([`packages/mdy-react`](packages/mdy-react/)): `<Mdy source={…} />`
 — documents as React elements rather than an HTML string. Not a second
 implementation: both front ends end at hast either way, so React is the last

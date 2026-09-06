@@ -193,6 +193,15 @@ JavaScript's memory provider, why its messages last as long as the process.
 The engine test drives one subject through publish, take, done, fail and
 the dead-letter channel over it (`make check-engine`).
 
+Document mode has that broker too, behind one flag the JavaScript does not
+have: `mdy file.mdy --publish` sends what the document published and
+delivers each message to the page it names, in this process, printing the
+page's output under its `[deliver]` line — one attempt each, a refusal
+dead-lettered at once and rendered by a `.dead` page in the same pass. It
+exists for the browser: the live-preview demo's messages pane
+([packages/mdy-live-preview-native](../mdy-live-preview-native)) is that
+log, parsed.
+
 ## In a browser
 
 The same sources compile with emscripten unchanged, because the engine's only

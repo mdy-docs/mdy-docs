@@ -181,6 +181,11 @@ static const char USAGE[] =
 "                        the given file (or, for a directory, any file under\n"
 "                        it) plus --data-file. A failing render reports to\n"
 "                        stderr and keeps watching. Not available with stdin.\n"
+"      --publish         Deliver what the document published, here: each\n"
+"                        $.publish goes to a broker inside this process and\n"
+"                        the page it names renders with the message as `req`,\n"
+"                        its output printed under the [deliver] line. One\n"
+"                        attempt each; a refusal is dead-lettered at once.\n"
 "  -h, --help            Show this help.\n"
 "\n"
 "Extra context (from --data / --data-file) overrides the document's front matter.\n"
@@ -289,6 +294,8 @@ static int ieq(const char *a, const char *b) {
  * `$.emit` outputs and `$.resize` outputs, in order of first appearance and
  * one per path — a Map, as mdy-docs keeps them.
  */
+static int on_terminal(FILE *stream);
+
 typedef struct { char *path; uint8_t *bytes; size_t len; int binary; } Output;
 typedef struct { Output *items; size_t count, cap; } Outputs;
 
@@ -659,7 +666,7 @@ static int cmd_build(int argc, char **argv) {
     char *out_abs = absolute(out);
 
     double started = now_ms();
-    Progress progress = { .enabled = !quiet && isatty(fileno(stderr)) };
+    Progress progress = { .enabled = !quiet && on_terminal(stderr) };
     BuildSink sink = { out_abs, quiet, &progress, 0, 0, 0 };
     Messages messages = { 0 };
 
@@ -730,7 +737,7 @@ static int cmd_build(int argc, char **argv) {
 
 typedef struct {
     const char *out, *entry, *data_file;
-    int html, emit_js, watch;
+    int html, emit_js, watch, publish;
     char **data; size_t data_count;
     const char *input; int is_stdin, is_dir;
     char *input_abs;
@@ -823,6 +830,9 @@ static char *load_context(mdy_engine *e, const DocOptions *o) {
 
 /* One render pass. Writes the output to *out (caller frees) or returns an
  * error message to fail with; never exits, so a watch can survive it. */
+static void publish_document(mdy_engine *e, Messages *m);
+static void messages_clear(Messages *m);
+
 static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) {
     static char msg[4096];
     *out = NULL;
@@ -833,6 +843,12 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
     if (cerr) { mdy_engine_free(e); return cerr; }
     mdy_engine_on_emit(e, collect_emit, emitted);
     mdy_engine_on_binary(e, collect_binary, emitted);
+    /* $.publish: collected, and sent only with --publish and only once the
+     * render has succeeded — the same deferral `mdy build` has. Without the
+     * flag they are dropped without a word, as the JavaScript's document
+     * mode drops them. */
+    Messages messages = { 0 };
+    mdy_engine_on_publish(e, collect_message, &messages);
     char err[1024];
 
     if (o->is_dir) {
@@ -864,6 +880,8 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
         }
         char *text = o->html ? mdy_engine_render(e, (size_t)at, err, sizeof err)
                              : mdy_engine_render_text(e, (size_t)at, err, sizeof err);
+        if (text && o->publish) publish_document(e, &messages);
+        messages_clear(&messages); free(messages.names); free(messages.json);
         mdy_engine_free(e);
         if (!text) { snprintf(msg, sizeof msg, "%s", err); return msg; }
         *out = text;
@@ -904,6 +922,8 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
     free(text);
     char *rendered = o->html ? mdy_engine_render(e, 0, err, sizeof err)
                              : mdy_engine_render_text(e, 0, err, sizeof err);
+    if (rendered && o->publish) publish_document(e, &messages);
+    messages_clear(&messages); free(messages.names); free(messages.json);
     mdy_engine_free(e);
     if (!rendered) { snprintf(msg, sizeof msg, "%s", err); return msg; }
     *out = rendered;
@@ -1076,6 +1096,7 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(name, "data") == 0 || strcmp(name, "d") == 0) { canonical = "data"; takes_value = 1; }
         else if (strcmp(name, "data-file") == 0) { canonical = "data-file"; takes_value = 1; }
         else if (strcmp(name, "watch") == 0 || strcmp(name, "w") == 0) canonical = "watch";
+        else if (strcmp(name, "publish") == 0) canonical = "publish";
         else if (strcmp(name, "help") == 0 || strcmp(name, "h") == 0) { canonical = "help"; is_help = 1; }
         if (!canonical) {
             char m[256];
@@ -1094,6 +1115,7 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(canonical, "data") == 0) o.data[o.data_count++] = (char *)value;
         else if (strcmp(canonical, "data-file") == 0) o.data_file = value;
         else if (strcmp(canonical, "watch") == 0) o.watch = 1;
+        else if (strcmp(canonical, "publish") == 0) o.publish = 1;
         else if (strcmp(canonical, "help") == 0) { fputs(USAGE, stdout); fputc('\n', stdout); return 0; }
     }
 
@@ -1118,6 +1140,8 @@ static int cmd_document(int argc, char **argv) {
     if (o.entry && !o.is_dir) fail("--entry is only valid with a directory input");
     if (o.watch && o.is_stdin) fail("--watch cannot read from stdin");
     if (o.emit_js && o.html) fail("--emit-js cannot be combined with --html");
+    if (o.publish && o.emit_js) fail("--publish cannot be combined with --emit-js");
+    if (o.publish && o.watch) fail("--publish cannot be combined with --watch: a re-render would send again");
     if (o.out && !o.is_stdin) {
         char *out_abs = absolute(o.out);
         int same = strcmp(out_abs, o.input_abs) == 0;
@@ -1194,6 +1218,8 @@ typedef struct {
     /* the bus: a broker of this process's own, or one that answered --broker */
     Broker *local;
     double last_drain;
+    int show_output;            /* `mdy [path] --publish`: a delivered page's output, under its line */
+    size_t refusals;            /* deliveries that threw, ever — a one-shot drains again after one */
     int live;
     char token[40];
     char callback[512];
@@ -1202,10 +1228,13 @@ typedef struct {
     double last_heartbeat;
 } Dev;
 
+/* "9:05:07 PM", as the JavaScript's toLocaleTimeString. %I rather than %l:
+ * every libc has it (emscripten's has no %l), and the zero it pads with is
+ * dropped here. */
 static void stamp_now(char *out, size_t cap) {
     time_t t = time(NULL);
-    strftime(out, cap, "%l:%M:%S %p", localtime(&t));
-    if (out[0] == ' ') memmove(out, out + 1, strlen(out));
+    strftime(out, cap, "%I:%M:%S %p", localtime(&t));
+    if (out[0] == '0') memmove(out, out + 1, strlen(out));
 }
 #define TS(buf) (stamp_now(buf, sizeof buf), buf)
 
@@ -1431,6 +1460,10 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
         return;
     }
     char *path = mdy_engine_document_path(d->engine, (size_t)target);
+    /* a set typed into one file has no paths: name the document by its
+     * place in the set, which is what its author can count */
+    char where[64];
+    if (!path) { snprintf(where, sizeof where, "document %d", target); path = strdup(where); }
     for (size_t i = 0; i < batch->count; i++) {
         const bjv *entry = batch->items[i];
         double index = bjv_number(entry, "index", 0);
@@ -1461,6 +1494,7 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
         if (!html) {
             if (*failed < 64) failed_indexes[*failed] = index;
             (*failed)++;
+            d->refusals++;
             int last = attempts >= d->o->max_attempts;
             char last_line[400];
             if (last) snprintf(last_line, sizeof last_line, "out of attempts — dead-lettering to %s.dead", subject);
@@ -1468,7 +1502,6 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
             fprintf(stderr, "%s %s[refuse]%s %s %s#%.0f%s — %s%s%s threw after %dms%s\n  %s\n  %s%s%s\n", TS(ts), RED_OPEN(), RED_CLOSE(), subject,
                     DIM_OPEN(), index, DIM_CLOSE(), BOLD_OPEN(), path ? path : "?", BOLD_CLOSE(), ms, attempt, err, DIM_OPEN(), last_line, DIM_CLOSE());
         } else {
-            free(html);
             size_t produced = d->messages.count;
             if (produced) dev_send(d, 0, 0);
             if (*done < 64) done_indexes[*done] = index;
@@ -1480,10 +1513,67 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
             printf("%s%s%s %s[%s]%s %s %s#%.0f%s → rendered %s%s%s in %s%dms%s%s%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(),
                    is_dead ? RED_OPEN() : GREEN_OPEN(), is_dead ? "dead" : "deliver", is_dead ? RED_CLOSE() : GREEN_CLOSE(), subject,
                    DIM_OPEN(), index, DIM_CLOSE(), BOLD_OPEN(), path ? path : "?", BOLD_CLOSE(), BOLD_OPEN(), ms, BOLD_CLOSE(), extra, attempt);
+            if (d->show_output) {
+                /* what the message caused, line by line, two spaces in */
+                for (const char *line = html; *line; ) {
+                    const char *nl = strchr(line, '\n');
+                    size_t n = nl ? (size_t)(nl - line) : strlen(line);
+                    if (n || nl) printf("  %.*s\n", (int)n, line);
+                    if (!nl) break;
+                    line = nl + 1;
+                }
+            }
+            free(html);
         }
         bjv_free(value);
     }
     free(path);
+}
+
+/* ---- mdy [path] --publish: the document's messages, delivered here ------------
+ *
+ * What the document published, sent to a broker of this process's own and
+ * delivered to the pages it names, following the chain a delivered page's
+ * own publishes make — the one-shot form of what `mdy dev` keeps doing.
+ * One attempt per message and no backoff, because there is no later to
+ * wait for: a refusal goes straight to the dead-letter channel, where a
+ * `.dead` page sees it in the same pass if the document has one. Each
+ * delivered page's output is printed under its line, since here the
+ * interesting thing about a message is what it caused.
+ */
+static void publish_document(mdy_engine *e, Messages *m) {
+    DevOptions o = { 0 };
+    o.broker = "in-process"; o.consumer = "mdy-bus"; o.group = "mdy";
+    o.max_attempts = 1; o.backoff = 0; o.max_backoff = 0;
+    Dev d = { 0 };
+    d.o = &o;
+    d.engine = e;
+    d.messages = *m;
+    memset(m, 0, sizeof *m);
+    d.show_output = 1;
+    mdy_engine_on_publish(e, collect_message, &d.messages);
+    d.local = broker_open();
+    if (!d.local) {
+        fprintf(stderr, "%smdy: publish: cannot open a broker in this process%s\n", RED_OPEN(), RED_CLOSE());
+    } else {
+        d.live = 1;
+        setvbuf(stdout, NULL, _IOLBF, 0);   /* in step with stderr's refusals */
+        dev_send(&d, 0, 1);
+        /* The store moves a job that is out of attempts to its dead-letter
+         * channel on the take AFTER the failing one, so a pass that refused
+         * something is followed by another, which finds the .dead subject
+         * and delivers it — and so on, while refusals keep coming. */
+        for (int pass = 0; pass < 8; pass++) {
+            size_t before = d.refusals;
+            dev_drain(&d);
+            if (d.refusals == before) break;
+        }
+        broker_close(d.local);
+    }
+    mdy_engine_on_publish(e, collect_message, m);
+    messages_clear(&d.messages); free(d.messages.names); free(d.messages.json);
+    for (size_t i = 0; i < d.policied_count; i++) free(d.policied[i]);
+    free(d.policied);
 }
 
 static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
@@ -1705,7 +1795,7 @@ static int cmd_dev(int argc, char **argv) {
     Dev d = { 0 };
     d.o = &o;
     d.root = absolute(o.root_arg);
-    d.progress.enabled = isatty(fileno(stderr));
+    d.progress.enabled = on_terminal(stderr);
     double started = now_ms();
 
     /* the broker: one of this process's own, or the one --broker names */
@@ -1788,9 +1878,21 @@ static int cmd_dev(int argc, char **argv) {
     }
 }
 
+/* Whether a stream is a terminal someone is watching. emscripten answers
+ * yes for its standard streams, and a wasm module has no terminal: what it
+ * prints is read by a program, which wants neither colour nor a spinner. */
+static int on_terminal(FILE *stream) {
+#ifdef __EMSCRIPTEN__
+    (void)stream;
+    return 0;
+#else
+    return isatty(fileno(stream));
+#endif
+}
+
 int main(int argc, char **argv) {
     const char *force = getenv("FORCE_COLOR"), *no = getenv("NO_COLOR");
-    use_color = (force && *force) || (isatty(fileno(stdout)) && !(no && *no));
+    use_color = (force && *force) || (on_terminal(stdout) && !(no && *no));
 
     if (argc > 1 && strcmp(argv[1], "build") == 0) return cmd_build(argc - 2, argv + 2);
     if (argc > 1 && strcmp(argv[1], "serve") == 0) {

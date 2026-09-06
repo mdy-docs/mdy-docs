@@ -15,6 +15,7 @@ make serve-wasm    # then open http://localhost:8080/wasm/
 What is here:
 
     index.mjs          the wrapper: `build(files, { site }) -> { files, log, status }`
+                       and `document(source, { publish }) -> { output, messages, errors, status }`
     check-golden.mjs   what `make check-wasm` runs — the same bar as check-golden
     index.html         a page: pick a directory, build it, look at the output
     serve.mjs          a file server that knows what a .mjs file is
@@ -36,6 +37,23 @@ text(files.get('index.html'));   // '<h1>hello</h1>'
 and bytes (or text, going in). Nothing is fetched and nothing is served; the
 page in `index.html` reads a picked directory with the File API and everything
 after that is memory.
+
+One document is `document()`, which is `mdy file.mdy --html` — and with
+`publish: true`, `mdy file.mdy --html --publish`: the broker in the module
+takes what the document published and each message renders the page it
+names. `messages` is that log parsed — `{ kind: 'send' | 'deliver' |
+'refuse' | 'dead', name, index, page, output, error }` — so a page showing
+it need not know the log's shape:
+
+```js
+import { document } from './wasm/index.mjs';
+
+const { output, messages, errors, status } = await document(source, { publish: true });
+```
+
+A render that fails exits non-zero with the error in `errors` and an empty
+`output`. [packages/mdy-live-preview-native](../../mdy-live-preview-native)
+is this call behind an editor.
 
 Each call instantiates the module afresh. That is cheap next to a build, and
 it is the honest way to promise that two builds share nothing: the engine

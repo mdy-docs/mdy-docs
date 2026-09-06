@@ -27,6 +27,7 @@
     "test:react": "npm --prefix packages/mdy-react test",
     "mdy-web": "node packages/mdy-web/bin/mdy-web.js examples/blog",
     "live-preview": "npm --prefix packages/mdy-live-preview run dev",
+    "live-preview-native": "npm --prefix packages/mdy-live-preview-native run dev",
     "test:mdy-site": "npm --prefix packages/mdy-site test",
     "mdy-site": "npm --prefix packages/mdy-site run dev",
     "test:mdy-bus": "npm --prefix packages/mdy-bus test",

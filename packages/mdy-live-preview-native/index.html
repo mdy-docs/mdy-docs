@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+    <meta http-equiv="content-language" content="en">
+    <meta name="description" content="Online mdy editor with live preview, rendered by the C engine compiled to WebAssembly — document sets, data fences, templates and messages, as you type.">
+
+    <script>
+      (function(){
+        try {
+          var raw = localStorage.getItem('mdy-live-preview-native.theme');
+          var useDark = raw === 'dark';
+          document.documentElement.setAttribute('data-theme', useDark ? 'dark' : 'light');
+
+          var link = document.createElement('link');
+          link.id = 'gh-markdown-link';
+          link.rel = 'stylesheet';
+          link.type = 'text/css';
+          link.href = useDark ? 'css/github-markdown-dark_dimmed.css' : 'css/github-markdown-light.css';
+          document.head.appendChild(link);
+
+          /* The engine highlights code itself — highlight.js, in the C — so
+             the page only needs the classes styled. */
+          var hl = document.createElement('link');
+          hl.id = 'hljs-link';
+          hl.rel = 'stylesheet';
+          hl.type = 'text/css';
+          hl.href = useDark ? 'css/hljs-dark.css' : 'css/hljs-light.css';
+          document.head.appendChild(hl);
+        } catch (e) {
+          // ignore — app will correct theme after load
+        }
+      })();
+    </script>
+    <link rel="stylesheet" type="text/css" href="css/style.css">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <script type="module" src="/src/main.jsx"></script>
+    <title>MDY Live Preview · native</title>
+  </head>
+
+  <body>
+    <!-- The chrome — header, panes, divider — is App.jsx. The inline theme
+         script above stays: it runs before first paint, which React cannot. -->
+    <div id="root"></div>
+  </body>
+</html>

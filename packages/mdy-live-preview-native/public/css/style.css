@@ -1,0 +1,364 @@
+html, body {
+  color: #333;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+  font-family: Helvetica, arial, freesans, clean, sans-serif;
+  font-size: 1em;
+  line-height: 1.5em;
+  background-color: #fff;
+  overscroll-behavior-y: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height:100vh;
+}
+
+/* The app mounts here, and is the whole page: it takes over the column layout
+   body used to give directly to <header> and #container. */
+#root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+h1, h2, h3, h4, h5, h6, p {
+  font-size: 1em;
+  margin: 0;
+  padding: 0;
+  font-weight: normal;
+}
+
+p {
+  margin: 1em;
+}
+
+a:link,
+a:visited,
+a:hover
+a:active {
+  text-decoration: none;
+}
+
+img {
+  border: none;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  width: 100%;
+  background-color: #444;
+  font-size: 12px;
+  color: #fff;
+}
+
+header a:link, header a:hover, header a:visited, header a:active {
+  color: #fff;
+}
+
+header a:hover {
+  text-decoration: underline;
+}
+
+/* github-markdown-css relies on GitHub's mr-2 utility (absent here) to space
+   the alert-title octicon from its text — supply the 8px gap ourselves. */
+.markdown-body .markdown-alert .markdown-alert-title .octicon {
+  margin-right: 8px;
+}
+
+#menu-items {
+    display: flex;
+}
+
+#reset-button {
+    margin-left: 16px;
+}
+
+#copy-button {
+    margin-left: 16px;
+}
+
+#sync-button {
+    margin-left: 16px;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+header input[type="checkbox"] {
+    vertical-align: middle;
+    margin-right: 4px;
+    margin-top: 0px;
+}
+
+#github {
+    padding-right: 32px;
+}
+
+#github img {
+  display: block;
+  width: 16px;
+}
+
+#github a {
+  display: block;
+  width: 16px;
+}
+
+#container {
+  flex-grow: 1;
+  overflow: hidden;
+  width: 100%;
+  margin: 0 auto;
+  background-color: #fff;
+  display: flex;
+}
+
+#editor-wrapper {
+  height: 100%;
+}
+
+#editor {
+  height: 100%;
+}
+
+#preview-wrapper {
+  padding: 8px 16px 16px 16px;
+}
+
+.column {
+  width: 50%;
+  padding: 0;
+  margin: 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+#preview.column {
+  overflow-y: scroll;
+  white-space: normal;
+}
+
+/* A template error while typing. The bar sits above the preview and the last
+   good render stays underneath it, dimmed — the document you are editing does
+   not disappear because you are halfway through typing a tag. */
+.mdy-error-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  color: #82071e;
+  background: #ffebe9;
+  border-bottom: 1px solid #ffcecb;
+}
+
+[data-theme="dark"] .mdy-error-bar {
+  color: #ffdcd7;
+  background: #3c1618;
+  border-bottom-color: #6a1f24;
+}
+
+.markdown-body.is-stale {
+  opacity: 0.55;
+}
+
+/* The first render failing is the one case with nothing to keep showing. */
+.markdown-body .mdy-error-block {
+  color: #cf222e;
+  white-space: pre-wrap;
+}
+
+[data-theme="dark"] .markdown-body .mdy-error-block {
+  color: #ff7b72;
+}
+
+.markdown-body .mermaid {
+  overflow-x: auto;
+  padding: 16px;
+  text-align: center;
+}
+
+.markdown-body .mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.markdown-body .mermaid-error {
+  color: #cf222e;
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+[data-theme="dark"] .markdown-body .mermaid-error {
+  color: #ff7b72;
+}
+
+.split-container {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+
+.editor-pane,
+.preview-pane {
+  height: 100%;
+}
+
+.split-divider {
+  width: 5px;
+  background: #ccc;
+  cursor: col-resize;
+  z-index: 1;
+}
+
+.split-divider.hover {
+  background: #999;
+}
+
+.split-divider.active {
+  background: #666;
+}
+
+/* Dark theme overrides */
+[data-theme="dark"] html, [data-theme="dark"] body {
+  background-color: #212830;
+  color: #e6edf3;
+}
+
+[data-theme="dark"] header {
+  background-color: #333;
+  color: #e6edf3;
+}
+
+[data-theme="dark"] header a:link, [data-theme="dark"] header a:hover, [data-theme="dark"] header a:visited {
+  color: #e6edf3;
+}
+
+[data-theme="dark"] #container {
+  background-color: #212830;
+  border-bottom: 1px solid #1f2d3a;
+}
+
+[data-theme="dark"] .split-divider {
+  background: #30363d;
+}
+
+[data-theme="dark"] .split-divider.hover {
+  background: #444c56;
+}
+
+[data-theme="dark"] .split-divider.active {
+  background: #768390;
+}
+
+/* ---- messages ---------------------------------------------------------
+ *
+ * What the document published, and what each message caused. Present only
+ * when the source calls $.publish, so the pane costs nothing to a document
+ * that does not.
+ */
+.mdy-messages {
+  border-top: 1px solid #d1d9e0;
+  padding: 12px 16px 20px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.mdy-messages header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  /* The app's own top bar is a dark `header`, and that rule reaches this
+   * one: white on white, with the label invisible. Every inherited part of
+   * it has to be undone, colour included. */
+  background: none;
+  border: 0;
+  padding: 0;
+  width: auto;
+  justify-content: flex-start;
+  color: #1f2328;
+}
+
+[data-theme="dark"] .mdy-messages header { color: #f0f6fc; }
+
+.mdy-messages-note {
+  color: #59636e;
+  font-size: 11px;
+}
+
+.mdy-messages-run { color: #9a6700; font-size: 11px; }
+.mdy-messages-empty { color: #59636e; margin: 0; }
+
+.mdy-messages ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mdy-msg-kind { color: #59636e; }
+.mdy-msg-send .mdy-msg-kind { color: #8250df; }
+.mdy-msg-deliver .mdy-msg-kind { color: #1a7f37; }
+.mdy-msg-refuse .mdy-msg-kind,
+.mdy-msg-error .mdy-msg-kind { color: #cf222e; }
+.mdy-msg-undeliverable .mdy-msg-kind { color: #9a6700; }
+
+.mdy-msg-name { font-weight: 600; }
+.mdy-msg-index, .mdy-msg-page, .mdy-msg-detail { color: #59636e; }
+
+.mdy-msg-output {
+  margin: 4px 0 6px 22px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  color: #1f2328;
+  background: #f6f8fa;
+  border-left: 2px solid #d1d9e0;
+  border-radius: 0 4px 4px 0;
+}
+
+[data-theme="dark"] .mdy-messages { border-top-color: #3d444d; }
+[data-theme="dark"] .mdy-messages-note,
+[data-theme="dark"] .mdy-messages-empty,
+[data-theme="dark"] .mdy-msg-kind,
+[data-theme="dark"] .mdy-msg-index,
+[data-theme="dark"] .mdy-msg-page,
+[data-theme="dark"] .mdy-msg-detail { color: #9198a1; }
+[data-theme="dark"] .mdy-msg-send .mdy-msg-kind { color: #d2a8ff; }
+[data-theme="dark"] .mdy-msg-deliver .mdy-msg-kind { color: #3fb950; }
+[data-theme="dark"] .mdy-msg-refuse .mdy-msg-kind,
+[data-theme="dark"] .mdy-msg-error .mdy-msg-kind { color: #ff7b72; }
+[data-theme="dark"] .mdy-msg-undeliverable .mdy-msg-kind { color: #d29922; }
+[data-theme="dark"] .mdy-msg-output {
+  color: #f0f6fc;
+  background: #151b23;
+  border-left-color: #3d444d;
+}
+
+/* ---- the native demo's additions ---------------------------------------- */
+
+/* the engine, named in the header */
+#menu-items .engine-note {
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+
+/* a refusal's error and verdict, under its line */
+.mdy-msg-error {
+  color: #d1383d;
+  white-space: pre-wrap;
+}
