@@ -447,18 +447,19 @@ check-site: build/mdy$(EXE)
 # these five found eight bugs in an engine that already built a 93-page site
 # identically, and not one of them failed a unit test.
 #
-# One site differs on purpose, by an EXACT amount, and the check fails if
-# the count moves in either direction:
+# Every site is expected to be identical, and the check fails if a count
+# moves in either direction. Two used to differ by an EXACT amount:
 #
-#   docs-site  2: its pages emit raw HTML for the markdown front end to stitch
-#                 back, which is rehype-raw's HTML5 round trip. md4c does not
-#                 do it, and the difference is blank lines around the block.
-#
-# blog used to be 1: its search index tokenizes its own `$.text`, which holds
-# a composition token, and a token's id depends on the renders before it.
-# The render memo (src/engine.c) now hits where mdy-docs' hits and holds a
-# render under its key as compose.js does, so the ids agree.
-CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:2 \
+#   blog       1: its search index tokenizes its own `$.text`, which holds a
+#                 composition token, and a token's id depends on the renders
+#                 before it. The render memo (src/engine.c) hits where
+#                 mdy-docs' hits and holds a render under its key, as
+#                 compose.js does, so the ids agree.
+#   docs-site  2: its pages emit raw HTML through the markdown front end, and
+#                 md4c hands a raw block over with its final newline where
+#                 remark's `html` node has none — a blank line after every
+#                 raw block, until src/parse/markdown.c dropped it.
+CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
                ../../examples/messaging:0 fixture:0 fixture-pkg:0
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \

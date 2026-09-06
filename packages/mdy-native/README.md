@@ -55,15 +55,17 @@ shell, so MSVC would want a real build file rather than a CI flag.
 
 ## What is left
 
-Two things differ from mdy-docs on purpose, and `make check-sites` pins each to
-an exact count so a change in either direction fails:
+One thing differs from mdy-docs on purpose, and `make check-sites` counts it
+separately so a change in either direction fails:
 
 - **A resized image's bytes.** mdy-docs resizes with Squoosh's codecs and this
   uses stb — a different resampler and a different encoder. Same dimensions,
   same paths, visually equivalent, different file.
-- **Raw HTML through the markdown front end.** md4c does not do rehype-raw's
-  HTML5 round trip, so a `.md` file that emits raw HTML for remark to stitch
-  back comes out with different blank lines around the block.
+
+Everything else every site in this repository produces is byte-identical,
+raw HTML through the markdown front end included: md4c handed a raw block
+over with its final newline where remark's `html` node has none, and that
+was the whole of the blank-line difference `docs-site` used to show.
 
 **Renders are memoised as mdy-docs memoises them.** A render that reached
 outside its document — a query, a nested render, an emit, a publish, an
@@ -146,8 +148,9 @@ make check-parse    the C checks alone, no node needed — what CI runs
 Each harness runs the C and mdy-docs' JavaScript over the same real input and
 diffs, and every rule in `src/parse` was written that way: measured against the
 JavaScript, never read from it and translated. The markdown front end is the
-one still short of byte-identity — md4c does not do rehype-raw's HTML5 round
-trip, which is the two `docs-site` files `check-sites` expects to differ.
+one still short of tree-identity over the borrowed corpus — md4c does not do
+rehype-raw's HTML5 round trip — but every `.md` file a site in this repository
+holds comes out byte-identical, `docs-site`'s raw HTML included.
 
 What the front end does **not** do is run a document's `%` and `{{ }}`
 lines: it compiles them to statements and hands them to lamassu, which is the

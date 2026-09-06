@@ -409,7 +409,15 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             return 0;
 
         case MD_BLOCK_HTML: {
-            /* One raw node holding what was written. */
+            /* One raw node holding what was written — minus the newline that
+             * ends the block. md4c hands the block over with its final line
+             * break; remark's `html` node value has none, and the wrap above
+             * supplies the separator. With both, every raw block was followed
+             * by a blank line the JavaScript does not write. */
+            if (b->pending_len && b->pending[b->pending_len - 1] == '\n') {
+                b->pending_len--;
+                if (b->pending_len && b->pending[b->pending_len - 1] == '\r') b->pending_len--;
+            }
             if (b->pending_len) {
                 mdy_node *raw = mdy_new_text(b->doc, b->pending, b->pending_len);
                 if (raw) raw->type = MDY_RAW;
