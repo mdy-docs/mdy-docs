@@ -33,6 +33,7 @@
 #endif
 
 #include "bjval.h"
+#include "broker.h"
 #include "engine.h"
 #include "fsx.h"
 #include "http.h"
@@ -1189,7 +1190,10 @@ typedef struct {
     Progress progress;
     char **seen; size_t seen_count, seen_cap;   /* [read] once per path */
     char **announced; size_t announced_count;   /* [hold] once per name */
-    /* the bus */
+    /* the bus: a broker of this process's own, or one that answered --broker */
+    Broker *local;
+    char *local_dir;
+    double last_drain;
     int live;
     char token[40];
     char callback[512];
@@ -1273,6 +1277,25 @@ static void dev_send(Dev *d, int dedupe, int announce) {
     char ts[32];
     for (size_t i = 0; i < fresh.count; i++) {
         uint8_t *bytes = NULL; size_t len = 0;
+        if (d->local) {
+            /* The same route, the same binjson body, no POST — and the
+             * index it landed at, which the JavaScript's local line shows. */
+            char path[300]; snprintf(path, sizeof path, "/pub/%s", fresh.names[i]);
+            BrokerReply reply = { 0 };
+            int ok = mdy_engine_encode_json(d->engine, fresh.json[i], &bytes, &len) == 0 &&
+                     broker_request(d->local, "POST", path, NULL, bytes, len, &reply) == 0 && reply.status >= 200 && reply.status < 300;
+            if (!ok) {
+                fprintf(stderr, "%s%s %s[send]%s publish: %s refused with %d%s\n", TS(ts), RED_OPEN(), RED_OPEN(), RED_CLOSE(), fresh.names[i], reply.status, RED_CLOSE());
+            } else if (announce) {
+                bjv *v = bjv_decode(reply.body, reply.body_len);
+                printf("%s%s%s %s[send]%s %s %s#%.0f, %zu bytes%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), MAGENTA_OPEN(), MAGENTA_CLOSE(),
+                       fresh.names[i], DIM_OPEN(), bjv_number(v, "index", 0), len, DIM_CLOSE());
+                bjv_free(v);
+            }
+            broker_reply_free(&reply);
+            free(bytes);
+            continue;
+        }
         char url[2300];
         snprintf(url, sizeof url, "%s/pub/%s", d->o->broker, fresh.names[i]);
         HttpResponse r;
@@ -1315,43 +1338,96 @@ static int dev_register(Dev *d) {
 }
 
 /* A delivery: render the page the subject names, once per message. */
-static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
-    char auth[128], subject[256], ts[32];
-    char expect[64];
-    snprintf(expect, sizeof expect, "Bearer %s", d->token);
-    if (!httpd_header(req, "Authorization", auth, sizeof auth) || strcmp(auth, expect) != 0) { httpd_respond(s, req, 401, "text/plain", NULL, "", 0); return; }
-    if (!httpd_header(req, "X-Sukkal-Subject", subject, sizeof subject)) { httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
-    bjv *batch = bjv_decode(req->body, req->body_len);
-    if (!batch || batch->type != BJV_ARRAY || batch->count == 0) { bjv_free(batch); httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
-
-    /* the retry policy, once per subject, before any attempt is spent */
-    if (!seen_before(&d->policied, &d->policied_count, &(size_t){d->policied_count}, subject)) {
-        char url[1024];
-        snprintf(url, sizeof url, "%s/queue/%s?group=%s&max_attempts=%d&backoff_ms=%d&max_backoff_ms=%d",
-                 d->o->broker, subject, d->o->group, d->o->max_attempts, d->o->backoff, d->o->max_backoff);
-        HttpResponse pr;
-        if (http_request("PUT", url, NULL, NULL, 0, &pr) == 0) http_response_free(&pr);
+/* The retry policy, once per subject, before any attempt is spent. */
+static void dev_policy(Dev *d, const char *subject) {
+    if (seen_before(&d->policied, &d->policied_count, &(size_t){d->policied_count}, subject)) return;
+    char query[256];
+    snprintf(query, sizeof query, "group=%s&max_attempts=%d&backoff_ms=%d&max_backoff_ms=%d",
+             d->o->group, d->o->max_attempts, d->o->backoff, d->o->max_backoff);
+    if (d->local) {
+        char path[300]; snprintf(path, sizeof path, "/queue/%s", subject);
+        BrokerReply r; broker_request(d->local, "PUT", path, query, NULL, 0, &r); broker_reply_free(&r);
+        return;
     }
+    char url[1024];
+    snprintf(url, sizeof url, "%s/queue/%s?%s", d->o->broker, subject, query);
+    HttpResponse pr;
+    if (http_request("PUT", url, NULL, NULL, 0, &pr) == 0) http_response_free(&pr);
+}
 
-    int is_dead = strlen(subject) > 5 && strcmp(subject + strlen(subject) - 5, ".dead") == 0;
-    int target = mdy_engine_page_index(d->engine, subject);
-    char done_list[4096] = "";
-    size_t done = 0, failed = 0;
-    if (target < 0) {
-        if (is_dead) {
-            for (size_t i = 0; i < batch->count; i++) {
-                char name[256]; snprintf(name, sizeof name, "%.*s", (int)(strlen(subject) - 5), subject);
-                fprintf(stderr, "%s %s[dead]%s %s %s#%.0f%s %sno %s page — kept, see `mdy dead %s`%s\n", TS(ts), RED_OPEN(), RED_CLOSE(), subject,
-                        DIM_OPEN(), bjv_number(batch->items[i], "index", 0), DIM_CLOSE(), DIM_OPEN(), subject, name, DIM_CLOSE());
+/*
+ * The local bus: what mdy-bus's runLocalBus does. Every subject the store
+ * holds, its policy set once, its leased jobs taken, each rendered against
+ * the page it names and settled with done or fail. Rounds until a pass finds
+ * nothing, since a render publishes onward.
+ */
+static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_dead, int target,
+                          size_t *done, size_t *failed, char *done_list, size_t done_cap,
+                          double *done_indexes, double *failed_indexes);
+
+static void dev_drain(Dev *d) {
+    if (!d->local) return;
+    for (int round = 0; round < 32; round++) {
+        size_t handled = 0;
+        BrokerReply r;
+        if (broker_request(d->local, "GET", "/subjects", NULL, NULL, 0, &r) != 0 || r.status != 200) { broker_reply_free(&r); return; }
+        bjv *subjects = bjv_decode(r.body, r.body_len);
+        broker_reply_free(&r);
+        if (!subjects || subjects->type != BJV_ARRAY) { bjv_free(subjects); return; }
+        for (size_t i = 0; i < subjects->count; i++) {
+            const bjv *name = subjects->items[i];
+            if (name->type != BJV_STRING) continue;
+            const char *subject = name->string;
+            dev_policy(d, subject);
+            char path[300], query[128];
+            snprintf(path, sizeof path, "/take/%s", subject);
+            snprintf(query, sizeof query, "group=%s&max=16&lease=30000", d->o->group);
+            BrokerReply t;
+            if (broker_request(d->local, "POST", path, query, NULL, 0, &t) != 0 || t.status != 200) { broker_reply_free(&t); continue; }
+            bjv *jobs = bjv_decode(t.body, t.body_len);
+            broker_reply_free(&t);
+            if (!jobs || jobs->type != BJV_ARRAY || jobs->count == 0) { bjv_free(jobs); continue; }
+            int is_dead = strlen(subject) > 5 && strcmp(subject + strlen(subject) - 5, ".dead") == 0;
+            int target = mdy_engine_page_index(d->engine, subject);
+            size_t done = 0, failed = 0;
+            char done_list[4096] = "";
+            double done_ix[64], failed_ix[64];
+            deliver_batch(d, subject, jobs, is_dead, target, &done, &failed, done_list, sizeof done_list, done_ix, failed_ix);
+            for (size_t k = 0; k < done && k < 64; k++) {
+                snprintf(path, sizeof path, "/done/%s", subject);
+                snprintf(query, sizeof query, "group=%s&index=%.0f", d->o->group, done_ix[k]);
+                BrokerReply x; broker_request(d->local, "POST", path, query, NULL, 0, &x); broker_reply_free(&x);
             }
-            bjv_free(batch);
-            httpd_respond(s, req, 200, "text/plain", NULL, "", 0);
-            return;
+            for (size_t k = 0; k < failed && k < 64; k++) {
+                snprintf(path, sizeof path, "/fail/%s", subject);
+                snprintf(query, sizeof query, "group=%s&index=%.0f", d->o->group, failed_ix[k]);
+                BrokerReply x; broker_request(d->local, "POST", path, query, NULL, 0, &x); broker_reply_free(&x);
+            }
+            handled += jobs->count;
+            bjv_free(jobs);
         }
-        fprintf(stderr, "%s %s[return]%s %s %s(%s)%s — %zu message(s) returned; they will dead-letter\n", TS(ts), YELLOW_OPEN(), YELLOW_CLOSE(),
-                subject, DIM_OPEN(), target == -2 ? "2 pages share that name" : "no page of that name here", DIM_CLOSE(), batch->count);
-        bjv_free(batch);
-        httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
+        bjv_free(subjects);
+        if (handled == 0) return;
+    }
+    char ts[32];
+    fprintf(stderr, "%s %s[bus]%s bus: still draining after 32 rounds; continuing next tick\n", TS(ts), RED_OPEN(), RED_CLOSE());
+}
+
+static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_dead, int target,
+                          size_t *done, size_t *failed, char *done_list, size_t done_cap,
+                          double *done_indexes, double *failed_indexes) {
+    char ts[32];
+    *done = 0; *failed = 0;
+    if (target < 0) {
+        /* a dead-letter channel with no page: reported and finished */
+        for (size_t i = 0; i < batch->count; i++) {
+            char name[256]; snprintf(name, sizeof name, "%.*s", (int)(strlen(subject) - 5), subject);
+            double index = bjv_number(batch->items[i], "index", 0);
+            fprintf(stderr, "%s %s[dead]%s %s %s#%.0f%s %sno %s page — kept, see `mdy dead %s`%s\n", TS(ts), RED_OPEN(), RED_CLOSE(), subject,
+                    DIM_OPEN(), index, DIM_CLOSE(), DIM_OPEN(), subject, name, DIM_CLOSE());
+            if (*done < 64) done_indexes[*done] = index;
+            (*done)++;
+        }
         return;
     }
     char *path = mdy_engine_document_path(d->engine, (size_t)target);
@@ -1383,7 +1459,8 @@ static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
         char attempt[64] = "";
         if (attempts > 1) snprintf(attempt, sizeof attempt, " %sattempt %.0f/%d%s", YELLOW_OPEN(), attempts, d->o->max_attempts, YELLOW_CLOSE());
         if (!html) {
-            failed++;
+            if (*failed < 64) failed_indexes[*failed] = index;
+            (*failed)++;
             int last = attempts >= d->o->max_attempts;
             char last_line[400];
             if (last) snprintf(last_line, sizeof last_line, "out of attempts — dead-lettering to %s.dead", subject);
@@ -1394,9 +1471,10 @@ static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
             free(html);
             size_t produced = d->messages.count;
             if (produced) dev_send(d, 0, 0);
-            done++;
+            if (*done < 64) done_indexes[*done] = index;
+            (*done)++;
             char item[32]; snprintf(item, sizeof item, "%s%.0f", done_list[0] ? "," : "", index);
-            strncat(done_list, item, sizeof done_list - strlen(done_list) - 1);
+            strncat(done_list, item, done_cap - strlen(done_list) - 1);
             char extra[64] = "";
             if (produced) snprintf(extra, sizeof extra, " %s(published %zu)%s", DIM_OPEN(), produced, DIM_CLOSE());
             printf("%s%s%s %s[%s]%s %s %s#%.0f%s → rendered %s%s%s in %s%dms%s%s%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(),
@@ -1406,6 +1484,33 @@ static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
         bjv_free(value);
     }
     free(path);
+}
+
+static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
+    char auth[128], subject[256];
+    char expect[64];
+    snprintf(expect, sizeof expect, "Bearer %s", d->token);
+    if (!httpd_header(req, "Authorization", auth, sizeof auth) || strcmp(auth, expect) != 0) { httpd_respond(s, req, 401, "text/plain", NULL, "", 0); return; }
+    if (!httpd_header(req, "X-Sukkal-Subject", subject, sizeof subject)) { httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
+    bjv *batch = bjv_decode(req->body, req->body_len);
+    if (!batch || batch->type != BJV_ARRAY || batch->count == 0) { bjv_free(batch); httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
+
+    dev_policy(d, subject);
+
+    int is_dead = strlen(subject) > 5 && strcmp(subject + strlen(subject) - 5, ".dead") == 0;
+    int target = mdy_engine_page_index(d->engine, subject);
+    char done_list[4096] = "";
+    size_t done = 0, failed = 0;
+    double done_ix[64], failed_ix[64];
+    if (target < 0 && !is_dead) {
+        char ts[32];
+        fprintf(stderr, "%s %s[return]%s %s %s(%s)%s — %zu message(s) returned; they will dead-letter\n", TS(ts), YELLOW_OPEN(), YELLOW_CLOSE(),
+                subject, DIM_OPEN(), target == -2 ? "2 pages share that name" : "no page of that name here", DIM_CLOSE(), batch->count);
+        bjv_free(batch);
+        httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
+        return;
+    }
+    deliver_batch(d, subject, batch, is_dead, target, &done, &failed, done_list, sizeof done_list, done_ix, failed_ix);
     bjv_free(batch);
     if (done == 0) httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
     else if (failed) {
@@ -1572,7 +1677,7 @@ static int dev_rebuild(Dev *d, const char *changed, int first) {
         printf("%s%s%s %s[mdy]%s rendered %s%zu%s page(s) in %dms%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), CYAN_OPEN(), CYAN_CLOSE(),
                BOLD_OPEN(), d->pages.count, BOLD_CLOSE(), (int)(now_ms() - started), holding);
     }
-    if (d->live) dev_send(d, 1, 1);
+    if (d->live) { dev_send(d, 1, 1); if (d->local) dev_drain(d); }
     fflush(stdout);
     return 1;
 }
@@ -1594,15 +1699,26 @@ static int cmd_dev(int argc, char **argv) {
         else if (strcmp(a, "--future") == 0) o.future = 1;
         else o.root_arg = a;
     }
+    /* One line at a time on stdout, whatever it is: the JavaScript writes
+     * through console.log, and a log read from a pipe must keep its order. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
     Dev d = { 0 };
     d.o = &o;
     d.root = absolute(o.root_arg);
     d.progress.enabled = isatty(fileno(stderr));
     double started = now_ms();
 
-    /* the broker, if one answers */
+    /* the broker: one of this process's own, or the one --broker names */
     char broker[2048] = "";
-    if (o.broker) {
+    if (!o.broker) {
+        char *tmp = fsx_tmpdir();
+        char prefix[1200]; snprintf(prefix, sizeof prefix, "%s/mdy-broker", tmp ? tmp : ".");
+        free(tmp);
+        d.local_dir = fsx_mkdtemp(prefix);
+        d.local = d.local_dir ? broker_open(d.local_dir) : NULL;
+        if (d.local) { d.live = 1; o.broker = "in-process"; }
+    }
+    if (o.broker && !d.local) {
         snprintf(broker, sizeof broker, "%s", o.broker);
         trim_slashes(broker);
         o.broker = broker;
@@ -1621,7 +1737,7 @@ static int cmd_dev(int argc, char **argv) {
     if (!d.server) { fprintf(stderr, "%slisten EADDRINUSE: address already in use :::%d%s\n", RED_OPEN(), o.port, RED_CLOSE()); return 1; }
     char url[128]; snprintf(url, sizeof url, "http://localhost:%d/", httpd_port(d.server));
 
-    if (d.live) {
+    if (d.live && !d.local) {
         char host[128] = "127.0.0.1";
         http_local_address(o.broker, host, sizeof host);
         snprintf(d.token, sizeof d.token, "%08x%08x%08x%08x", (unsigned)rand(), (unsigned)rand(), (unsigned)rand(), (unsigned)rand());
@@ -1629,12 +1745,13 @@ static int cmd_dev(int argc, char **argv) {
         if (dev_register(&d) != 0) d.live = 0;
         else { d.last_heartbeat = now_ms(); dev_send(&d, 1, 1); }
     }
+    if (d.local) { dev_send(&d, 1, 1); dev_drain(&d); }
 
-    printf("\n  %s%sMDY%s%s  %sready in%s %s%d ms%s\n\n  %s➜%s  %sLocal:%s   %s%s%s\n%s  %s➜%s  %spress ctrl+c to stop%s\n\n",
+    printf("\n  %s%sMDY%s%s  %sready in%s %s%d ms%s\n\n  %s➜%s  %sLocal:%s   %s%s%s\n",
            BOLD_OPEN(), MAGENTA_OPEN(), MAGENTA_CLOSE(), BOLD_CLOSE(), DIM_OPEN(), DIM_CLOSE(), BOLD_OPEN(), (int)(now_ms() - started), BOLD_CLOSE(),
-           GREEN_OPEN(), GREEN_CLOSE(), BOLD_OPEN(), BOLD_CLOSE(), CYAN_OPEN(), url, CYAN_CLOSE(),
-           d.live ? "" : "", GREEN_OPEN(), GREEN_CLOSE(), DIM_OPEN(), DIM_CLOSE());
-    if (d.live) printf("  %s➜%s  %sBroker:%s  %s%s%s %s— publishing and delivering%s\n\n", GREEN_OPEN(), GREEN_CLOSE(), BOLD_OPEN(), BOLD_CLOSE(), CYAN_OPEN(), o.broker, CYAN_CLOSE(), DIM_OPEN(), DIM_CLOSE());
+           GREEN_OPEN(), GREEN_CLOSE(), BOLD_OPEN(), BOLD_CLOSE(), CYAN_OPEN(), url, CYAN_CLOSE());
+    if (d.live) printf("  %s➜%s  %sBroker:%s  %s%s%s %s— publishing and delivering%s\n", GREEN_OPEN(), GREEN_CLOSE(), BOLD_OPEN(), BOLD_CLOSE(), CYAN_OPEN(), o.broker, CYAN_CLOSE(), DIM_OPEN(), DIM_CLOSE());
+    printf("  %s➜%s  %spress ctrl+c to stop%s\n\n", GREEN_OPEN(), GREEN_CLOSE(), DIM_OPEN(), DIM_CLOSE());
     fflush(stdout);
 
     /* the loop: serve, watch, rebuild, reload */
@@ -1669,7 +1786,9 @@ static int cmd_dev(int argc, char **argv) {
             if (dev_rebuild(&d, changed, 0)) httpd_broadcast(d.server, "data: reload\n\n", 14);
             free(changed);
         }
-        if (d.live && t - d.last_heartbeat >= 30000) { d.last_heartbeat = t; dev_register(&d); }
+        if (d.live && !d.local && t - d.last_heartbeat >= 30000) { d.last_heartbeat = t; dev_register(&d); }
+        /* the local bus pulls: after a rebuild's sends, and on a tick for retries after a backoff */
+        if (d.local && t - d.last_drain >= 1000) { d.last_drain = t; dev_drain(&d); }
     }
 }
 

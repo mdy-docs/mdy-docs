@@ -169,6 +169,26 @@ found by this: a stale cap on live regular expressions, and a module specifier
 left unrooted across an allocation, which AddressSanitizer and `MDY_GC_STRESS`
 turned into a use-after-free with a name.
 
+## The command
+
+`build/mdy` is bin/mdy.js, subcommand for subcommand: `mdy build`, document
+mode (`mdy file.mdy`, a directory, or stdin, with `-o`, `--html`, `--emit-js`,
+`-d`, `--data-file`, `--watch`), `mdy dev` and `mdy dead`. Its specification
+is bin/mdy.js's own test file: `make check-cli` runs test/cli.test.js with
+this binary in the JavaScript's place, and all 34 cases pass.
+[docs/cli-plan.md](docs/cli-plan.md) is how it got there.
+
+`mdy dev` carries a broker. With `--broker`, it registers with the sukkal it
+names and publishes and delivers as @mdy-docs/mdy-bus does; without one, it
+runs sukkal itself — the broker's store and routes are C and are linked into
+this binary (src/broker.c), a request is a direct call, and the local bus
+pulls, renders and settles as mdy-bus's in-process bus does. Against a live
+sukkal with a page that throws, the two dev servers' logs are identical
+modulo timestamps and ids. Not on Windows or in the wasm build: sukkal's
+store opens its directory as a descriptor and works relative to it, which
+Windows cannot, so there `mdy dev` without a broker holds messages and says
+so — as the JavaScript does when its own wasm broker is not built.
+
 ## In a browser
 
 The same sources compile with emscripten unchanged, because the engine's only

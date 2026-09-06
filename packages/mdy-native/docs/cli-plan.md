@@ -9,12 +9,10 @@ mostly the command around it.
 **Status: done, all phases.** The binary is `mdy`; `make check-cli` runs
 bin/mdy.js's own 34 CLI tests against it and every one passes; every site in
 this repository builds byte-identically both ways but for resized-image
-bytes; `mdy dev` answers request for request as serve.js does and, with a
-broker, publishes and delivers as mdy-bus does. What each phase found on the
-way is in its commit. The one thing the JavaScript does that this does not
-is open an in-process broker when no `--broker` is given — that is sukkal's
-wasm build inside node, and without it the JavaScript holds messages and
-says so, which is what this does.
+bytes; `mdy dev` answers request for request as serve.js does and publishes
+and delivers as mdy-bus does — against the broker `--broker` names, or
+against sukkal itself, linked into the binary and run in this process when
+no broker is named. What each phase found on the way is in its commit.
 
 ## Where it stands
 

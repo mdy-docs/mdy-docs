@@ -132,6 +132,46 @@ build/libnisaba.a: $(NIS_SRCS)
 	done
 	$(AR) rcs $@ build/nis/*.o
 
+# ---- sukkal, in this process ----------------------------------------------
+#
+# `mdy dev` with no --broker runs the broker itself: sukkal's store and
+# routes are C and link straight in, and a request is a direct call to
+# sukkal_dispatch — the seam its own WebAssembly build uses. Its delivery
+# transport is libcurl and is NOT linked; the local bus pulls instead, as
+# mdy-bus's does. See src/broker.c.
+#
+# Two things about the link. sukkal vendors binjson-structures at a version
+# nisaba does not, and 41 names (bjfile_*, bpt_*) are defined by both, so
+# sukkal's units are compiled with src/sukkal_rename.h -include'd — the same
+# shape as NIS_RENAME. And binjson.c itself is byte-identical in both trees,
+# so nisaba's copy serves sukkal too.
+SUKKAL := ../../third_party/sukkal-msg
+SUKKAL_SRCS := $(SUKKAL)/src/store.c $(SUKKAL)/src/store_posix.c $(SUKKAL)/src/server.c \
+               $(SUKKAL)/src/push.c $(SUKKAL)/src/bjtext.c \
+               $(SUKKAL)/third_party/binjson-structures/src/bjfile.c \
+               $(SUKKAL)/third_party/binjson-structures/src/entrylog.c \
+               $(SUKKAL)/third_party/binjson-structures/src/bplustree.c \
+               $(SUKKAL)/third_party/binjson-structures/src/bjio_posix.c
+SUKKAL_INC := -I$(SUKKAL)/include -I$(SUKKAL)/third_party/binjson/include \
+              -I$(SUKKAL)/third_party/binjson-structures/include
+SUKKAL_FLAGS := -include src/sukkal_rename.h
+
+# Not on Windows: the store opens its directory as a descriptor and works
+# relative to it (openat), which has no equivalent there. src/broker.c is a
+# stub on that platform and the archive is empty, so the link line can stay
+# one line.
+ifeq ($(OS),Windows_NT)
+  SUKKAL_SRCS :=
+endif
+
+build/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h
+	@mkdir -p build/sukkal
+	@for f in $(SUKKAL_SRCS); do \
+	  $(CC) -std=gnu11 -O2 $(DEBUG) $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal/`basename $$f .c`.o || exit 1; \
+	done
+	@if [ -z "$(SUKKAL_SRCS)" ]; then echo 'int mdy_no_sukkal_here;' > build/sukkal/none.c && $(CC) -c build/sukkal/none.c -o build/sukkal/none.o; fi
+	$(AR) rcs $@ build/sukkal/*.o
+
 # ---- the MDY front end, in C ----------------------------------------------
 #
 # src/parse: the same parser mdy-docs has in JavaScript, producing the same
@@ -385,7 +425,7 @@ check-golden: build/mdy$(EXE)
 # C, and it is the seam the engine will be built on.
 build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
+	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
 	  test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) -o $@ $(LDLIBS)
 
 check-ingest: build/ingest-test$(EXE)
@@ -394,27 +434,27 @@ check-ingest: build/ingest-test$(EXE)
 # One document, end to end, with no JavaScript engine but lamassu — the three
 # passes of src/mdy.js done in C. No JavaScript engine but lamassu is linked
 # into this binary.
-build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR) build/libsukkal.a
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c $(NIS_SRCS) \
-	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
+	  test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c $(NIS_SRCS) \
+	  $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # The same driver under AddressSanitizer. A use-after-free in the boundary
 # between the tree, the document store and the VM is invisible without it:
 # a freed key cell is silently reused and a property becomes a different one.
-build/mdy-asan$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/mdy-asan$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR) build/libsukkal.a
 	@mkdir -p build
 	$(CC) -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer \
-	  -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
-	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c $(NIS_SRCS) \
-	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
+	  -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
+	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c $(NIS_SRCS) \
+	  $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS) -o $@ $(LDLIBS)
 
-build/mdy$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/mdy$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR) build/libsukkal.a
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c $(NIS_SRCS) \
-	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
+	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c $(NIS_SRCS) \
+	  $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # Twice: once normally, once collecting at EVERY safe point.
 #
@@ -491,7 +531,7 @@ LAM_SRCS := $(wildcard $(LAMASSU)/src/runtime/*.c) $(wildcard $(LAMASSU)/src/fro
             $(LAMASSU)/third_party/baru-re/src/re_compiler.c $(LAMASSU)/third_party/baru-re/src/re_vm.c
 LAM_INC  := -I$(LAMASSU)/include -I$(LAMASSU)/src -I$(LAMASSU)/src/runtime -I$(LAMASSU)/src/frontend \
             -I$(LAMASSU)/third_party/baru-re/include -DLAMASSU_HAS_REGEX
-ENGINE_SRCS := src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c
+ENGINE_SRCS := src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c
 WASM_OUT := build/wasm/mdy-native.mjs
 
 build/wasm/liblamassu.a: $(LAM_SRCS)
@@ -518,7 +558,7 @@ build/wasm/libmdyparse.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS)
 
 $(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a $(HL_HDR)
 	@mkdir -p build/wasm
-	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
+	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
 	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a \
 	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
 	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
