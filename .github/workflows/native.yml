@@ -61,7 +61,7 @@ jobs:
         shell: ${{ matrix.shell }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -85,7 +85,7 @@ jobs:
             mingw-w64-x86_64-gcc
             diffutils
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -151,7 +151,7 @@ jobs:
       # passed, so what is there is what was proved; a release is a later
       # step and a workflow of its own.
       - name: Upload the binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: packages/mdy-native/build/mdy-build${{ matrix.exe }}
@@ -165,13 +165,13 @@ jobs:
     name: wasm
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       # Pinned to what nisaba's own CI pins, and what the wasm target was
       # first built with.
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@v16
         with:
           version: 5.0.7
 
@@ -179,7 +179,7 @@ jobs:
       # PATH, and that directory holds a subdirectory named `node`, so a
       # `node` looked up through it is a directory — `make: node: Permission
       # denied`. setup-node running second puts the real one first.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -194,7 +194,7 @@ jobs:
       # The module with its wrapper, page and server, laid out as in the
       # tree, so the download runs as it is: `node wasm/serve.mjs`.
       - name: Upload the module
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mdy-native-wasm
           path: |
