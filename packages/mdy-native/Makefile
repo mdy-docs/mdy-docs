@@ -30,7 +30,12 @@ LAMASSU ?= ../../third_party/lamassu-js
 # unknown field, both of which compile fine on macOS, which exposes them
 # regardless. lamassu's own Makefile carries the same note and reaches for
 # -D_POSIX_C_SOURCE; gnu11 gets the same result and also works under mingw.
-CFLAGS  += -std=gnu11 -Wall -Wextra -O2 -g -I$(LAMASSU)/include
+# DEBUG is -g, and the one thing to turn off for a build somebody downloads:
+# CI sets it empty, so the artifacts carry no DWARF (which was most of the
+# Linux and Windows binaries' size). It reaches the parser's flags too;
+# lamassu's archives take theirs from its own Makefile's CFLAGS.
+DEBUG   ?= -g
+CFLAGS  += -std=gnu11 -Wall -Wextra -O2 $(DEBUG) -I$(LAMASSU)/include
 LDLIBS  += -lm
 
 # Windows has no libpthread of its own and mingw's winpthreads is not needed:
@@ -150,7 +155,7 @@ MD4C_SRCS  := third_party/md4c/src/md4c.c third_party/md4c/src/entity.c
 MD4C_OBJS  := build/parse/md4c.o build/parse/md4c-entity.o
 UCD_INC    := -I$(LAMASSU)/third_party/baru-re/include
 PARSE_INC  := -Isrc/parse -Ithird_party/md4c/src
-PARSE_CFLAGS := -std=c11 -Wall -Wextra -Wshadow -O2 -g $(PARSE_INC) $(UCD_INC)
+PARSE_CFLAGS := -std=c11 -Wall -Wextra -Wshadow -O2 $(DEBUG) $(PARSE_INC) $(UCD_INC)
 PARSE_LIB  := build/libmdyparse.a
 
 build/parse/%.o: src/parse/%.c $(PARSE_HDRS)

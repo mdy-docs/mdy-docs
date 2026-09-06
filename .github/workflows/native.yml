@@ -65,6 +65,12 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
 
+    # No debug info in a build somebody downloads. DEBUG is the Makefile's -g
+    # knob, read from the environment by every make step here; lamassu's
+    # archives get the same through its own CFLAGS below.
+    env:
+      DEBUG: ''
+
     steps:
       - uses: actions/checkout@v7
         with:
@@ -113,7 +119,7 @@ jobs:
       # Both engines come from source. lamassu's archives are built by its own
       # Makefile; nisaba's sources are compiled directly by ours.
       - name: Build lamassu
-        run: make -C third_party/lamassu-js libs
+        run: make -C third_party/lamassu-js libs CFLAGS=-O2
 
       - name: Build the engine
         working-directory: packages/mdy-native
