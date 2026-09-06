@@ -3754,7 +3754,9 @@ static JsValue module_load(void *ud, JsContext *ctx,
     }
 
     size_t len = 0;
-    uint8_t *bytes = fsx_read("/", specifier + 1, &len);   /* absolute, minus the leading / */
+    /* Absolute, against the bare-slash root fsx.c treats as "as given" — and
+     * given whole: a Windows path here is `D:/…`, and `+ 1` took its drive. */
+    uint8_t *bytes = fsx_read("/", specifier, &len);
     if (!bytes) {
         snprintf(msg, sizeof msg, "module not found: %s", specifier);
         free(specifier);
