@@ -39,6 +39,10 @@ else
   EXE :=
 endif
 
+# src/oswin.c is in every link, on every platform: it is the Win32 half of
+# fsx.c and nis.c and is empty under #ifdef _WIN32 elsewhere. Listing it only
+# under Windows_NT is how it went missing when this file was rewritten.
+
 # ---- lamassu --------------------------------------------------------------
 #
 # Its two archives link directly now. They used to need a pre-link pass
@@ -328,10 +332,10 @@ check-golden: build/mdy-build$(EXE)
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
 # ingest mdy.js does in JS — `collection.insertOne({ ...doc.data })` — done in
 # C, and it is the seam the engine will be built on.
-build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c $(NIS_SRCS) $(PARSE_LIB)
+build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/ingest.c src/ingest.c src/nis.c $(NIS_SRCS) $(PARSE_LIB) -o $@ $(LDLIBS)
+	  test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) -o $@ $(LDLIBS)
 
 check-ingest: build/ingest-test$(EXE)
 	@./build/ingest-test$(EXE)
@@ -339,26 +343,26 @@ check-ingest: build/ingest-test$(EXE)
 # One document, end to end, with no JavaScript engine but lamassu — the three
 # passes of src/mdy.js done in C. No JavaScript engine but lamassu is linked
 # into this binary.
-build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
+build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/images.c $(NIS_SRCS) \
+	  test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # The same driver under AddressSanitizer. A use-after-free in the boundary
 # between the tree, the document store and the VM is invisible without it:
 # a freed key cell is silently reused and a property becomes a different one.
-build/mdy-build-asan$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
+build/mdy-build-asan$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
 	@mkdir -p build
 	$(CC) -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer \
 	  -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
-	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/images.c $(NIS_SRCS) \
+	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
-build/mdy-build$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
+build/mdy-build$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/images.c $(NIS_SRCS) \
+	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # Twice: once normally, once collecting at EVERY safe point.
