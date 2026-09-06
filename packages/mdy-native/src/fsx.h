@@ -51,6 +51,11 @@ int fsx_remove(const char *root, const char *rel);
  * so something has to make it absolute, and only the host knows where it is. */
 char *fsx_cwd(void);
 
+/* A leading slash — or, on Windows, a drive: `C:/…`. Both spellings reach
+ * the engine, and a path test that knows only the slash sends a drive-letter
+ * root through the working directory and reads nothing. */
+int fsx_is_absolute(const char *p);
+
 /*
  * ---- what the ported test suite needs -----------------------------------
  *

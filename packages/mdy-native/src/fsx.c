@@ -52,7 +52,7 @@ static int buf_put(Buf *b, const char *s, size_t n) {
  * `fs.read('/', thatPath)`, so on Windows `rel` arrives as `C:/…` while `root`
  * is a bare slash.
  */
-static int is_absolute(const char *p) {
+int fsx_is_absolute(const char *p) {
     if (p[0] == '/') return 1;
 #ifdef _WIN32
     if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
@@ -68,7 +68,7 @@ static char *at(const char *root, const char *rel) {
      * happens to work either way; this makes both explicit rather than relying
      * on one of them being harmless.
      */
-    if (is_absolute(rel) && root[0] == '/' && root[1] == '\0') return strdup(rel);
+    if (fsx_is_absolute(rel) && root[0] == '/' && root[1] == '\0') return strdup(rel);
 
     size_t rlen = strlen(root);
     while (rlen > 1 && root[rlen - 1] == '/') rlen--;

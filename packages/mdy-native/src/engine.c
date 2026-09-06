@@ -1278,15 +1278,18 @@ static void dirname_of(const char *p, char *out, size_t out_len) {
 /* `spec` against `base`, with `.` and `..` collapsed. */
 static void resolve_path(const char *base, const char *spec, char *out, size_t out_len) {
     char combined[4096];
-    if (spec[0] == '/') snprintf(combined, sizeof combined, "%s", spec);
+    if (fsx_is_absolute(spec)) snprintf(combined, sizeof combined, "%s", spec);
     else snprintf(combined, sizeof combined, "%s/%s", base, spec);
 
+    /* A drive-letter path has no leading slash to restore; its first segment
+     * is the drive, and `..` cannot climb above it. */
     int absolute = combined[0] == '/';
+    size_t floor = (!absolute && fsx_is_absolute(combined)) ? 1 : 0;
     char *stack[256];
     size_t depth = 0;
     for (char *seg = strtok(combined, "/"); seg; seg = strtok(NULL, "/")) {
         if (strcmp(seg, ".") == 0) continue;
-        if (strcmp(seg, "..") == 0) { if (depth) depth--; continue; }
+        if (strcmp(seg, "..") == 0) { if (depth > floor) depth--; continue; }
         if (depth < 256) stack[depth++] = seg;
     }
     size_t at = 0;
@@ -1304,7 +1307,7 @@ static void resolve_path(const char *base, const char *spec, char *out, size_t o
 /* A relative root against the working directory, so cache keys and cycle
  * detection compare the same directory the same way however it was spelled. */
 static void absolute_root(const char *root, char *out, size_t out_len) {
-    if (root[0] == '/') { resolve_path("/", root, out, out_len); return; }
+    if (fsx_is_absolute(root)) { resolve_path("/", root, out, out_len); return; }
     char *cwd = fsx_cwd();
     resolve_path(cwd ? cwd : ".", root, out, out_len);
     free(cwd);
@@ -1938,10 +1941,10 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
             if (!grown) break;
             for (size_t k = 0; k < want; k++) grown[k] = (size_t)-1;
             for (size_t k = 0; k < count; k++) {
-                size_t h = 1469598103934665603u;
+                uint64_t h = 1469598103934665603u;
                 for (const char *p = words[k]; *p; p++)
                     h = (h ^ (unsigned char)*p) * 1099511628211u;
-                size_t at = h & (want - 1);
+                size_t at = (size_t)(h & (want - 1));
                 while (grown[at] != (size_t)-1) at = (at + 1) & (want - 1);
                 grown[at] = k;
             }
@@ -1950,9 +1953,9 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
             slot_cap = want;
         }
 
-        size_t h = 1469598103934665603u;
+        uint64_t h = 1469598103934665603u;
         for (size_t k = 0; k < wlen; k++) h = (h ^ (unsigned char)word[k]) * 1099511628211u;
-        size_t at = h & (slot_cap - 1);
+        size_t at = (size_t)(h & (slot_cap - 1));
         int seen = 0;
         while (slots[at] != (size_t)-1) {
             const char *have = words[slots[at]];
