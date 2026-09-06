@@ -4,6 +4,7 @@
 #
 #   make build/mdy-build          the engine, as a command
 #   make check-engine             its unit checks, twice (see the target)
+#   make check-parse              the front end's own checks, no node needed
 #   make check-sites              every site here, built BOTH ways and diffed
 #   make check-site SITE=<dir>    one site, the same way
 #
@@ -12,7 +13,8 @@
 # should be — there is no second implementation of the expectations to drift.
 #
 # PORTABILITY. Everything here is plain C with no dependency on a system
-# package: lamassu, nisaba and the front end are submodules. The only files that know which operating system
+# package: lamassu and nisaba are submodules, the front end is src/parse, and
+# md4c and stb are vendored. The only files that know which operating system
 # this is are src/fsx.c and src/nis.c, because both engines are platform-clean
 # — lamassu has no #ifdefs at all and nisaba's I/O is behind its bj_io
 # callbacks. See docs/desktop-plan.md, Phase 4.
@@ -117,20 +119,148 @@ build/libnisaba.a: $(NIS_SRCS)
 
 # ---- the MDY front end, in C ----------------------------------------------
 #
-# github.com/mdy-docs/parse — the same parser mdy-docs has in JavaScript,
-# producing the same tree (87/87 documents of the reference corpus byte for
-# byte). It is here because the front end is where a native build's time goes:
-# a profile put every frame in the JavaScript layer, and this is the largest
-# single thing in it.
-PARSE     := third_party/parse
-PARSE_LIB := $(PARSE)/build/libmdyast.a
-PARSE_INC := -I$(PARSE)/include -I$(PARSE)/src
+# src/parse: the same parser mdy-docs has in JavaScript, producing the same
+# tree (87/87 documents of the reference corpus byte for byte), plus the
+# YAML reader, the script compiler, the markdown front end and the HTML
+# writer. It is here because the front end is where a native build's time
+# went: a profile put every frame in the JavaScript layer, and this was the
+# largest single thing in it. See docs/parser.md.
+#
+# It was github.com/mdy-docs/parse, a repo of its own, and is folded in here
+# because nothing else uses it. Its two dependencies are handled differently:
+# md4c is vendored at third_party/md4c, and baru-re's generated Unicode
+# tables — the parser wants ucd.h and nothing else of it — are read from the
+# copy lamassu already carries, so there is one baru-re in this tree rather
+# than two that could drift.
+#
+# c11 and -Wshadow rather than this package's gnu11: the parser has no
+# platform #ifdefs and no libc beyond malloc/free/str*/snprintf, and building
+# it strictly is how that stays true.
+PARSE_SRCS := $(wildcard src/parse/*.c)
+PARSE_HDRS := $(wildcard src/parse/*.h)
+PARSE_OBJS := $(patsubst src/parse/%.c,build/parse/%.o,$(PARSE_SRCS))
+MD4C_SRCS  := third_party/md4c/src/md4c.c third_party/md4c/src/entity.c
+MD4C_OBJS  := build/parse/md4c.o build/parse/md4c-entity.o
+UCD_INC    := -I$(LAMASSU)/third_party/baru-re/include
+PARSE_INC  := -Isrc/parse -Ithird_party/md4c/src
+PARSE_CFLAGS := -std=c11 -Wall -Wextra -Wshadow -O2 -g $(PARSE_INC) $(UCD_INC)
+PARSE_LIB  := build/libmdyparse.a
+
+build/parse/%.o: src/parse/%.c $(PARSE_HDRS)
+	@mkdir -p build/parse
+	$(CC) $(PARSE_CFLAGS) -c $< -o $@
+
+build/parse/md4c.o: third_party/md4c/src/md4c.c
+	@mkdir -p build/parse
+	$(CC) $(PARSE_CFLAGS) -c $< -o $@
+
+build/parse/md4c-entity.o: third_party/md4c/src/entity.c
+	@mkdir -p build/parse
+	$(CC) $(PARSE_CFLAGS) -c $< -o $@
+
+$(PARSE_LIB): $(PARSE_OBJS) $(MD4C_OBJS)
+	$(AR) rcs $@ $(PARSE_OBJS) $(MD4C_OBJS)
 
 # stb: three single-file headers, vendored. See third_party/stb/README.md.
 STB_INC   := -Ithird_party/stb
 
-$(PARSE_LIB):
-	$(MAKE) -C $(PARSE) build/libmdyast.a
+# ---- the front end's own checks -------------------------------------------
+#
+# `make check-parse` needs no node: the parser on constructed input, the HTML
+# writer on trees built by hand, the script compiler, the YAML reader and the
+# ```data scanner. The harder question — does each agree with mdy-docs'
+# JavaScript over real input, byte for byte — is the node-driven targets below
+# it, and it is how every rule in src/parse was written: measured against the
+# JavaScript rather than read from it. See docs/parser.md.
+PARSE_CHECKS := build/parse-test$(EXE) build/html-test$(EXE) build/script-test$(EXE) \
+                build/yaml-test$(EXE) build/data-test$(EXE)
+
+build/parse-test$(EXE): test/parse.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/html-test$(EXE): test/html.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/script-test$(EXE): test/script.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/yaml-test$(EXE): test/yaml.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/data-test$(EXE): test/data.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+
+# The drivers the node harnesses run: text in, a tree (or YAML, or documents,
+# or JavaScript) out as JSON, one per line, so a diff can say which document.
+build/mdyast$(EXE): test/mdyast.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/mdcat$(EXE): test/mdcat.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/doccat$(EXE): test/doccat.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/yamlcat$(EXE): test/yamlcat.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/datacat$(EXE): test/datacat.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/linkify$(EXE): test/linkify.c $(PARSE_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/md4cprobe$(EXE): test/md4cprobe.c $(MD4C_SRCS)
+	$(CC) $(PARSE_CFLAGS) test/md4cprobe.c $(MD4C_SRCS) -o $@
+
+.PHONY: check-parse compare check-html check-script check-yaml check-links \
+        check-markdown corpus bench
+check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
+	@./build/parse-test$(EXE)
+	@./build/html-test$(EXE)
+	@./build/script-test$(EXE)
+	@./build/yaml-test$(EXE)
+	@./build/data-test$(EXE)
+
+# The differential harnesses. mdy-docs is this repository; the corpora are
+# the site next to it, which is where the reference numbers in docs/parser.md
+# come from. Point CORPUS, SITE and THEME elsewhere as needed. Absolute,
+# because the harnesses `import()` mdy-docs' modules from the path they are
+# given, and a relative one would resolve against test/ rather than here.
+MDY_DOCS ?= ../..
+CORPUS   ?= ../../../../site/corpus
+SITE     ?= ../../../../site
+THEME    ?= ../../../../style-antiquity
+MDY_DOCS_ABS := $(abspath $(MDY_DOCS))
+CORPUS_ABS   := $(abspath $(CORPUS))
+SITE_ABS     := $(abspath $(SITE))
+THEME_ABS    := $(abspath $(THEME))
+
+# Does the PARSER produce mdy-docs' tree? Document by document, byte for byte,
+# with the first differences grouped by shape; --first shows one in full.
+compare: build/mdyast$(EXE)
+	@node test/compare.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(CORPUS_ABS)"
+
+# The WRITER against hast-util-to-html — the same tree through both, so a
+# difference has nowhere else to have come from — then end to end.
+check-html: build/mdyast$(EXE)
+	@node test/compare-html.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(SITE_ABS)"
+
+# The SCRIPT layer against compileScript: same document in, byte-identical
+# JavaScript out. A difference here is different behaviour, not a different tree.
+check-script: build/mdyast$(EXE)
+	@node test/compare-script.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(SITE_ABS)"
+
+# Every front matter block, ```data fence and .yaml file the site holds, read
+# here and by the `yaml` package, compared as JSON.
+check-yaml: build/yamlcat$(EXE)
+	@node test/compare-yaml.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(SITE_ABS)" --corpus "$(THEME_ABS)"
+
+# URL boundaries against linkify-it, whose rules are nobody's guess.
+check-links: build/linkify$(EXE)
+	@node test/linkify.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(CORPUS_ABS)"
+
+# The markdown front end against remark, over a borrowed corpus — the
+# CommonMark and GFM specs, md4c's extension specs, and real .md files found
+# under SITE's parent. Nothing is committed; see scripts-build-corpus.mjs.
+corpus:
+	@node scripts-build-corpus.mjs --roots "$(SITE_ABS)/.."
+
+check-markdown: build/mdcat$(EXE)
+	@node test/compare-markdown.mjs --mdy-docs "$(MDY_DOCS_ABS)" --tool "$(if $(TOOL),$(TOOL),build/mdcat$(EXE))"
+
+bench: build/mdyast$(EXE)
+	@node test/compare.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(CORPUS_ABS)" --bench
 
 
 # ---- the golden outputs ---------------------------------------------------
@@ -245,10 +375,11 @@ check-engine: build/engine-test$(EXE)
 	@echo "-- again, collecting at every safe point"
 	@MDY_GC_STRESS=1 ./build/engine-test$(EXE)
 
-# A whole site built both ways and diffed. SITE names the directory; there is
-# no default, because the corpus that matters is whichever one you have.
+# A whole site built both ways and diffed. SITE names the directory, and
+# defaults to the site next to this repository — the same SITE the front end's
+# harnesses above read — but the corpus that matters is whichever one you have.
 #
-#   make check-site SITE=../../../../site
+#   make check-site SITE=<dir>
 check-site: build/mdy-build$(EXE)
 	@node scripts-compare-site.mjs "$(SITE)"
 

@@ -9,12 +9,14 @@ make build/mdy-build             # the engine, as a command
 ./build/mdy-build <dir> --out <dir>
 
 make check-engine                # its own checks, twice — see the target
+make check-parse                 # the front end's own checks, no node needed
 make check-sites                 # every site here, built BOTH ways and diffed
 make check-site SITE=<dir>       # one site, the same way
 ```
 
 Everything is built from source and nothing comes from a system package:
-lamassu, nisaba and the MDY front end are submodules, and stb is vendored.
+lamassu and nisaba are submodules, the MDY front end is `src/parse`, and md4c
+and stb are vendored.
 
 **It builds this repository's own 93-page site byte-for-byte identically to
 `node bin/mdy.js build`**, in about 6 seconds against node's 16.
@@ -111,77 +113,40 @@ scalar `_id`, and the primary tree's keys are fixed-width OID bytes.
 
 ## The MDY front end, in C
 
-The parser is [github.com/mdy-docs/parse](https://github.com/mdy-docs/parse), a
-submodule at `third_party/parse`, and the application entries are bundled
-against it instead of `src/parse/block.js`. It is where a native build's time
-went: a profile put every frame in the JavaScript layer, and this was the
-largest single thing in it.
+`src/parse` is the same parser mdy-docs has in JavaScript — the tree, the
+YAML reader, the script compiler, the markdown front end and the HTML writer
+— and [docs/parser.md](docs/parser.md) is its own account: what it does, the
+numbers, how it works inside, and the rule for changing it. It was a
+repository of its own, github.com/mdy-docs/parse, and is folded in here
+because nothing else uses it.
 
-```
-corpus, 93 pages          JS front end   C front end
-                              61.0 s        45.5 s
-bundle                        1.62 mb       1.48 mb
-```
-
-Measured back to back on the same machine, both bundles from the same
-sources — `MDY_PARSER=js|c node scripts-build.mjs site`. The two outputs agree
-byte for byte.
+It is where a native build's time went: a profile put every frame in the
+JavaScript layer, and the front end was the largest single thing in it. On
+the reference corpus — 87 Wikipedia-derived documents, 6.5 MB — it is 12.5×
+faster than mdy-docs' parser under V8, doing the same amount of work.
 
 The comparison that matters is not the clock, though — it is that the output
-does not move. All 93 pages are **byte-identical** to what `node bin/mdy.js
-build` produces, and the parse repo's own harness holds 87/87 documents,
-284,872 nodes, 20,681 positions and 10,514 URL inputs against the JavaScript.
-
-### What it does not do, measured
-
-`make test-c-parser` runs mdy-docs' own suite against the C front end and
-prints what is left:
+does not move, and that is measured rather than trusted:
 
 ```
-$ make test-c-parser
-failing with the C front end: 130
-    87 cannot honour `script`
-    18 cannot honour `tasks`
-     6 cannot honour `arrows`
-     …
+make compare        87/87 documents byte-identical, 284,872 nodes, 20,681 positions
+make check-html     290/290 documents identical end to end, 26 MB of HTML
+make check-script   145/145 documents compiled identically, 14 MB of JavaScript
+make check-yaml     179/179 YAML blocks read identically
+make check-links    10514/10514 URL inputs agree with linkify-it
+make check-parse    the C checks alone, no node needed — what CI runs
 ```
 
-**All 130 are refusals** — `shims/parse.js` throwing a named error for an
-option it cannot honour, never a quiet difference in the output. There are no
-remaining cases where the two front ends are asked the same question and
-answer differently. Getting there closed 54 real differences, none of which
-the reference corpus reached: comments, raw-text elements, table captions,
-the sanitize schema's `strip` list, void elements, task boxes, arrows, tab
-stops, `mailto:`, page-link tidying, front matter, warnings, and hast's
-attribute-name rules among them.
+Each harness runs the C and mdy-docs' JavaScript over the same real input and
+diffs, and every rule in `src/parse` was written that way: measured against the
+JavaScript, never read from it and translated. The markdown front end is the
+one still short of byte-identity — md4c does not do rehype-raw's HTML5 round
+trip, which is the two `docs-site` files `check-sites` expects to differ.
 
-`script` is the largest refusal by far and the least alarming: it is the `%`
-and `{{ }}` template layer, which runs *before* block parsing, so the site path
-never asks the C parser for it. Porting it would mean putting a JavaScript
-engine inside the parser to feed a JavaScript engine.
-
-### Where the work is divided
-
-The C parser produces more than a tree, because a front end does: it hands back
-the **warnings** it raised (a dropped `<script>` is something an author is told
-about), the **front matter** it found — as source, because YAML belongs to a
-YAML reader and there is no case for writing a second one in C — and the
-**references** a document made, its tags, mentions and page links.
-
-`shims/parse.js` reads the YAML, applies mdy-docs' own highlighter to the
-finished tree, and puts the warnings on the vfile. Highlighting after the parse
-rather than inside it is why lowlight is in the bundle at all — 328 KB of
-grammars, which is most of the difference between the two bundle sizes above.
-
-It costs nothing to run here: `normalizeHighlight` totals **2 ms over 428
-calls** across the corpus, because the corpus has no fenced code. An earlier
-note in this file blamed a slower build on highlighting; that was wrong, and
-the numbers above replace it.
-
-Which front end a bundle gets is a choice. The application entries take the C
-one; the `tests` entry does not, so `make test` measures **mdy-docs'** behaviour
-rather than this parser's subset of it, and stays at 684 passing.
-`MDY_PARSER=c|js` overrides either way.
+What the front end does **not** do is run a document's `%` and `{{ }}`
+lines: it compiles them to statements and hands them to lamassu, which is the
+engine's job (below), and it does not highlight fenced code, which is a
+decoration of a tree that is already correct.
 
 ## The ingest, in C
 
