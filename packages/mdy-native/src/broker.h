@@ -12,9 +12,10 @@
  * fail — exactly as mdy-bus's does, since a single thread delivering to
  * itself over a callback would be a thread waiting for itself.
  *
- * The store is a directory (sukkal's is always a directory of entry logs);
- * for a dev run it is a fresh temporary one, which is what the JavaScript's
- * memory-backed provider amounts to.
+ * The store is a directory of entry logs, and here the directory is memory
+ * (memns.h): no path, no files left behind, and no POSIX, which is what
+ * lets this link on Windows and into the wasm build. It is the JavaScript's
+ * memory provider, and like it, a message lives as long as the process.
  */
 #ifndef MDY_BROKER_H
 #define MDY_BROKER_H
@@ -30,9 +31,8 @@ typedef struct {
     size_t body_len;
 } BrokerReply;
 
-/* A broker over the store at `dir` (created if needed). NULL on failure —
- * and always NULL on Windows and in the wasm build; see broker.c. */
-Broker *broker_open(const char *dir);
+/* A broker over a fresh, empty store in memory. NULL on failure. */
+Broker *broker_open(void);
 void broker_close(Broker *b);
 
 /* One request, answered in place. `query` is "a=1&b=2" or NULL; a body is

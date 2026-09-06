@@ -12,6 +12,9 @@
 
 #include "engine.h"
 #include "fsx.h"
+#include "binjson.h"
+#include "bjval.h"
+#include "broker.h"
 
 static int failures;
 
@@ -622,6 +625,116 @@ static void resize_checks(void) {
     free(root);
 }
 
+/*
+ * The broker that `mdy dev` runs when no --broker is given: sukkal's store
+ * and routes over a directory in memory (memns.h). What is checked is the
+ * store's whole life for one subject, through the same requests the dev
+ * loop makes — publish, list, take, done, fail, and the move to the
+ * dead-letter channel — because that directory is this package's own
+ * adapter, and a bug in it would show up as a message that never comes
+ * back, on Windows and in the browser first.
+ */
+static int broker_ok(Broker *b, const char *method, const char *path, const char *query,
+                     const uint8_t *body, size_t len, bjv **out) {
+    BrokerReply r;
+    int ok = broker_request(b, method, path, query, body, len, &r) == 0 && r.status >= 200 && r.status < 300;
+    *out = ok ? bjv_decode(r.body, r.body_len) : NULL;
+    int status = r.status;
+    broker_reply_free(&r);
+    return ok ? status : -status;
+}
+
+static void broker_checks(void) {
+    printf("\n--- the broker in this process ---\n");
+    char detail[256];
+    Broker *b = broker_open();
+    ok_("opens over a directory in memory", b != NULL, "NULL");
+    if (!b) return;
+
+    bj_builder *bld = bj_builder_new();
+    bj_begin_object(bld);
+    bj_put_key(bld, (const uint8_t *)"id", 2);
+    bj_put_string(bld, (const uint8_t *)"a-1001", 6);
+    bj_end_object(bld);
+    size_t len = 0;
+    const uint8_t *body = bj_builder_data(bld, &len);
+
+    bjv *v = NULL;
+    int st = broker_ok(b, "POST", "/pub/jobs.invoice", NULL, body, len, &v);
+    snprintf(detail, sizeof detail, "status %d index %.0f", st, bjv_number(v, "index", -1));
+    ok_("a publish lands at index 1", st > 0 && bjv_number(v, "index", -1) == 1, detail);
+    bjv_free(v);
+    st = broker_ok(b, "POST", "/pub/jobs.invoice", NULL, body, len, &v);
+    snprintf(detail, sizeof detail, "status %d index %.0f", st, bjv_number(v, "index", -1));
+    ok_("...and the next at index 2", st > 0 && bjv_number(v, "index", -1) == 2, detail);
+    bjv_free(v);
+
+    st = broker_ok(b, "GET", "/subjects", NULL, NULL, 0, &v);
+    int listed = v && v->type == BJV_ARRAY && v->count == 1 && v->items[0]->type == BJV_STRING &&
+                 strcmp(v->items[0]->string, "jobs.invoice") == 0;
+    char *json = bjv_to_json(v);
+    ok_("the listing names the subject", listed, json);
+    free(json); bjv_free(v);
+
+    st = broker_ok(b, "PUT", "/queue/jobs.invoice", "group=mdy&max_attempts=2&backoff_ms=0", NULL, 0, &v);
+    ok_("a queue group with two attempts and no backoff", st > 0, "refused");
+    bjv_free(v);
+
+    st = broker_ok(b, "POST", "/take/jobs.invoice", "group=mdy&max=16&lease=30000", NULL, 0, &v);
+    int took = v && v->type == BJV_ARRAY && v->count == 2 &&
+               bjv_number(v->items[0], "index", 0) == 1 && bjv_number(v->items[1], "index", 0) == 2 &&
+               bjv_number(v->items[1], "attempts", 0) == 1;
+    json = bjv_to_json(v);
+    ok_("a take leases both, first attempt", took, json);
+    /* the payload comes back as the bytes that went in */
+    const bjv *payload = took ? bjv_get(v->items[0], "payload") : NULL;
+    ok_("...with the payload byte for byte",
+        payload && payload->type == BJV_BINARY && payload->len == len && memcmp(payload->bytes, body, len) == 0, json);
+    free(json); bjv_free(v);
+
+    st = broker_ok(b, "POST", "/done/jobs.invoice", "group=mdy&index=1", NULL, 0, &v); bjv_free(v);
+    ok_("done settles the first", st > 0, "refused");
+    st = broker_ok(b, "POST", "/fail/jobs.invoice", "group=mdy&index=2", NULL, 0, &v); bjv_free(v);
+    ok_("fail returns the second", st > 0, "refused");
+
+    st = broker_ok(b, "POST", "/take/jobs.invoice", "group=mdy&max=16&lease=30000", NULL, 0, &v);
+    took = v && v->type == BJV_ARRAY && v->count == 1 &&
+           bjv_number(v->items[0], "index", 0) == 2 && bjv_number(v->items[0], "attempts", 0) == 2;
+    json = bjv_to_json(v);
+    ok_("the failed one comes back alone, second attempt", took, json);
+    free(json); bjv_free(v);
+    st = broker_ok(b, "POST", "/fail/jobs.invoice", "group=mdy&index=2", NULL, 0, &v); bjv_free(v);
+
+    /* out of attempts: the next take moves it to the dead-letter channel */
+    st = broker_ok(b, "POST", "/take/jobs.invoice", "group=mdy&max=16&lease=30000", NULL, 0, &v);
+    json = bjv_to_json(v);
+    ok_("out of attempts, a take hands out nothing", v && v->type == BJV_ARRAY && v->count == 0, json);
+    free(json); bjv_free(v);
+
+    st = broker_ok(b, "GET", "/subjects", NULL, NULL, 0, &v);
+    int has_dead = 0;
+    if (v && v->type == BJV_ARRAY)
+        for (size_t i = 0; i < v->count; i++)
+            if (v->items[i]->type == BJV_STRING && strcmp(v->items[i]->string, "jobs.invoice.dead") == 0) has_dead = 1;
+    json = bjv_to_json(v);
+    ok_("...and the dead-letter channel is a subject now", has_dead, json);
+    free(json); bjv_free(v);
+
+    st = broker_ok(b, "POST", "/take/jobs.invoice.dead", "group=mdy&max=16&lease=30000", NULL, 0, &v);
+    json = bjv_to_json(v);
+    ok_("the dead letter can be taken from there", v && v->type == BJV_ARRAY && v->count == 1, json);
+    free(json); bjv_free(v);
+
+    st = broker_ok(b, "GET", "/dead/jobs.invoice", NULL, NULL, 0, &v);
+    json = bjv_to_json(v);
+    ok_("`mdy dead` sees it too", st > 0 && v && v->type == BJV_ARRAY && v->count == 1, json);
+    free(json); bjv_free(v);
+
+    bj_builder_free(bld);
+    broker_close(b);
+    ok_("closes with nothing left behind", 1, NULL);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("[main]\n");
@@ -1013,6 +1126,7 @@ int main(void) {
     natives_checks();
     resize_checks();
     gc_checks();
+    broker_checks();
 
     if (failures) { printf("\n%d failed\n", failures); return 1; }
     printf("\nall checks passed\n");

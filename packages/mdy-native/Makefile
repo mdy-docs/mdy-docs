@@ -146,30 +146,25 @@ build/libnisaba.a: $(NIS_SRCS)
 # shape as NIS_RENAME. And binjson.c itself is byte-identical in both trees,
 # so nisaba's copy serves sukkal too.
 SUKKAL := ../../third_party/sukkal-msg
-SUKKAL_SRCS := $(SUKKAL)/src/store.c $(SUKKAL)/src/store_posix.c $(SUKKAL)/src/server.c \
+SUKKAL_SRCS := $(SUKKAL)/src/store.c $(SUKKAL)/src/server.c \
                $(SUKKAL)/src/push.c $(SUKKAL)/src/bjtext.c \
                $(SUKKAL)/third_party/binjson-structures/src/bjfile.c \
                $(SUKKAL)/third_party/binjson-structures/src/entrylog.c \
                $(SUKKAL)/third_party/binjson-structures/src/bplustree.c \
-               $(SUKKAL)/third_party/binjson-structures/src/bjio_posix.c
+               src/memns.c
 SUKKAL_INC := -I$(SUKKAL)/include -I$(SUKKAL)/third_party/binjson/include \
               -I$(SUKKAL)/third_party/binjson-structures/include
 SUKKAL_FLAGS := -include src/sukkal_rename.h
 
-# Not on Windows: the store opens its directory as a descriptor and works
-# relative to it (openat), which has no equivalent there. src/broker.c is a
-# stub on that platform and the archive is empty, so the link line can stay
-# one line.
-ifeq ($(OS),Windows_NT)
-  SUKKAL_SRCS :=
-endif
-
-build/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h
+# Only sukkal's portable half is here — the same list its own wasm build
+# links — and src/memns.c stands in for its POSIX shell: a directory in
+# memory instead of a descriptor and openat. Nothing in the archive touches
+# a filesystem, which is what lets it build on Windows and under emcc alike.
+build/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	@mkdir -p build/sukkal
 	@for f in $(SUKKAL_SRCS); do \
-	  $(CC) -std=gnu11 -O2 $(DEBUG) $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal/`basename $$f .c`.o || exit 1; \
+	  $(CC) -std=gnu11 -O2 $(DEBUG) -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal/`basename $$f .c`.o || exit 1; \
 	done
-	@if [ -z "$(SUKKAL_SRCS)" ]; then echo 'int mdy_no_sukkal_here;' > build/sukkal/none.c && $(CC) -c build/sukkal/none.c -o build/sukkal/none.o; fi
 	$(AR) rcs $@ build/sukkal/*.o
 
 # ---- the MDY front end, in C ----------------------------------------------
@@ -556,10 +551,17 @@ build/wasm/libmdyparse.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS)
 	done
 	$(EMAR) rcs $@ build/wasm/parse/*.o
 
-$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a $(HL_HDR)
+build/wasm/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
+	@mkdir -p build/wasm/sukkal
+	@for f in $(SUKKAL_SRCS); do \
+	  $(EMCC) -std=gnu11 -O2 -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/wasm/sukkal/`basename $$f .c`.o || exit 1; \
+	done
+	$(EMAR) rcs $@ build/wasm/sukkal/*.o
+
+$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
 	@mkdir -p build/wasm
 	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
-	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a \
+	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
 	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
 	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
 	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \

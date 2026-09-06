@@ -1163,10 +1163,11 @@ static int cmd_document(int argc, char **argv) {
  * as `req`. That is @mdy-docs/mdy-bus, request for request, in the one
  * process that already has the set.
  *
- * What is not here: the in-process broker mdy-bus opens when no --broker is
- * given, which is sukkal's wasm build inside node. Without --broker this
- * holds messages and says so, which is also what the JavaScript does when
- * that build is absent.
+ * Without --broker, the broker is this process's own (broker.h): sukkal's
+ * store and routes over a directory in memory, which is what mdy-bus opens
+ * when no --broker is given — sukkal's wasm build over its memory provider.
+ * There the bus pulls rather than being called back, since a thread
+ * delivering to itself over a callback would be waiting for itself.
  */
 
 static const char RELOAD_PATH[] = "/__mdy__/events";
@@ -1192,7 +1193,6 @@ typedef struct {
     char **announced; size_t announced_count;   /* [hold] once per name */
     /* the bus: a broker of this process's own, or one that answered --broker */
     Broker *local;
-    char *local_dir;
     double last_drain;
     int live;
     char token[40];
@@ -1711,11 +1711,7 @@ static int cmd_dev(int argc, char **argv) {
     /* the broker: one of this process's own, or the one --broker names */
     char broker[2048] = "";
     if (!o.broker) {
-        char *tmp = fsx_tmpdir();
-        char prefix[1200]; snprintf(prefix, sizeof prefix, "%s/mdy-broker", tmp ? tmp : ".");
-        free(tmp);
-        d.local_dir = fsx_mkdtemp(prefix);
-        d.local = d.local_dir ? broker_open(d.local_dir) : NULL;
+        d.local = broker_open();
         if (d.local) { d.live = 1; o.broker = "in-process"; }
     }
     if (o.broker && !d.local) {

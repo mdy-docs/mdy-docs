@@ -5,38 +5,29 @@
 #include <time.h>
 
 #include "broker.h"
-
-#if defined(__EMSCRIPTEN__) || defined(_WIN32)
-/* Absent here. sukkal's store opens its directory as a descriptor and works
- * relative to it — openat — which Windows has no equivalent of; and a page
- * has no dev loop to run a broker for. On both, `mdy dev` without --broker
- * holds messages and says so, as the JavaScript does without its wasm. */
-Broker *broker_open(const char *dir) { (void)dir; return NULL; }
-void broker_close(Broker *b) { (void)b; }
-int broker_request(Broker *b, const char *method, const char *path, const char *query,
-                   const uint8_t *body, size_t body_len, BrokerReply *out) {
-    (void)b; (void)method; (void)path; (void)query; (void)body; (void)body_len;
-    memset(out, 0, sizeof *out);
-    return -1;
-}
-void broker_reply_free(BrokerReply *r) { (void)r; }
-#else
+#include "memns.h"
 
 #include "sukkal.h"
 
 struct Broker {
     sukkal_app app;
-    char *dir;
+    bj_ns ns;
     /* the reply being composed */
     int status;
     uint8_t *body;
     size_t body_len, body_cap;
 };
 
-/* sukkal's clock lives in its libcurl transport, which is not linked. */
+/* Milliseconds since the epoch. sukkal's own clock lives in its libcurl
+ * transport, which is not linked; push.c still asks for it by this name,
+ * and the store is given the same one so leases and backoffs agree. */
 uint64_t bjm_now_ms(void) {
+    struct timespec ts;
+    if (timespec_get(&ts, TIME_UTC) == TIME_UTC)
+        return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
     return (uint64_t)time(NULL) * 1000u;
 }
+static uint64_t store_clock(void *ctx) { (void)ctx; return bjm_now_ms(); }
 
 static void r_status(void *impl, int code) { ((struct Broker *)impl)->status = code; }
 static void r_header(void *impl, const char *name, const char *value) { (void)impl; (void)name; (void)value; }
@@ -52,16 +43,19 @@ static void r_write(void *impl, const uint8_t *data, size_t len) {
     b->body_len += len;
 }
 
-Broker *broker_open(const char *dir) {
+Broker *broker_open(void) {
     Broker *b = calloc(1, sizeof *b);
     if (!b) return NULL;
-    b->dir = strdup(dir);
-    b->app.dir = b->dir;
-    b->app.store = bjm_store_open(dir);
-    if (!b->app.store) { free(b->dir); free(b); return NULL; }
+    if (memns_open(&b->ns) != BJ_OK) { free(b); return NULL; }
+    b->app.dir = "";
+    b->app.store = bjm_store_open_ns(b->ns);
+    if (!b->app.store) { memns_free(&b->ns); free(b); return NULL; }
+    bjm_store_set_clock(b->app.store, store_clock, NULL);
+    bjm_store_set_listing(b->app.store, memns_listing, b->ns.ctx);
+    bjm_store_set_adopt(b->app.store, memns_adopt, b->ns.ctx);
     b->app.bld = bj_builder_new();
     b->app.started_s = (uint64_t)time(NULL);
-    b->app.push = bjm_pusher_new(b->app.store, dir, SUKKAL_DEFAULT_BATCH);
+    b->app.push = bjm_pusher_new(b->app.store, "", SUKKAL_DEFAULT_BATCH);
     b->app.backend = "in-process";
     if (!b->app.bld || !b->app.push) { broker_close(b); return NULL; }
     return b;
@@ -72,8 +66,8 @@ void broker_close(Broker *b) {
     if (b->app.push) bjm_pusher_free(b->app.push);
     if (b->app.bld) bj_builder_free(b->app.bld);
     if (b->app.store) bjm_store_free(b->app.store);
+    memns_free(&b->ns);
     free(b->body);
-    free(b->dir);
     free(b);
 }
 
@@ -107,4 +101,3 @@ void broker_reply_free(BrokerReply *r) {
     r->body = NULL;
     r->body_len = 0;
 }
-#endif

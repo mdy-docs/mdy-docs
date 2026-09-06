@@ -184,10 +184,14 @@ runs sukkal itself — the broker's store and routes are C and are linked into
 this binary (src/broker.c), a request is a direct call, and the local bus
 pulls, renders and settles as mdy-bus's in-process bus does. Against a live
 sukkal with a page that throws, the two dev servers' logs are identical
-modulo timestamps and ids. Not on Windows or in the wasm build: sukkal's
-store opens its directory as a descriptor and works relative to it, which
-Windows cannot, so there `mdy dev` without a broker holds messages and says
-so — as the JavaScript does when its own wasm broker is not built.
+modulo timestamps and ids. The store under it is a directory in memory
+(src/memns.c): sukkal's store only ever asks a namespace to open, close,
+remove and rename a file, and this answers with buffers instead of
+descriptors. That is why the broker is on every target, Windows and the wasm
+build included, and why a dev run leaves no files behind — and, as with the
+JavaScript's memory provider, why its messages last as long as the process.
+The engine test drives one subject through publish, take, done, fail and
+the dead-letter channel over it (`make check-engine`).
 
 ## In a browser
 
