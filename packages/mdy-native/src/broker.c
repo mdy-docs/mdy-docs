@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#  include <windows.h>
+#else
+#  include <sys/time.h>
+#endif
 
 #include "broker.h"
 #include "memns.h"
@@ -22,10 +27,17 @@ struct Broker {
  * transport, which is not linked; push.c still asks for it by this name,
  * and the store is given the same one so leases and backoffs agree. */
 uint64_t bjm_now_ms(void) {
-    struct timespec ts;
-    if (timespec_get(&ts, TIME_UTC) == TIME_UTC)
-        return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
-    return (uint64_t)time(NULL) * 1000u;
+#ifdef _WIN32
+    /* 100ns ticks since 1601; 11644473600 s to 1970 */
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t ticks = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return ticks / 10000u - 11644473600000ull;
+#else
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000u + (uint64_t)tv.tv_usec / 1000u;
+#endif
 }
 static uint64_t store_clock(void *ctx) { (void)ctx; return bjm_now_ms(); }
 
