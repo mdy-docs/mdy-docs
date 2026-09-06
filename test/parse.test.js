@@ -2052,8 +2052,9 @@ describe('script', () => {
 
     expect(String(file)).toBe('<p>text</p>')
     // Matched loosely because the wording is the JS ENGINE's, not ours: V8
-    // says `missing is not defined` and QuickJS says `'missing' is not
-    // defined`. What this test is about is that the failure is reported and
+    // says `missing is not defined` where a smaller interpreter says
+    // `'missing' is not defined`, quoted. What this test is about is that the
+    // failure is reported and
     // names the thing that was missing — script blocks run in the host
     // runtime (`new Function`, see src/parse/script.js), so which runtime
     // that is depends on where mdy-docs is running.

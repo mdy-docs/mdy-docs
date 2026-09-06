@@ -4,6 +4,18 @@
 > with no bundled JavaScript runtime and no rewrite. The stack already runs in
 > a browser; what is missing is a window and a filesystem.
 
+> **Superseded, in the part that matters.** This plan chose a second JavaScript
+> engine to run mdy-docs' own code natively, and measured the trade carefully
+> before doing it. That backend is gone: the engine is C now — the walk, the
+> document store, composition and the output — with lamassu running only the
+> templates a document writes. `packages/mdy-native` builds one binary,
+> `mdy-build`, and links no other JavaScript engine.
+>
+> The measurements below are kept because they are why. They record what a
+> small interpreter cost against V8 and JSC, and that finding — the work is in
+> mdy-docs' JavaScript, not in the engines under it — is what made replacing
+> the JavaScript worth doing. Read the runtime sections as history.
+
 The premise is not "port mdy-docs to a desktop app". It is that mdy-docs is
 already a browser program that has only ever been asked to run under Node. Every
 dependency is pure JavaScript or WebAssembly, the site layer takes its
@@ -50,11 +62,19 @@ development browser for `mdy-live-preview` all along, so Asyncify in JSC was
 never really in doubt; this confirms the *site* layer, which that demo does not
 exercise.
 
-**It also runs with no JavaScript runtime at all.** Phase 1b: mdy-docs' own
-JavaScript in QuickJS, with lamassu and nisaba linked as C rather than loaded
-as WebAssembly, building the same 93 pages the CLI produces — `diff -r` says
-IDENTICAL — from a 2.0 MB binary that links no renderer and no node. The
-substitution is two esbuild aliases and 260 lines of shim.
+**It also runs with no JavaScript runtime at all.** `packages/mdy-native` is a
+2.8 MB binary that links no renderer, no node, and no JavaScript engine but
+lamassu — which runs only the code a DOCUMENT writes. Everything else is C:
+the directory walk, the document store, the script layer, the parser,
+composition and the HTML. It builds the same 93 pages the CLI produces, and
+`diff -r` says IDENTICAL.
+
+This arrived in two steps, and the first is worth keeping in view. Phase 1b ran
+mdy-docs' own JavaScript in a small interpreter with the engines linked as C —
+two esbuild aliases and 260 lines of shim, which proved the substitution was
+sound and measured where the time went. It went into mdy-docs' JavaScript, not
+into the engines. Replacing that JavaScript with C is what the current engine
+is, and the interpreter is no longer built.
 
 **Neither engine needs porting.** lamassu and nisaba contain zero platform
 `#ifdef`s between them: lamassu is portable C, and nisaba's I/O is entirely
@@ -101,6 +121,8 @@ on a memory budget sized for a web page.
 
 ### Which runtime, measured
 
+*(History. The engine no longer embeds any of these.)*
+
 The same ingest over the reference corpus — 189 sources, 10 MB of text: parse
 front matter and ```data fences, extract hashtags, compile every `%` line, then
 run the MDY front end over forty bodies. Identical output from all three (189
@@ -130,7 +152,10 @@ uses a third of the memory of V8, a quarter of JSC's**. For a tool whose
 failure mode has been running out of memory, that is the right side of the
 trade — and it comes with a ~1–3 MB runtime instead of ~110 MB.
 
-### What QuickJS costs, and what it does not
+### What a small interpreter cost, and what it did not
+
+*(History — this is the measurement that justified replacing the JavaScript
+with C rather than making the interpreter faster.)*
 
 It runs everything. Verified, not assumed: micromark, remark, unified, hast,
 rehype-stringify, yaml, lowlight and linkify all work unmodified, as do the MDY

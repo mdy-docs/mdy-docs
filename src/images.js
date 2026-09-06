@@ -56,8 +56,9 @@ async function ensureCodecsReady() {
     readyPromise = (async () => {
       /*
        * The codecs are WebAssembly, so a runtime without it cannot resize at
-       * all — packages/mdy-native runs mdy-docs on QuickJS, which has no
-       * WebAssembly by design. Said here, where it is true, because the
+       * all. (packages/mdy-native does not use this file: its C engine
+       * resizes with stb, which is why its output is visually equivalent
+       * rather than byte-identical.) Said here, where it is true, because the
        * failure otherwise arrives as whatever the codec loader happens to trip
        * over first (a missing node:fs, a module that will not instantiate) and
        * then again, unrecognisably, as a null tree in whatever page used it.

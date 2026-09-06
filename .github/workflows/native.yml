@@ -8,17 +8,23 @@
 #
 # The checks are ordered so a failure says where it is:
 #
-#   1. it compiles                — the toolchain and the C
-#   2. `make native`, 17 checks   — the engines, the filesystem, guest import
-#   3. `make test`, 684 tests     — mdy-docs' OWN suite, run against this
-#                                   backend from the same files `npm test`
-#                                   uses (see packages/mdy-native/tests-entry.mjs)
-#   4. `make check-golden`        — byte-for-byte against committed output
+#   1. it compiles                 — the toolchain and the C
+#   2. `make check-engine`         — the engine's own checks, twice: once
+#                                    normally, once collecting at every GC
+#                                    safe point
+#   3. `make check-ingest`         — documents into nisaba
+#   4. `make check-determinism`    — a golden site's output does not move
+#   5. `make check-golden`         — byte-for-byte against committed output
 #
-# The third is the one that catches a path bug. A build that produces DIFFERENT
+# The last is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
-# that is the failure to expect: `src/imports.js` compares absolute paths by
-# string prefix, and `path` is a natural key in nisaba.
+# that is the failure to expect: absolute paths are compared by string prefix
+# to decide what is inside a package, and `path` is a natural key in nisaba.
+#
+# NOT here: `make check-sites`, which builds each site BOTH ways and diffs
+# them. It is the strongest check there is, and it needs node to run mdy-docs
+# — which needs lamassu.wasm and nisaba.wasm, emscripten build products that
+# are not in git. That is the same reason the golden output is committed.
 #
 # The reference is committed (packages/mdy-native/golden/) rather than produced
 # by running the node CLI alongside. The node path needs lamassu.wasm and
@@ -56,11 +62,11 @@ jobs:
         with:
           submodules: recursive
 
-      # QuickJS's own Makefile has an MSYSTEM branch, so mingw-w64 is a
-      # configuration its authors support. That is why this is MSYS2 and not
-      # MSVC: Bellard's QuickJS does not build under MSVC at all, and
-      # switching to the quickjs-ng fork to get it is a bigger decision than a
-      # CI job should make.
+      # MSYS2 rather than MSVC. The old reason was a dependency that would not
+      # build under MSVC at all; that is gone, and what remains is the build
+      # itself — a GNU makefile driving a Unix shell, with `make -C` into two
+      # submodules. MSVC is now possible and would want a real build file
+      # rather than a CI flag, which is a bigger decision than this job makes.
       - name: Set up MSYS2
         if: matrix.os == 'windows-latest'
         uses: msys2/setup-msys2@v2
@@ -101,35 +107,23 @@ jobs:
       - name: Build lamassu
         run: make -C third_party/lamassu-js libs
 
-      # `make build`, not `make build/mdy-native` — the binary's name carries
-      # .exe on Windows and the caller should not have to know that.
-      - name: Build the backend
+      - name: Build the engine
         working-directory: packages/mdy-native
-        run: make build
+        run: make build/mdy-build$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
+        shell: bash
 
-      - name: Bundle mdy-docs for it
+      # The engine's own checks, run twice — the second pass collects at every
+      # safe point. That is not belt-and-braces: this engine hands the VM
+      # values it has just built, and one reachable only from the C stack is
+      # invisible to the collector. Freeing it does not crash, it makes a
+      # property silently become a different property.
+      - name: Run the engine checks
         working-directory: packages/mdy-native
-        run: node scripts-build.mjs && node scripts-build.mjs site && node scripts-build.mjs tests
+        run: make check-engine
 
-      # 17 checks across every boundary: a $.find into nisaba, a nested
-      # $.render onto a second lamassu instance, cuneiform through both
-      # engines' UTF-8/UTF-16 conversion, the filesystem, and a guest import
-      # that imports its own dependency. Non-zero exit on any failure.
-      # `make native` rather than naming the binary, for the .exe reason above.
-      - name: Run the checks
+      - name: Check documents reach the store
         working-directory: packages/mdy-native
-        run: make native
-
-      # The real regression test: three sites built natively and compared byte
-      # for byte against committed output from the node CLI.
-      # mdy-docs' own test suite, against this backend. Not a copy and not a
-      # rewrite — the same files `npm test` runs, with node:test, node:assert
-      # and node:fs aliased to shims over the C. That is the strongest evidence
-      # for the backend's actual claim, which is that it runs mdy-docs
-      # unchanged.
-      - name: Run mdy-docs' own test suite natively
-        working-directory: packages/mdy-native
-        run: make test
+        run: make check-ingest
 
       # A golden site whose output moves would go red for something that is not
       # a regression, so the property is proved rather than trusted: build,
@@ -143,7 +137,7 @@ jobs:
         run: make check-golden
 
       - name: Report the binary
-        run: ls -l packages/mdy-native/build/mdy-native*
+        run: ls -l packages/mdy-native/build/mdy-build*
 
   # NOT HERE: mdy-docs' own 776 tests. They run the engines through
   # WebAssembly, and lamassu.wasm/nisaba.wasm are emscripten build products
