@@ -65,13 +65,16 @@ an exact count so a change in either direction fails:
   HTML5 round trip, so a `.md` file that emits raw HTML for remark to stitch
   back comes out with different blank lines around the block.
 
-And one thing is simply not implemented: **mdy-docs memoises a render** on
-(document, request), and this does not. It is observable — a composition
-token's id depends on how many renders came before it, and a site that indexes
-its own `$.text` output indexes that number — and it is why `examples/blog`'s
-search index differs by one word. It is also the larger opportunity: the
-memoisation is what a site like this repository's own leans on, and the engine
-currently re-renders where mdy-docs would not.
+**Renders are memoised as mdy-docs memoises them.** A render that reached
+outside its document — a query, a nested render, an emit, a publish, an
+embedder native — is never kept; a layout or a document that is only markup
+is, keyed by what the document is and what it was asked with, two build
+generations deep. That has to match rather than merely help: a composition
+token's id depends on the renders before it, a site that indexes its own
+`$.text` indexes that number, and `examples/blog` differed by exactly that one
+word until the hit-and-miss sequence and the token ids were the JavaScript's
+(a `$.render` result is held under its memo key, as compose.js holds it).
+`MDY_MEMO_DEBUG=1` prints every render's hit, miss or keep.
 
 ## nisaba, natively
 

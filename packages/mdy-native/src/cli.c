@@ -521,6 +521,7 @@ static int cmd_build(int argc, char **argv) {
     BuildSink sink = { out_abs, quiet, &progress, 0, 0, 0 };
     Messages messages = { 0 };
 
+    mdy_engine_rotate_memo();      /* a build is a memo generation */
     mdy_engine *e = mdy_engine_new();
     if (!e) fail("out of memory");
     mdy_engine_on_source(e, build_source, &sink);

@@ -446,18 +446,18 @@ check-site: build/mdy$(EXE)
 # these five found eight bugs in an engine that already built a 93-page site
 # identically, and not one of them failed a unit test.
 #
-# Two sites differ on purpose, by an EXACT amount, and the check fails if
-# either count moves in either direction:
+# One site differs on purpose, by an EXACT amount, and the check fails if
+# the count moves in either direction:
 #
-#   blog       1: its search index tokenizes its own `$.text` output, which
-#                 contains a composition TOKEN — and a token's id depends on
-#                 how many renders came before it. mdy-docs memoises a render
-#                 on (document, request); this engine does not, so it holds
-#                 more trees and the ids run ahead.
 #   docs-site  2: its pages emit raw HTML for the markdown front end to stitch
 #                 back, which is rehype-raw's HTML5 round trip. md4c does not
 #                 do it, and the difference is blank lines around the block.
-CHECK_SITES := ../../examples/blog:1 ../../examples/docs-site:2 \
+#
+# blog used to be 1: its search index tokenizes its own `$.text`, which holds
+# a composition token, and a token's id depends on the renders before it.
+# The render memo (src/engine.c) now hits where mdy-docs' hits and holds a
+# render under its key as compose.js does, so the ids agree.
+CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:2 \
                ../../examples/messaging:0 fixture:0 fixture-pkg:0
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \

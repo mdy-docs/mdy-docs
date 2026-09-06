@@ -53,6 +53,7 @@ typedef struct {
      * file — there was no code to write anything else.
      */
     int is_markdown;
+    uint64_t fingerprint;   /* for the render memo; 0 until first asked */
 } Document;
 
 /* A resolved `% import name from "spec"`. `set` is owned by the cache, not
@@ -131,6 +132,10 @@ struct mdy_engine {
     size_t ctx_count;
     void (*on_source)(void *ud, const char *path);
     void *on_source_ud;
+    /* Set by any native that reaches outside the document being rendered —
+     * see the render memo. Saved and restored around each render. */
+    int taint;
+    char last_render_key[24];   /* the memo key of the render just done, base 36 */
     /* `_id` to index, in insertion order, so a hit maps back to its document. */
     uint8_t (*ids)[12];
 
@@ -696,7 +701,22 @@ static Held *held_find(mdy_engine *e, const char *id) {
  * kept in a variable, dropped, or used twice, and nothing here gets to decide
  * when the last of those happened.
  */
+static char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id);
 static char *hold_tree(mdy_engine *e, mdy_doc *doc, mdy_node *tree) {
+    return hold_tree_as(e, doc, tree, NULL);
+}
+
+/*
+ * `id` names the tree by what it IS rather than by when it was parked — the
+ * key of the render that made it — and a caller that can say so should: a
+ * token travels in the text a document hands back and reaches its parent
+ * inside `req`, so it is part of the parent's memo key, and sequential
+ * numbering would make two builds either side of an edit look alike. That is
+ * compose.js's `hold(tree, id)`, and it is also why the counter here counts
+ * only what mdy-docs' counts — trees a document built itself — and the ids
+ * a site's own text ends up holding match.
+ */
+static char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id) {
     mdy_engine *t = token_table(e);
     if (t->held_count == t->held_cap) {
         size_t want = t->held_cap ? t->held_cap * 2 : 8;
@@ -706,7 +726,8 @@ static char *hold_tree(mdy_engine *e, mdy_doc *doc, mdy_node *tree) {
         t->held_cap = want;
     }
     Held *h = &t->held[t->held_count++];
-    snprintf(h->id, sizeof h->id, "%zu", t->next_token++);
+    if (id) snprintf(h->id, sizeof h->id, "%s", id);
+    else snprintf(h->id, sizeof h->id, "%zu", t->next_token++);
     h->doc = doc;
     h->tree = tree;
     h->is_toc = 0;
@@ -1891,6 +1912,7 @@ static int is_stopword(const char *w, size_t len) {
  */
 static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                             int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* an embedder native: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *text = argc > 0 ? js_string_utf8(args[0]) : NULL;
@@ -2013,6 +2035,7 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
  */
 static bool rfc822_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                           int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* an embedder native: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = js_undefined();
@@ -2101,6 +2124,7 @@ static int resolve_target(mdy_engine *e, JsValue target) {
 
 static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                           int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     int at = argc > 0 ? resolve_target(e, args[0]) : -1;
@@ -2130,7 +2154,7 @@ static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
         return false;
     }
 
-    char *token = hold_tree(e, doc, mdy_root(doc));
+    char *token = hold_tree_as(e, doc, mdy_root(doc), e->last_render_key);
     if (!token) { *result = js_undefined(); return false; }
     *result = str(e->vm, token, strlen(token));
     free(token);
@@ -2158,6 +2182,7 @@ static void collect_text_into(const mdy_node *n, char **out, size_t *len, size_t
 
 static bool text_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     int at = argc > 0 ? resolve_target(e, args[0]) : -1;
@@ -2195,6 +2220,7 @@ static bool text_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  */
 static bool emit_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     if (argc < 2) { *result = js_null(); return true; }
@@ -2559,6 +2585,7 @@ static JsValue run_query(mdy_engine *e, JsValue query, int one) {
 
 static bool find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = run_query(e, argc > 0 ? args[0] : js_undefined(), 0);
@@ -2567,6 +2594,7 @@ static bool find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
 
 static bool find_one_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                             int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = run_query(e, argc > 0 ? args[0] : js_undefined(), 1);
@@ -2598,6 +2626,7 @@ static JsValue document_record(mdy_engine *e, size_t at) {
 
 static bool data_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     if (argc < 1 || !js_is_number(args[0])) { *result = js_null(); return true; }
@@ -2738,6 +2767,7 @@ static JsValue cross_vm(mdy_engine *from, mdy_engine *to, JsValue v) {
 
 static bool import_render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                  int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = js_undefined();
@@ -2780,7 +2810,8 @@ static bool import_render_native(JsContext *ctx, JsValue this_val, const JsValue
     }
 
     /* Parked by the IMPORTER, whose composition pass will splice it and whose
-     * render owns it from here. */
+     * render owns it from here. Numbered, not keyed: mdy-docs' import render
+     * holds sequentially, and the blog's search index says so. */
     char *token = hold_tree(e, tree, (mdy_node *)mdy_root(tree));
     if (!token) { mdy_free(tree); return true; }
     *result = str(e->vm, token, strlen(token));
@@ -2816,11 +2847,13 @@ static bool import_query_native(JsContext *ctx, JsValue this_val, const JsValue 
 
 static bool import_find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     return import_query_native(ctx, this_val, args, argc, result, 0);
 }
 
 static bool import_find_one_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                    int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     return import_query_native(ctx, this_val, args, argc, result, 1);
 }
 
@@ -2884,6 +2917,7 @@ static bool parse_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  * markdown a document holds and wants as nodes. */
 static bool markdown_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                             int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* an embedder native: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *text = argc > 0 ? js_string_utf8(args[0]) : NULL;
@@ -3393,6 +3427,7 @@ static char *message_name(mdy_engine *e, size_t at) {
 
 static bool publish_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                            int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = js_null();
@@ -3512,6 +3547,7 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
 
 static bool resize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                           int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     return resize_in(e, e, args, argc, result);
@@ -3521,6 +3557,7 @@ static bool resize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  * imported package. */
 static bool import_resize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                  int argc, JsValue *result) {
+    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *spec = argc > 0 ? js_string_utf8(args[0]) : NULL;
@@ -3792,6 +3829,7 @@ static JsValue module_load(void *ud, JsContext *ctx,
                            const uint16_t *referrer, size_t ref_len) {
     (void)referrer; (void)ref_len;
     mdy_engine *e = ud;
+    e->taint = 1; /* an import reaches outside: see the render memo */
     char *specifier = from_utf16(spec, spec_len);
     char msg[1024];
 
@@ -4204,10 +4242,193 @@ static mdy_doc *render_tree(mdy_engine *e, size_t index, JsValue request,
     return render_tree_out(e, index, request, NULL, error, error_len);
 }
 
+/* ---- the render memo ----------------------------------------------------------
+ *
+ * src/mdy.js's, to the letter. A render is a pure function of three things —
+ * the document's own code, its own data, and the `req` it was handed — but
+ * only if it asked the host for nothing else along the way. A document that
+ * queries, renders another document, reads $.data, emits, publishes, resizes
+ * or imports has reached outside those three, and its result is not ours to
+ * keep: every one of those goes through a native here, and each sets
+ * `e->taint`. What is left — layouts, and any document that is only markup —
+ * is the bulk of a site's renders.
+ *
+ * The key is a fingerprint of the document (its text and its record, which
+ * is what mdy-docs hashes as path, body and data) with the request as
+ * canonical JSON — keys sorted, since this engine's own JSON.stringify walks
+ * them in hash order and a key must not depend on that.
+ *
+ * Why this has to match and not merely help: a composition token's id is
+ * the count of renders before it, and a site that indexes its own `$.text`
+ * indexes that number. A memo hit is a render that never happened, so hits
+ * and misses have to fall exactly where mdy-docs' do.
+ *
+ * Two generations rather than a bounded map: what a rebuild can reuse is the
+ * build before it, and nothing older is worth the memory. Process-wide, as
+ * mdy-docs' is — every set in the process shares it, and the fingerprint
+ * keeps two sets' documents apart.
+ */
+#define MEMO_MAX 4096
+#define MEMO_SLOTS 8192
+typedef struct { uint64_t key; mdy_doc *doc; char *text; } MemoEntry;
+typedef struct { MemoEntry slots[MEMO_SLOTS]; size_t count; } MemoTable;
+static MemoTable *memo_now, *memo_prev;
+
+static uint64_t fnv64(uint64_t h, const void *p, size_t n) {
+    const unsigned char *b = p;
+    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211u;
+    return h;
+}
+
+static void memo_clear(MemoTable *t) {
+    if (!t) return;
+    for (size_t i = 0; i < MEMO_SLOTS; i++) {
+        if (t->slots[i].doc) { mdy_free(t->slots[i].doc); free(t->slots[i].text); }
+        t->slots[i].doc = NULL; t->slots[i].text = NULL; t->slots[i].key = 0;
+    }
+    t->count = 0;
+}
+
+void mdy_engine_rotate_memo(void) {
+    memo_clear(memo_prev);
+    MemoTable *old = memo_prev;
+    memo_prev = memo_now;
+    memo_now = old ? old : calloc(1, sizeof *memo_now);
+}
+
+static MemoEntry *memo_find(MemoTable *t, uint64_t key) {
+    if (!t || !key) return NULL;
+    for (size_t i = key & (MEMO_SLOTS - 1), n = 0; n < MEMO_SLOTS; i = (i + 1) & (MEMO_SLOTS - 1), n++) {
+        if (!t->slots[i].doc) return NULL;
+        if (t->slots[i].key == key) return &t->slots[i];
+    }
+    return NULL;
+}
+
+static void memo_put(MemoTable *t, uint64_t key, mdy_doc *doc, char *text) {
+    if (!t || !key || !doc || t->count >= MEMO_MAX) { mdy_free(doc); free(text); return; }
+    for (size_t i = key & (MEMO_SLOTS - 1);; i = (i + 1) & (MEMO_SLOTS - 1)) {
+        if (t->slots[i].doc && t->slots[i].key != key) continue;
+        if (t->slots[i].doc) { mdy_free(t->slots[i].doc); free(t->slots[i].text); t->count--; }
+        t->slots[i].key = key; t->slots[i].doc = doc; t->slots[i].text = text;
+        t->count++;
+        return;
+    }
+}
+
+/* A copy of a memoised tree under a fresh document, for the caller to own. */
+static mdy_doc *memo_copy(const mdy_doc *stored) {
+    mdy_doc *doc = mdy_doc_new();
+    if (!doc) return NULL;
+    mdy_node *root = mdy_clone(doc, mdy_root(stored));
+    mdy_node *into = (mdy_node *)mdy_root(doc);
+    if (root) for (mdy_node *c = root->first; c;) { mdy_node *next = c->next; c->next = NULL; mdy_append(into, c); c = next; }
+    return doc;
+}
+
+/* JSON of a value with every object's keys sorted — JSON.stringify's shape,
+ * in an order that does not depend on the engine's — folded into `h`. */
+static int key_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+static uint64_t canonical_hash(mdy_engine *e, JsValue v, uint64_t h) {
+    if (js_is_undefined(v)) return fnv64(h, "undefined", 9);
+    if (js_is_null(v)) return fnv64(h, "null", 4);
+    if (js_is_bool(v)) return js_get_bool(v) ? fnv64(h, "true", 4) : fnv64(h, "false", 5);
+    if (js_is_number(v)) { char buf[40]; snprintf(buf, sizeof buf, "%.17g", js_get_number(v)); return fnv64(h, buf, strlen(buf)); }
+    if (js_is_string(v)) {
+        size_t n = 0; const uint16_t *u = js_string_units(v, &n);
+        h = fnv64(h, "\"", 1);
+        if (u) h = fnv64(h, u, n * sizeof *u);
+        return fnv64(h, "\"", 1);
+    }
+    if (js_is_array(v)) {
+        h = fnv64(h, "[", 1);
+        uint32_t n = js_array_length(v);
+        for (uint32_t i = 0; i < n; i++) { h = canonical_hash(e, js_array_get(v, i), h); h = fnv64(h, ",", 1); }
+        return fnv64(h, "]", 1);
+    }
+    if (js_is_object(v)) {
+        size_t n = js_object_size(v);
+        char **names = malloc((n ? n : 1) * sizeof *names);
+        size_t m = 0;
+        for (size_t i = 0; i < n; i++) { char *k = js_string_utf8(js_object_key_at(v, i)); if (k) names[m++] = k; }
+        qsort(names, m, sizeof *names, key_cmp);
+        h = fnv64(h, "{", 1);
+        for (size_t i = 0; i < m; i++) {
+            JsValue val = js_object_get(e->vm, v, key(e->vm, names[i]));
+            if (!js_is_undefined(val) && !js_is_function(val)) {
+                h = fnv64(h, names[i], strlen(names[i]));
+                h = fnv64(h, ":", 1);
+                h = canonical_hash(e, val, h);
+                h = fnv64(h, ",", 1);
+            }
+            free(names[i]);
+        }
+        free(names);
+        return fnv64(h, "}", 1);
+    }
+    return fnv64(h, "?", 1);
+}
+
+/* What the document IS: its text and its record — path, identity, its own
+ * data — hashed once, the first time it is rendered. */
+static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
+    Document *d = &e->docs[index];
+    if (d->fingerprint) return d->fingerprint;
+    uint64_t h = 1469598103934665603u;
+    h = fnv64(h, d->chunk.text, d->chunk.len);
+    h = fnv64(h, "\0", 1);
+    JsValue record = document_record(e, index);
+    js_gc_protect(e->vm, &record);
+    h = canonical_hash(e, record, h);
+    js_gc_unprotect(e->vm, &record);
+    d->fingerprint = h ? h : 1;
+    return d->fingerprint;
+}
+
+/* A key as a token id: base 36, which is what token_at reads. */
+static void key_base36(uint64_t key, char out[24]) {
+    char tmp[24]; int n = 0;
+    do { tmp[n++] = "0123456789abcdefghijklmnopqrstuvwxyz"[key % 36]; key /= 36; } while (key && n < 23);
+    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    out[n] = '\0';
+}
+
+static uint64_t memo_key(mdy_engine *e, size_t index, JsValue request) {
+    uint64_t h = document_fingerprint(e, index);
+    h = fnv64(h, "\0", 1);
+    h = canonical_hash(e, request, h);
+    return h ? h : 1;
+}
+
 static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
                                 char **wrote, char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
     if (wrote) *wrote = NULL;
+
+    /* The memo, first: a hit is a render that does not happen. */
+    if (!memo_now) mdy_engine_rotate_memo();
+    uint64_t mkey = index < e->count ? memo_key(e, index, request) : 0;
+    MemoEntry *hit = memo_find(memo_now, mkey);
+    if (!hit) {
+        hit = memo_find(memo_prev, mkey);
+        if (hit) { memo_put(memo_now, mkey, memo_copy(hit->doc), strdup(hit->text)); hit = memo_find(memo_now, mkey); }
+    }
+    if (getenv("MDY_MEMO_DEBUG")) {
+        JsValue rec = document_record(e, index);
+        js_gc_protect(e->vm, &rec);
+        char *path = js_string_utf8(js_object_get(e->vm, rec, key(e->vm, "path")));
+        js_gc_unprotect(e->vm, &rec);
+        fprintf(stderr, "memo %s %s\n", hit ? "hit " : "miss", path ? path : "?");
+        free(path);
+    }
+    if (hit) {
+        key_base36(mkey, e->last_render_key);
+        if (wrote) *wrote = strdup(hit->text);
+        return memo_copy(hit->doc);
+    }
+    int outer_taint = e->taint;
+    e->taint = 0;
+    JsValue transformed = js_undefined();
     mdy_doc *out = NULL;
     mdy_script *script = NULL;
     /*
@@ -4264,11 +4485,16 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
                 snprintf(error, error_len, "the markdown document could not be read");
             e->current = outer_current;
             e->depth--;
+            e->taint = outer_taint;
             return NULL;
         }
+        /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
+        if (mkey) memo_put(memo_now, mkey, memo_copy(md), strdup(text ? text : ""));
+        if (getenv("MDY_MEMO_DEBUG")) fprintf(stderr, "memo kept #%zu\n", index);
         if (wrote) *wrote = text; else free(text);
         e->current = outer_current;
         e->depth--;
+        e->taint = outer_taint;
         return md;
     }
 
@@ -4377,7 +4603,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         *wrote = flatten(lines_out, &n);
     }
 
-    JsValue transformed = js_object_get(e->vm, result, key(e->vm, "tree"));
+    transformed = js_object_get(e->vm, result, key(e->vm, "tree"));
     if (js_is_object(transformed)) {
         /* Already composed: `$.compose` spliced it before the transforms saw
          * it, which is what let a transform work on the finished tree. */
@@ -4419,9 +4645,25 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     /* Last of all, on the finished tree: a contents list names every heading
      * the document ended up with, including ones written below it. */
     if (out) fill_toc(e, out);
+    if (out && !e->taint && mkey) {
+        /* Its text as well as its tree, since a later hit may be asked for
+         * either — `$.text` and the CLI's default output want the text. */
+        char *text = wrote && *wrote ? strdup(*wrote) : NULL;
+        if (!text) {
+            JsValue lo = js_object_get(e->vm, result, key(e->vm, "out"));
+            size_t n = 0;
+            text = js_is_array(lo) && !js_is_object(transformed) ? flatten(lo, &n) : mdy_to_html(mdy_root(out), NULL);
+        }
+        memo_put(memo_now, mkey, memo_copy(out), text ? text : strdup(""));
+    }
+    if (getenv("MDY_MEMO_DEBUG") && out) fprintf(stderr, "memo %s #%zu\n", e->taint ? "impure" : "kept", index);
 
 done:
 #undef FAIL
+    e->taint = outer_taint;
+    /* Recorded LAST, after any render inside this one recorded its own, so
+     * what $.render holds its result under is this render's key. */
+    key_base36(mkey, e->last_render_key);
     if (rooted) {
         js_gc_unprotect(e->vm, &fn);
         js_gc_unprotect(e->vm, &promise);

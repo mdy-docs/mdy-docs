@@ -128,6 +128,15 @@ void mdy_engine_clear_context(mdy_engine *engine);
 void mdy_engine_on_source(mdy_engine *engine,
                           void (*fn)(void *ud, const char *path), void *ud);
 
+/*
+ * Start a new memo generation — mdy-docs' `rotateRenderMemo`, called at the
+ * start of each build. A render that reached outside its document (a query,
+ * a nested render, an emit, a publish, a native) is never remembered; the
+ * rest — layouts, and any document that is only markup — are, keyed by what
+ * the document is and what it was asked with, and a rebuild may reuse the
+ * build before it. Two generations are kept, nothing older.
+ */
+void mdy_engine_rotate_memo(void);
 /* How many documents the open set holds. */
 size_t mdy_engine_count(mdy_engine *engine);
 
