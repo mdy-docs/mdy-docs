@@ -52,9 +52,9 @@ jobs:
       fail-fast: false   # a Windows failure must not hide a Linux one
       matrix:
         include:
-          - { name: macOS,   os: macos-latest,  shell: bash }
-          - { name: Linux,   os: ubuntu-latest, shell: bash }
-          - { name: Windows, os: windows-latest, shell: 'msys2 {0}' }
+          - { name: macOS,   os: macos-latest,   shell: bash,        artifact: mdy-build-macos,   exe: '' }
+          - { name: Linux,   os: ubuntu-latest,  shell: bash,        artifact: mdy-build-linux,   exe: '' }
+          - { name: Windows, os: windows-latest, shell: 'msys2 {0}', artifact: mdy-build-windows, exe: .exe }
 
     defaults:
       run:
@@ -147,8 +147,15 @@ jobs:
         working-directory: packages/mdy-native
         run: make check-golden
 
-      - name: Report the binary
-        run: ls -l packages/mdy-native/build/mdy-build*
+      # The binary, downloadable from the run. Only after every check has
+      # passed, so what is there is what was proved; a release is a later
+      # step and a workflow of its own.
+      - name: Upload the binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: packages/mdy-native/build/mdy-build${{ matrix.exe }}
+          if-no-files-found: error
 
   # The fourth target: the same sources through emscripten, held to the same
   # golden output under node. See packages/mdy-native/wasm/README.md. A job
@@ -184,8 +191,20 @@ jobs:
         working-directory: packages/mdy-native
         run: make check-wasm
 
-      - name: Report the module
-        run: ls -l packages/mdy-native/build/wasm/mdy-native.*
+      # The module with its wrapper, page and server, laid out as in the
+      # tree, so the download runs as it is: `node wasm/serve.mjs`.
+      - name: Upload the module
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdy-native-wasm
+          path: |
+            packages/mdy-native/build/wasm/mdy-native.mjs
+            packages/mdy-native/build/wasm/mdy-native.wasm
+            packages/mdy-native/wasm/index.mjs
+            packages/mdy-native/wasm/index.html
+            packages/mdy-native/wasm/serve.mjs
+            packages/mdy-native/wasm/README.md
+          if-no-files-found: error
 
   # NOT HERE: mdy-docs' own 776 tests. They run the engines through
   # WebAssembly, and lamassu.wasm/nisaba.wasm are emscripten build products
