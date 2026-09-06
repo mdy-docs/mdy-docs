@@ -7,6 +7,9 @@
 #   make check-parse              the front end's own checks, no node needed
 #   make check-sites              every site here, built BOTH ways and diffed
 #   make check-site SITE=<dir>    one site, the same way
+#   make wasm                     the same engine as WebAssembly (needs emcc)
+#   make check-wasm               the golden sites through it, under node
+#   make serve-wasm               and a page that builds a site in a browser
 #
 # The suite is check-sites: mdy-docs' own JavaScript against this engine over
 # real input. It is node that drives it, and node that says what the answer
@@ -418,7 +421,71 @@ check-sites: build/mdy-build$(EXE)
 
 
 
+# ---- wasm: the same engine, in a browser --------------------------------
+#
+# The fourth target. Every source above compiles with emcc as it is — the
+# engine's only platform surface is fsx.c, which is POSIX over an in-memory
+# filesystem here (emscripten's MEMFS), and nisaba's storage is memory
+# already. So a build in the browser is: write the site's files into MEMFS,
+# run main() as the CLI would be run, read dist/ back out. wasm/index.mjs is
+# that wrapper, wasm/check-golden.mjs runs it under node against golden/, and
+# wasm/index.html is the same thing with a directory picker.
+#
+# lamassu compiles to its own archive first, for the reason libnisaba.a
+# exists above: NIS_RENAME must reach nisaba's regex engine and NOT baru-re,
+# or both engines' copies of the four names would be renamed to the same
+# thing and collide again.
+EMCC ?= emcc
+EMAR ?= emar
+LAM_SRCS := $(wildcard $(LAMASSU)/src/runtime/*.c) $(wildcard $(LAMASSU)/src/frontend/*.c) \
+            $(LAMASSU)/third_party/baru-re/src/re_lexer.c $(LAMASSU)/third_party/baru-re/src/re_parser.c \
+            $(LAMASSU)/third_party/baru-re/src/re_compiler.c $(LAMASSU)/third_party/baru-re/src/re_vm.c
+LAM_INC  := -I$(LAMASSU)/include -I$(LAMASSU)/src -I$(LAMASSU)/src/runtime -I$(LAMASSU)/src/frontend \
+            -I$(LAMASSU)/third_party/baru-re/include -DLAMASSU_HAS_REGEX
+ENGINE_SRCS := src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c
+WASM_OUT := build/wasm/mdy-native.mjs
 
+build/wasm/liblamassu.a: $(LAM_SRCS)
+	@mkdir -p build/wasm/lam
+	@for f in $(LAM_SRCS); do \
+	  $(EMCC) -O2 -std=c11 -D_POSIX_C_SOURCE=200809L $(LAM_INC) -c $$f -o build/wasm/lam/`basename $$f .c`.o || exit 1; \
+	done
+	$(EMAR) rcs $@ build/wasm/lam/*.o
+
+# -sSTACK_SIZE as lamassu's own package build sets it: the interpreter and
+# the parser both recurse. INVOKE_RUN=0 and EXIT_RUNTIME=0 so main() is
+# called by the wrapper, once per build, and MEMFS is still there afterwards
+# to read dist/ out of.
+# The parser too, with its own flags and nothing of nisaba's on the line:
+# nisaba's regex engine carries a ucd.h of its own, older than baru-re's, and
+# with NIS_INC ahead of UCD_INC the parser's `#include "ucd.h"` found that one
+# and lost three of the tables it reads.
+build/wasm/libmdyparse.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS)
+	@mkdir -p build/wasm/parse
+	@for f in $(PARSE_SRCS) $(MD4C_SRCS); do \
+	  $(EMCC) $(PARSE_CFLAGS) -c $$f -o build/wasm/parse/`basename $$f .c`.o || exit 1; \
+	done
+	$(EMAR) rcs $@ build/wasm/parse/*.o
+
+$(WASM_OUT): src/build_main.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a
+	@mkdir -p build/wasm
+	$(EMCC) -O2 -std=gnu11 -Isrc $(NIS_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
+	  src/build_main.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a \
+	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
+	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
+	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \
+	  -o $@
+
+.PHONY: wasm check-wasm serve-wasm
+wasm: $(WASM_OUT)
+
+serve-wasm: $(WASM_OUT)
+	@node wasm/serve.mjs
+
+# The golden sites, built through the wasm engine under node, diffed against
+# golden/ — the same bar the native binary is held to.
+check-wasm: $(WASM_OUT)
+	@node wasm/check-golden.mjs
 
 clean:
 	rm -rf build

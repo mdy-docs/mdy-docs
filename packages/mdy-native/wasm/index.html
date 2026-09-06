@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mdy-native, in the browser</title>
+<style>
+  :root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
+  body { margin: 0; display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  header { padding: 12px 16px; border-bottom: 1px solid #8884; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  header label { display: inline-flex; gap: 6px; align-items: center; }
+  header input[type=text] { width: 12em; }
+  main { display: grid; grid-template-columns: 18em 1fr; min-height: 0; }
+  nav { border-right: 1px solid #8884; overflow: auto; padding: 8px 0; }
+  nav button { display: block; width: 100%; text-align: left; border: 0; background: none; color: inherit; padding: 4px 16px; font: inherit; cursor: pointer; }
+  nav button:hover, nav button[aria-current] { background: #8882; }
+  nav small { opacity: .6; float: right; }
+  section { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+  iframe { border: 0; width: 100%; height: 100%; background: white; }
+  pre { margin: 0; overflow: auto; }
+  #view pre { padding: 12px 16px; }
+  #log { max-height: 10em; border-top: 1px solid #8884; padding: 8px 16px; font-size: 12px; opacity: .8; }
+  #status { opacity: .7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>mdy-native, in the browser</h1>
+  <label>site directory <input id="pick" type="file" webkitdirectory multiple></label>
+  <label>site subdirectory <input id="site" type="text" placeholder="(the picked directory)"></label>
+  <label><input id="drafts" type="checkbox"> drafts</label>
+  <label><input id="future" type="checkbox"> future</label>
+  <button id="go" disabled>build</button>
+  <span id="status"></span>
+</header>
+<main>
+  <nav id="files"></nav>
+  <section>
+    <div id="view"><pre>Pick a site directory. Everything runs here: nothing is uploaded, and the
+engine is the same C as build/mdy-build, compiled to WebAssembly.
+
+If the site imports a package by relative path — fixture-pkg imports
+"../fixture-style" — pick the directory that holds both and name the site's
+subdirectory in the second box.</pre></div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script type="module">
+import { build, text } from './index.mjs';
+
+const $ = (id) => document.getElementById(id);
+let picked = null;
+let built = null;
+let blobUrl = null;
+
+$('pick').addEventListener('change', (e) => {
+  picked = [...e.target.files];
+  $('go').disabled = picked.length === 0;
+  $('status').textContent = `${picked.length} files`;
+});
+
+$('go').addEventListener('click', async () => {
+  $('go').disabled = true;
+  $('status').textContent = 'building…';
+  const t0 = performance.now();
+  try {
+    /* webkitRelativePath is `<picked dir>/<rel>`; the tree is mounted under
+     * the picked directory's own name so a sibling package resolves. */
+    const input = new Map();
+    for (const f of picked) input.set(f.webkitRelativePath, new Uint8Array(await f.arrayBuffer()));
+    const top = picked[0].webkitRelativePath.split('/')[0];
+    const sub = $('site').value.trim().replace(/^\/+|\/+$/g, '');
+    const site = sub ? `${top}/${sub}` : top;
+
+    built = await build(input, { site, drafts: $('drafts').checked, future: $('future').checked, quiet: false });
+    const ms = Math.round(performance.now() - t0);
+    $('log').textContent = built.log || '(no output)';
+    $('status').textContent = built.status === 0
+      ? `${built.files.size} files in ${ms} ms`
+      : `FAILED (exit ${built.status}) after ${ms} ms`;
+    showList();
+  } catch (err) {
+    $('status').textContent = 'error';
+    $('log').textContent = String(err?.stack || err);
+  } finally {
+    $('go').disabled = false;
+  }
+});
+
+function showList() {
+  const nav = $('files');
+  nav.replaceChildren();
+  for (const [path, bytes] of [...built.files].sort(([a], [b]) => a.localeCompare(b))) {
+    const b = document.createElement('button');
+    b.textContent = path;
+    const size = document.createElement('small');
+    size.textContent = bytes.length > 9999 ? `${Math.round(bytes.length / 1024)} k` : `${bytes.length}`;
+    b.append(size);
+    b.addEventListener('click', () => { for (const x of nav.children) x.removeAttribute('aria-current'); b.setAttribute('aria-current', 'true'); show(path, bytes); });
+    nav.append(b);
+  }
+  const index = built.files.has('index.html') ? 'index.html' : built.files.keys().next().value;
+  if (index) { nav.firstChild && [...nav.children].find((x) => x.firstChild.textContent === index)?.click(); }
+}
+
+const TYPES = { html: 'text/html', css: 'text/css', js: 'text/javascript', svg: 'image/svg+xml',
+                png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', xml: 'application/xml', json: 'application/json', txt: 'text/plain' };
+
+function show(path, bytes) {
+  const view = $('view');
+  view.replaceChildren();
+  if (blobUrl) URL.revokeObjectURL(blobUrl);
+  const ext = path.split('.').pop().toLowerCase();
+  const type = TYPES[ext] ?? 'text/plain';
+  if (type === 'text/html' || type.startsWith('image/')) {
+    /* A page previews as itself. Its links to OTHER pages and its stylesheet
+     * are relative paths into a dist/ that exists only in memory, so they do
+     * not resolve from a blob URL; the list on the left is the navigation. */
+    blobUrl = URL.createObjectURL(new Blob([bytes], { type }));
+    const frame = document.createElement('iframe');
+    frame.sandbox = '';
+    frame.src = blobUrl;
+    view.append(frame);
+  } else {
+    const pre = document.createElement('pre');
+    pre.textContent = text(bytes);
+    view.append(pre);
+  }
+}
+</script>
+</body>
+</html>

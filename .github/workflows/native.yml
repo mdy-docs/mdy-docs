@@ -1,4 +1,5 @@
-# The native backend, on every platform it is meant to reach.
+# The native backend, on every platform it is meant to reach — three native,
+# and the same C as WebAssembly for a browser.
 #
 # What this is actually for: mdy-native is C, and the two engines under it are
 # C, so "does it build elsewhere" is a question no amount of local testing on
@@ -148,6 +149,39 @@ jobs:
 
       - name: Report the binary
         run: ls -l packages/mdy-native/build/mdy-build*
+
+  # The fourth target: the same sources through emscripten, held to the same
+  # golden output under node. See packages/mdy-native/wasm/README.md. A job
+  # of its own rather than a matrix entry because its steps are different —
+  # no native toolchain, one emsdk, and a node wrapper instead of a binary.
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Pinned to what nisaba's own CI pins, and what the wasm target was
+      # first built with.
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 5.0.7
+
+      - name: Build the engine as WebAssembly
+        working-directory: packages/mdy-native
+        run: make wasm
+
+      - name: Check against the golden output, under node
+        working-directory: packages/mdy-native
+        run: make check-wasm
+
+      - name: Report the module
+        run: ls -l packages/mdy-native/build/wasm/mdy-native.*
 
   # NOT HERE: mdy-docs' own 776 tests. They run the engines through
   # WebAssembly, and lamassu.wasm/nisaba.wasm are emscripten build products

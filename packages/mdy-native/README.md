@@ -12,6 +12,9 @@ make check-engine                # its own checks, twice — see the target
 make check-parse                 # the front end's own checks, no node needed
 make check-sites                 # every site here, built BOTH ways and diffed
 make check-site SITE=<dir>       # one site, the same way
+
+make wasm                        # the same engine as WebAssembly — see wasm/
+make check-wasm                  # the golden sites through it, under node
 ```
 
 Everything is built from source and nothing comes from a system package:
@@ -147,6 +150,17 @@ What the front end does **not** do is run a document's `%` and `{{ }}`
 lines: it compiles them to statements and hands them to lamassu, which is the
 engine's job (below), and it does not highlight fenced code, which is a
 decoration of a tree that is already correct.
+
+## In a browser
+
+The same sources compile with emscripten unchanged, because the engine's only
+platform surface is POSIX file access and its store is memory already: put a
+site's files into the in-memory filesystem, run `main()` as the command line
+would, read `dist/` back out. `make wasm` builds it, `make check-wasm` holds
+it to `golden/` under node exactly as the native binary is held on three
+platforms, and `wasm/index.html` builds a picked directory in a page with
+nothing uploaded. [wasm/README.md](wasm/README.md) has the API and where it
+stops.
 
 ## The ingest, in C
 
