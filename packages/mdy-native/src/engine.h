@@ -31,6 +31,7 @@
 #define MDY_ENGINE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct mdy_engine mdy_engine;
 
