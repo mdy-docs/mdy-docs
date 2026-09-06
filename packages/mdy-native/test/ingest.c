@@ -24,6 +24,15 @@
 #include "mdydata.h"
 #include "mdyyaml.h"
 
+/* memmem is a GNU extension, and mingw's C library does not have it. */
+static const void *find_bytes(const void *hay, size_t hay_len, const char *needle, size_t needle_len) {
+    if (needle_len == 0) return hay;
+    const unsigned char *h = hay;
+    for (size_t i = 0; i + needle_len <= hay_len; i++)
+        if (h[i] == (unsigned char)needle[0] && memcmp(h + i, needle, needle_len) == 0) return h + i;
+    return NULL;
+}
+
 static int failures;
 
 static void ok(const char *what, int passed) {
@@ -66,8 +75,8 @@ int main(void) {
 
     size_t body_len = 0;
     const char *body = mdy_data_body(data, &body_len);
-    ok("the fence is gone from the body", memmem(body, body_len, "founded", 7) == NULL);
-    ok("…and the prose is not", memmem(body, body_len, "More body.", 10) != NULL);
+    ok("the fence is gone from the body", find_bytes(body, body_len, "founded", 7) == NULL);
+    ok("…and the prose is not", find_bytes(body, body_len, "More body.", 10) != NULL);
 
     /* ---- the YAML ------------------------------------------------------- */
     char err[256];
@@ -126,9 +135,9 @@ int main(void) {
             if (found[i] == 9 && found[i + 1] == 0) { has_nine = 1; break; }
         ok("the fence's value won the merge (size: 9)", has_nine);
         ok("the body text is not in the database",
-           memmem(found, found_len, "More body", 9) == NULL &&
-           memmem(found, found_len, "must NOT reach", 14) == NULL);
-        ok("a declared tag survived", memmem(found, found_len, "sumer", 5) != NULL);
+           find_bytes(found, found_len, "More body", 9) == NULL &&
+           find_bytes(found, found_len, "must NOT reach", 14) == NULL);
+        ok("a declared tag survived", find_bytes(found, found_len, "sumer", 5) != NULL);
         free(found);
     }
 
