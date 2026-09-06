@@ -331,7 +331,7 @@ check-golden: build/mdy-build$(EXE)
 build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c $(NIS_SRCS) $(PARSE_LIB)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/ingest.c src/ingest.c src/nis.c $(NIS_SRCS) $(PARSE_LIB) -o $@ $(LDFLAGS)
+	  test/ingest.c src/ingest.c src/nis.c $(NIS_SRCS) $(PARSE_LIB) -o $@ $(LDLIBS)
 
 check-ingest: build/ingest-test$(EXE)
 	@./build/ingest-test$(EXE)
