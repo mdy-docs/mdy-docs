@@ -4711,6 +4711,56 @@ char *mdy_engine_render_text(mdy_engine *e, size_t index, char *error, size_t er
     return render_public(e, index, 1, error, error_len);
 }
 
+/* `mdy: document N failed: <reason>` — what mdy-docs' runDoc throws for any
+ * render that did, unless the reason already says which document. */
+static void wrap_failure(size_t index, char *error, size_t error_len) {
+    if (!error || !error_len || !error[0]) return;
+    if (strncmp(error, "mdy: document ", 14) == 0 || strncmp(error, "mdy-engine:", 11) == 0) return;
+    char copy[1024];
+    snprintf(copy, sizeof copy, "%s", error);
+    snprintf(error, error_len, "mdy: document %zu failed: %s", index, copy);
+}
+
+int mdy_engine_page_index(mdy_engine *e, const char *name) {
+    int found = -1;
+    for (size_t i = 0; i < e->count; i++) {
+        char *have = message_name(e, i);
+        int hit = have && strcmp(have, name) == 0;
+        free(have);
+        if (!hit) continue;
+        if (found >= 0) return -2;
+        found = (int)i;
+    }
+    return found;
+}
+
+char *mdy_engine_document_path(mdy_engine *e, size_t index) {
+    if (index >= e->count) return NULL;
+    JsValue record = document_record(e, index);
+    js_gc_protect(e->vm, &record);
+    char *path = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "path")));
+    js_gc_unprotect(e->vm, &record);
+    return path;
+}
+
+char *mdy_engine_render_json(mdy_engine *e, size_t index, const char *request_json,
+                             char *error, size_t error_len) {
+    if (error && error_len) error[0] = '\0';
+    JsValue req = context_value(e, request_json, 1);
+    if (js_is_undefined(req)) {
+        if (error && error_len) snprintf(error, error_len, "the request is not JSON");
+        return NULL;
+    }
+    js_gc_protect(e->vm, &req);
+    mdy_doc *doc = render_tree_out(e, index, req, NULL, error, error_len);
+    js_gc_unprotect(e->vm, &req);
+    if (!doc) { wrap_failure(index, error, error_len); release_held(e); return NULL; }
+    char *html = mdy_to_html(mdy_root(doc), NULL);
+    mdy_free(doc);
+    release_held(e);
+    return html;
+}
+
 static char *render_public(mdy_engine *e, size_t index, int want_text, char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
 
@@ -4743,7 +4793,7 @@ static char *render_public(mdy_engine *e, size_t index, int want_text, char *err
     char *wrote = NULL;
     mdy_doc *doc = render_tree_out(e, index, context, want_text ? &wrote : NULL, error, error_len);
     js_gc_unprotect(e->vm, &context);
-    if (!doc) { release_held(e); free(wrote); return NULL; }
+    if (!doc) { wrap_failure(index, error, error_len); release_held(e); free(wrote); return NULL; }
     if (want_text) {
         /* The text its code wrote. A document that composed a tree through a
          * transform wrote no lines the host still has; its HTML stands in. */

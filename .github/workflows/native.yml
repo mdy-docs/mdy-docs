@@ -20,6 +20,7 @@
 #   5. `make check-determinism`    — a golden site's output does not move
 #   6. `make check-golden`         — byte-for-byte against committed output
 #   7. `make check-highlight`      — the highlighter against lowlight (Linux)
+#   8. `make check-cli`            — bin/mdy.js's CLI tests, on this binary (Linux)
 #
 # The last is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
@@ -166,6 +167,15 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         working-directory: packages/mdy-native
         run: make check-highlight
+
+      # bin/mdy.js's own CLI tests, run against this binary — every case
+      # spawns the CLI and asserts on its output and exit code, so the same
+      # file specifies both. One platform: the tests need node and a
+      # filesystem, not a toolchain, and the binary is the same C everywhere.
+      - name: Check the command against bin/mdy.js's tests
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/mdy-native
+        run: make check-cli
 
       # The binary, downloadable from the run. Only after every check has
       # passed, so what is there is what was proved; a release is a later

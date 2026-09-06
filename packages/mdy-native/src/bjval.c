@@ -1,4 +1,5 @@
 /* See bjval.h. A bj_decode visitor that builds the tree it is shown. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -89,6 +90,60 @@ void bjv_free(bjv *v) {
     free(v->string);
     free(v->bytes);
     free(v);
+}
+
+typedef struct { char *s; size_t len, cap; } Out;
+static void put(Out *o, const char *s, size_t n) {
+    if (o->len + n + 1 > o->cap) { while (o->len + n + 1 > o->cap) o->cap = o->cap ? o->cap * 2 : 256; o->s = realloc(o->s, o->cap); }
+    memcpy(o->s + o->len, s, n); o->len += n; o->s[o->len] = 0;
+}
+static void put_string(Out *o, const char *s) {
+    put(o, "\"", 1);
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        char buf[8];
+        if (*p == '"' || *p == '\\') { buf[0] = '\\'; buf[1] = (char)*p; put(o, buf, 2); }
+        else if (*p == '\n') put(o, "\\n", 2);
+        else if (*p == '\r') put(o, "\\r", 2);
+        else if (*p == '\t') put(o, "\\t", 2);
+        else if (*p < 0x20) { snprintf(buf, sizeof buf, "\\u%04x", *p); put(o, buf, 6); }
+        else put(o, (const char *)p, 1);
+    }
+    put(o, "\"", 1);
+}
+static void write_json(Out *o, const bjv *v) {
+    char buf[40];
+    switch (v->type) {
+        case BJV_NULL: put(o, "null", 4); break;
+        case BJV_BOOL: put(o, v->number ? "true" : "false", v->number ? 4 : 5); break;
+        case BJV_NUMBER:
+            if (v->number == (double)(long long)v->number && v->number < 1e15 && v->number > -1e15)
+                snprintf(buf, sizeof buf, "%lld", (long long)v->number);
+            else snprintf(buf, sizeof buf, "%.17g", v->number);
+            put(o, buf, strlen(buf));
+            break;
+        case BJV_STRING: put_string(o, v->string); break;
+        case BJV_BINARY:
+            put(o, "[", 1);
+            for (size_t i = 0; i < v->len; i++) { snprintf(buf, sizeof buf, "%s%u", i ? "," : "", v->bytes[i]); put(o, buf, strlen(buf)); }
+            put(o, "]", 1);
+            break;
+        case BJV_ARRAY:
+            put(o, "[", 1);
+            for (size_t i = 0; i < v->count; i++) { if (i) put(o, ",", 1); write_json(o, v->items[i]); }
+            put(o, "]", 1);
+            break;
+        case BJV_OBJECT:
+            put(o, "{", 1);
+            for (size_t i = 0; i < v->count; i++) { if (i) put(o, ",", 1); put_string(o, v->keys[i]); put(o, ":", 1); write_json(o, v->items[i]); }
+            put(o, "}", 1);
+            break;
+    }
+}
+char *bjv_to_json(const bjv *v) {
+    Out o = { 0 };
+    if (!v) { put(&o, "null", 4); return o.s; }
+    write_json(&o, v);
+    return o.s;
 }
 
 const bjv *bjv_get(const bjv *object, const char *key) {

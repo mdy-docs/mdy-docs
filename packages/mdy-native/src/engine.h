@@ -146,6 +146,24 @@ void mdy_engine_on_source(mdy_engine *engine,
  * build before it. Two generations are kept, nothing older.
  */
 void mdy_engine_rotate_memo(void);
+/*
+ * The document a message NAME addresses — its path without the extension,
+ * "/" written as ".", or the `messageName` it declares — as an index; -1
+ * when no document has that name, -2 when several do. What `$.publish`
+ * checks before it sends, and what a delivery resolves before it renders.
+ */
+int mdy_engine_page_index(mdy_engine *engine, const char *name);
+/* A document's `path`, as its record holds it. Caller frees; NULL when none. */
+char *mdy_engine_document_path(mdy_engine *engine, size_t index);
+/*
+ * Render with `req` given whole, as JSON — a delivered message, bound as
+ * the request exactly as mdy-bus binds it. The context fields set with
+ * mdy_engine_set_context_* are NOT added; the JSON is the whole request.
+ * The HTML comes back (caller frees) but a delivery's point is the emits
+ * and publishes the render made. NULL on failure, with `error` set.
+ */
+char *mdy_engine_render_json(mdy_engine *engine, size_t index, const char *request_json,
+                             char *error, size_t error_len);
 /* How many documents the open set holds. */
 size_t mdy_engine_count(mdy_engine *engine);
 

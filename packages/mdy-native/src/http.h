@@ -33,4 +33,12 @@ int http_request(const char *method, const char *url, const char *content_type,
 
 void http_response_free(HttpResponse *r);
 
+/*
+ * Which of this host's addresses reaches `url`'s host — what a callback URL
+ * has to advertise. Asked by opening a socket there and reading the local
+ * end, rather than guessed, so it is right on one machine and on a network
+ * alike. Returns 0 and fills `out`, or -1.
+ */
+int http_local_address(const char *url, char *out, size_t cap);
+
 #endif

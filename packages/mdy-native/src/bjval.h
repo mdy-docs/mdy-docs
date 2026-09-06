@@ -33,5 +33,7 @@ const bjv *bjv_get(const bjv *object, const char *key);
 double bjv_number(const bjv *object, const char *key, double fallback);
 /* A field as a string, or NULL. */
 const char *bjv_string(const bjv *object, const char *key);
+/* The value as JSON text (binary as an array of byte values). Caller frees. */
+char *bjv_to_json(const bjv *v);
 
 #endif

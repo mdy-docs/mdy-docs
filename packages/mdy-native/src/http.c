@@ -186,6 +186,32 @@ int http_request(const char *method, const char *url, const char *content_type,
     free(buf);
     return 0;
 }
+int http_local_address(const char *url, char *out, size_t cap) {
+    char host[256], port[16], path[64], err[64];
+    if (!sockets_ready() || parse_url(url, host, sizeof host, port, sizeof port, path, sizeof path, err, sizeof err) != 0) return -1;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port, &hints, &res) != 0 || !res) return -1;
+    int rc = -1;
+    for (struct addrinfo *a = res; a && rc != 0; a = a->ai_next) {
+        sock_t s = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        if (s == BAD_SOCKET) continue;
+        if (connect(s, a->ai_addr, (int)a->ai_addrlen) == 0) {
+            struct sockaddr_storage local;
+            socklen_t len = sizeof local;
+            if (getsockname(s, (struct sockaddr *)&local, &len) == 0 &&
+                getnameinfo((struct sockaddr *)&local, len, out, (socklen_t)cap, NULL, 0, NI_NUMERICHOST) == 0) rc = 0;
+        }
+        close_socket(s);
+    }
+    freeaddrinfo(res);
+    return rc;
+}
+#endif
+
+#if defined(__EMSCRIPTEN__)
+int http_local_address(const char *url, char *out, size_t cap) { (void)url; (void)out; (void)cap; return -1; }
 #endif
 
 void http_response_free(HttpResponse *r) {

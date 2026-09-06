@@ -39,6 +39,8 @@
 #include "mdydoc.h"
 #include "mdyscript.h"
 #include "mdyyaml.h"
+#include "watch.h"
+#include "httpd.h"
 
 /* ---- presentation ------------------------------------------------------------
  *
@@ -951,6 +953,97 @@ static char *emit_output(const DocOptions *o, const char *output) {
     return NULL;
 }
 
+/* ---- --watch: re-render on change, survive render errors ----------------------
+ *
+ * Status and errors go to stderr throughout, since stdout is the rendered
+ * output when there is no -o. What is watched: the file (or, for a
+ * directory, everything under it) and --data-file. Editors save atomically
+ * — write a temp file, rename — so a file is watched through its
+ * directory, as bin/mdy.js watches it, and this watcher's snapshot of a
+ * single name behaves the same way.
+ */
+static void report(const char *msg, int error) {
+    char stamp[32];
+    time_t t = time(NULL);
+    strftime(stamp, sizeof stamp, "%l:%M:%S %p", localtime(&t));
+    const char *s = stamp; while (*s == ' ') s++;
+    fprintf(stderr, "%s%s%s%s %s[mdy]%s %s%s\n", error ? RED_OPEN() : "", DIM_OPEN(), s, DIM_CLOSE(),
+            CYAN_OPEN(), CYAN_CLOSE(), msg, error ? RED_CLOSE() : "");
+}
+
+typedef struct { char *root; char *only; Snapshot last; } Watched;
+
+static int watch_document(DocOptions *o, Outputs *emitted) {
+    Watched w[2];
+    int nw = 0;
+    if (o->is_dir) {
+        w[nw].root = strdup(o->input_abs); w[nw].only = NULL; nw++;
+    } else {
+        char *dir = strdup(o->input_abs);
+        char *slash = strrchr(dir, '/');
+        const char *base = slash ? slash + 1 : dir;
+        w[nw].only = strdup(base);
+        if (slash) *slash = 0;
+        w[nw].root = dir; nw++;
+    }
+    if (o->data_file) {
+        char *abs = absolute(o->data_file);
+        char *slash = strrchr(abs, '/');
+        w[nw].only = strdup(slash ? slash + 1 : abs);
+        if (slash) *slash = 0;
+        w[nw].root = abs; nw++;
+    }
+    for (int i = 0; i < nw; i++) snapshot_take(&w[i].last, w[i].root, w[i].only);
+
+    char target[4200];
+    if (o->is_dir) snprintf(target, sizeof target, "%s", o->input_abs);
+    else snprintf(target, sizeof target, "%d file(s)", o->data_file ? 2 : 1);
+    fprintf(stderr, "\n  %s%sMDY%s%s  %swatching%s %s%s%s\n  %s➜%s  %spress ctrl+c to stop%s\n\n",
+            BOLD_OPEN(), MAGENTA_OPEN(), MAGENTA_CLOSE(), BOLD_CLOSE(), DIM_OPEN(), DIM_CLOSE(),
+            BOLD_OPEN(), target, BOLD_CLOSE(), GREEN_OPEN(), GREEN_CLOSE(), DIM_OPEN(), DIM_CLOSE());
+
+    int first = 1;
+    for (;;) {
+        double started = now_ms();
+        char *output = NULL;
+        char *err = generate_output(o, &output, emitted);
+        if (!err) {
+            if (!o->emit_js) report_emitted(o, emitted);
+            size_t n = strlen(output);
+            if (n == 0 || output[n - 1] != '\n') { output = realloc(output, n + 2); output[n] = '\n'; output[n + 1] = 0; }
+            err = emit_output(o, output);
+            free(output);
+        }
+        if (err) report(err, 1);
+        else if (!first) { char m[64]; snprintf(m, sizeof m, "rendered in %d ms", (int)(now_ms() - started)); report(m, 0); }
+        first = 0;
+
+        /* wait for a change, and let a burst of them settle */
+        for (;;) {
+            watch_sleep_ms(120);
+            int changed = 0;
+            for (int i = 0; i < nw; i++) {
+                Snapshot now;
+                snapshot_take(&now, w[i].root, w[i].only);
+                char *diff = snapshot_changes(&w[i].last, &now);
+                if (diff) {
+                    for (const char *p = diff; *p; p += strlen(p) + 1) {
+                        char m[4300];
+                        snprintf(m, sizeof m, "%s[change]%s %s%s%s", YELLOW_OPEN(), YELLOW_CLOSE(),
+                                 w[i].only ? "" : w[i].root, w[i].only ? "" : "/", p);
+                        report(m, 0);
+                    }
+                    free(diff);
+                    changed = 1;
+                }
+                snapshot_free(&w[i].last);
+                w[i].last = now;
+            }
+            if (changed) { watch_sleep_ms(100); break; }
+        }
+    }
+}
+
 static int cmd_document(int argc, char **argv) {
     DocOptions o = { 0 };
     const char *positionals[8];
@@ -1033,22 +1126,551 @@ static int cmd_document(int argc, char **argv) {
     if (!o.is_stdin && !o.is_dir && !ieq(extension_of(o.input), ".mdy"))
         fprintf(stderr, "mdy: warning: input \"%s\" does not have a .mdy extension\n", o.input);
 
-    if (o.watch) fail("--watch is not available in this build yet");
-
     Outputs emitted = { 0 };
-    char *output = NULL;
-    char *err = generate_output(&o, &output, &emitted);
-    if (err) fail(err);
-    if (!o.emit_js) report_emitted(&o, &emitted);
-    size_t n = strlen(output);
-    if (n == 0 || output[n - 1] != '\n') {
-        output = realloc(output, n + 2);
-        output[n] = '\n'; output[n + 1] = 0;
+    if (!o.watch) {
+        char *output = NULL;
+        char *err = generate_output(&o, &output, &emitted);
+        if (err) fail(err);
+        if (!o.emit_js) report_emitted(&o, &emitted);
+        size_t n = strlen(output);
+        if (n == 0 || output[n - 1] != '\n') {
+            output = realloc(output, n + 2);
+            output[n] = '\n'; output[n + 1] = 0;
+        }
+        err = emit_output(&o, output);
+        if (err) fail(err);
+        free(output);
+        return 0;
     }
-    err = emit_output(&o, output);
-    if (err) fail(err);
-    free(output);
+    return watch_document(&o, &emitted);
+}
+
+/* ---- mdy dev ----------------------------------------------------------------------
+ *
+ * src/serve.js, in C: pages rendered in memory and served from the map, a
+ * $.resize result the same way, static/ from disk with the site's own copy
+ * first; one watcher over every root; a debounced whole-site rebuild on any
+ * change, with the last good build still served when one fails; browsers
+ * holding /__mdy__/events and told to reload when a rebuild lands. Nothing
+ * touches dist/.
+ *
+ * And the messaging half, when --broker names one that answers /health:
+ * what a rebuild publishes is sent — once per run per (name, data) — and
+ * a registration with the broker (`PUT /push/>`, the catch-all, in a queue
+ * group) brings deliveries back as POSTs to /mdy/<consumer> on this same
+ * server, each rendering the page its subject names with the message bound
+ * as `req`. That is @mdy-docs/mdy-bus, request for request, in the one
+ * process that already has the set.
+ *
+ * What is not here: the in-process broker mdy-bus opens when no --broker is
+ * given, which is sukkal's wasm build inside node. Without --broker this
+ * holds messages and says so, which is also what the JavaScript does when
+ * that build is absent.
+ */
+
+static const char RELOAD_PATH[] = "/__mdy__/events";
+static const char RELOAD_SNIPPET[] =
+    "<script>\nnew EventSource(\"/__mdy__/events\").onmessage = () => location.reload();\n</script>";
+
+typedef struct {
+    const char *root_arg, *entry, *broker, *consumer, *group;
+    int port, drafts, future, max_attempts, backoff, max_backoff;
+} DevOptions;
+
+typedef struct {
+    DevOptions *o;
+    char *root;                 /* absolute */
+    Httpd *server;
+    mdy_engine *engine;         /* the last good build's set; deliveries render against it */
+    Outputs pages, binaries;    /* the last good build's outputs */
+    Messages messages;          /* what the last render made, taken by whoever sends */
+    char **roots; size_t root_count;   /* root + every import, for static/ and the watcher */
+    Snapshot *snapshots;
+    Progress progress;
+    char **seen; size_t seen_count, seen_cap;   /* [read] once per path */
+    char **announced; size_t announced_count;   /* [hold] once per name */
+    /* the bus */
+    int live;
+    char token[40];
+    char callback[512];
+    char **policied; size_t policied_count;
+    char **sent; size_t sent_count;             /* name\0data fingerprints already sent */
+    double last_heartbeat;
+} Dev;
+
+static void stamp_now(char *out, size_t cap) {
+    time_t t = time(NULL);
+    strftime(out, cap, "%l:%M:%S %p", localtime(&t));
+    if (out[0] == ' ') memmove(out, out + 1, strlen(out));
+}
+#define TS(buf) (stamp_now(buf, sizeof buf), buf)
+
+static int seen_before(char ***list, size_t *count, size_t *cap, const char *s) {
+    for (size_t i = 0; i < *count; i++) if (strcmp((*list)[i], s) == 0) return 1;
+    if (*count == *cap) { *cap = *cap ? *cap * 2 : 32; *list = realloc(*list, *cap * sizeof **list); }
+    (*list)[(*count)++] = strdup(s);
     return 0;
+}
+
+static void dev_source(void *ud, const char *path) {
+    Dev *d = ud;
+    progress_source(&d->progress);
+    if (seen_before(&d->seen, &d->seen_count, &d->seen_cap, path)) return;
+    char line[8192];
+    snprintf(line, sizeof line, "%s[read]%s %s", BLUE, path);
+    progress_log(&d->progress, line);
+}
+/* One whole build into a fresh engine. Returns the engine, or NULL with
+ * `error` set; the caller swaps it in. */
+static mdy_engine *dev_build(Dev *d, Outputs *pages, Outputs *binaries, Messages *messages, char *error, size_t error_len) {
+    mdy_engine_rotate_memo();
+    mdy_engine *e = mdy_engine_new();
+    if (!e) { snprintf(error, error_len, "out of memory"); return NULL; }
+    mdy_engine_on_source(e, dev_source, d);
+    if (mdy_engine_open_dir(e, d->root, error, error_len) != 0) { mdy_engine_free(e); return NULL; }
+    mdy_engine_set_context_bool(e, "drafts", d->o->drafts);
+    mdy_engine_set_context_bool(e, "future", d->o->future);
+    const char *entry = d->o->entry ? d->o->entry : "main.mdy";
+    int at = mdy_engine_entry(e, entry);
+    if (at < 0) {
+        snprintf(error, error_len, "entry script not found at \"%s\" (looked among %zu document(s) under %s)", entry, mdy_engine_count(e), d->root);
+        mdy_engine_free(e);
+        return NULL;
+    }
+    /* collected into the CALLER's maps, so a failed build leaves the last good one alone */
+    mdy_engine_on_emit(e, collect_emit, pages);
+    mdy_engine_on_binary(e, collect_binary, binaries);
+    mdy_engine_on_publish(e, collect_message, messages);
+    char *html = mdy_engine_render(e, (size_t)at, error, error_len);
+    if (!html) { mdy_engine_free(e); return NULL; }
+    free(html);
+    return e;
+}
+
+static void messages_clear(Messages *m) {
+    for (size_t i = 0; i < m->count; i++) { free(m->names[i]); free(m->json[i]); }
+    m->count = 0;
+}
+
+/* The broker's side, after a rebuild: send what this run has not sent. A
+ * delivery's own publishes (`flush`) go out every time and say nothing —
+ * the [deliver] line counts them. */
+static void dev_send(Dev *d, int dedupe, int announce) {
+    Messages fresh = { 0 };
+    for (size_t i = 0; i < d->messages.count; i++) {
+        if (!dedupe) { collect_message(&fresh, d->messages.names[i], d->messages.json[i], 0); continue; }
+        size_t n = strlen(d->messages.names[i]) + 1 + strlen(d->messages.json[i]) + 1;
+        char *fp = malloc(n);
+        snprintf(fp, n, "%s%c%s", d->messages.names[i], 1, d->messages.json[i]);
+        int dup = 0;
+        for (size_t k = 0; k < d->sent_count; k++) if (strcmp(d->sent[k], fp) == 0) { dup = 1; break; }
+        if (dup) { free(fp); continue; }
+        d->sent = realloc(d->sent, (d->sent_count + 1) * sizeof *d->sent);
+        d->sent[d->sent_count++] = fp;
+        collect_message(&fresh, d->messages.names[i], d->messages.json[i], 0);
+    }
+    messages_clear(&d->messages);
+    char ts[32];
+    for (size_t i = 0; i < fresh.count; i++) {
+        uint8_t *bytes = NULL; size_t len = 0;
+        char url[2300];
+        snprintf(url, sizeof url, "%s/pub/%s", d->o->broker, fresh.names[i]);
+        HttpResponse r;
+        if (mdy_engine_encode_json(d->engine, fresh.json[i], &bytes, &len) != 0 ||
+            http_request("POST", url, "application/binjson", bytes, len, &r) != 0 || r.status < 200 || r.status >= 300) {
+            fprintf(stderr, "%s%s %s[send]%s %s: not sent (%s)%s\n", TS(ts), RED_OPEN(), RED_OPEN(), RED_CLOSE(), fresh.names[i],
+                    bytes ? (r.status ? "refused" : r.error) : "not JSON", RED_CLOSE());
+        } else {
+            if (announce)
+                printf("%s%s%s %s[send]%s %s %s(%zu bytes)%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), MAGENTA_OPEN(), MAGENTA_CLOSE(),
+                       fresh.names[i], DIM_OPEN(), len, DIM_CLOSE());
+            http_response_free(&r);
+        }
+        free(bytes);
+    }
+    messages_clear(&fresh);
+}
+
+/* `PUT /push/>` — the catch-all, as a queue group, delivering to this server. */
+static int dev_register(Dev *d) {
+    char url[2048];
+    char cb[1024];
+    size_t o = 0;
+    for (const char *p = d->callback; *p && o + 4 < sizeof cb; p++) {
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || strchr("-._~", *p)) cb[o++] = *p;
+        else o += (size_t)snprintf(cb + o, sizeof cb - o, "%%%02X", (unsigned char)*p);
+    }
+    cb[o] = 0;
+    snprintf(url, sizeof url, "%s/push/>?consumer=%s&callback=%s&token=%s&group=%s", d->o->broker, d->o->consumer, cb, d->token, d->o->group);
+    HttpResponse r;
+    if (http_request("PUT", url, NULL, NULL, 0, &r) != 0) return -1;
+    int ok = r.status >= 200 && r.status < 300;
+    if (!ok) {
+        char ts[32];
+        fprintf(stderr, "%s %s[bus]%s bus: the broker refused the registration (%d%s%.*s)\n", TS(ts), RED_OPEN(), RED_CLOSE(),
+                r.status, r.body_len ? " — " : "", (int)(r.body_len > 200 ? 200 : r.body_len), r.body ? (const char *)r.body : "");
+    }
+    http_response_free(&r);
+    return ok ? 0 : -1;
+}
+
+/* A delivery: render the page the subject names, once per message. */
+static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
+    char auth[128], subject[256], ts[32];
+    char expect[64];
+    snprintf(expect, sizeof expect, "Bearer %s", d->token);
+    if (!httpd_header(req, "Authorization", auth, sizeof auth) || strcmp(auth, expect) != 0) { httpd_respond(s, req, 401, "text/plain", NULL, "", 0); return; }
+    if (!httpd_header(req, "X-Sukkal-Subject", subject, sizeof subject)) { httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
+    bjv *batch = bjv_decode(req->body, req->body_len);
+    if (!batch || batch->type != BJV_ARRAY || batch->count == 0) { bjv_free(batch); httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
+
+    /* the retry policy, once per subject, before any attempt is spent */
+    if (!seen_before(&d->policied, &d->policied_count, &(size_t){d->policied_count}, subject)) {
+        char url[1024];
+        snprintf(url, sizeof url, "%s/queue/%s?group=%s&max_attempts=%d&backoff_ms=%d&max_backoff_ms=%d",
+                 d->o->broker, subject, d->o->group, d->o->max_attempts, d->o->backoff, d->o->max_backoff);
+        HttpResponse pr;
+        if (http_request("PUT", url, NULL, NULL, 0, &pr) == 0) http_response_free(&pr);
+    }
+
+    int is_dead = strlen(subject) > 5 && strcmp(subject + strlen(subject) - 5, ".dead") == 0;
+    int target = mdy_engine_page_index(d->engine, subject);
+    char done_list[4096] = "";
+    size_t done = 0, failed = 0;
+    if (target < 0) {
+        if (is_dead) {
+            for (size_t i = 0; i < batch->count; i++) {
+                char name[256]; snprintf(name, sizeof name, "%.*s", (int)(strlen(subject) - 5), subject);
+                fprintf(stderr, "%s %s[dead]%s %s %s#%.0f%s %sno %s page — kept, see `mdy dead %s`%s\n", TS(ts), RED_OPEN(), RED_CLOSE(), subject,
+                        DIM_OPEN(), bjv_number(batch->items[i], "index", 0), DIM_CLOSE(), DIM_OPEN(), subject, name, DIM_CLOSE());
+            }
+            bjv_free(batch);
+            httpd_respond(s, req, 200, "text/plain", NULL, "", 0);
+            return;
+        }
+        fprintf(stderr, "%s %s[return]%s %s %s(%s)%s — %zu message(s) returned; they will dead-letter\n", TS(ts), YELLOW_OPEN(), YELLOW_CLOSE(),
+                subject, DIM_OPEN(), target == -2 ? "2 pages share that name" : "no page of that name here", DIM_CLOSE(), batch->count);
+        bjv_free(batch);
+        httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
+        return;
+    }
+    char *path = mdy_engine_document_path(d->engine, (size_t)target);
+    for (size_t i = 0; i < batch->count; i++) {
+        const bjv *entry = batch->items[i];
+        double index = bjv_number(entry, "index", 0);
+        double attempts = bjv_number(entry, "attempts", 1);
+        const bjv *payload = bjv_get(entry, "payload");
+        bjv *value = payload && payload->type == BJV_BINARY ? bjv_decode(payload->bytes, payload->len) : NULL;
+        /* an ENVELOPE entry is [headers, message] */
+        const bjv *message = value;
+        if (bjv_number(entry, "type", 0) == 0x10 && value && value->type == BJV_ARRAY && value->count == 2) message = value->items[1];
+        char *data = message && message->type == BJV_OBJECT ? bjv_to_json(message) : NULL;
+        char *inner = message && message->type != BJV_OBJECT ? bjv_to_json(message) : NULL;
+        size_t rlen = (data ? strlen(data) : (inner ? strlen(inner) : 4)) + strlen(subject) + 160;
+        char *reqjson = malloc(rlen);
+        if (data) snprintf(reqjson, rlen, "%.*s%s\"msg\":{\"name\":\"%s\",\"index\":%.0f,\"attempts\":%.0f}}",
+                           (int)strlen(data) - 1, data, strlen(data) > 2 ? "," : "", subject, index, attempts);
+        else snprintf(reqjson, rlen, "{\"value\":%s,\"msg\":{\"name\":\"%s\",\"index\":%.0f,\"attempts\":%.0f}}",
+                      inner ? inner : "null", subject, index, attempts);
+        free(data); free(inner);
+
+        double started = now_ms();
+        char err[1024];
+        messages_clear(&d->messages);
+        char *html = mdy_engine_render_json(d->engine, (size_t)target, reqjson, err, sizeof err);
+        free(reqjson);
+        int ms = (int)(now_ms() - started);
+        char attempt[64] = "";
+        if (attempts > 1) snprintf(attempt, sizeof attempt, " %sattempt %.0f/%d%s", YELLOW_OPEN(), attempts, d->o->max_attempts, YELLOW_CLOSE());
+        if (!html) {
+            failed++;
+            int last = attempts >= d->o->max_attempts;
+            char last_line[400];
+            if (last) snprintf(last_line, sizeof last_line, "out of attempts — dead-lettering to %s.dead", subject);
+            else snprintf(last_line, sizeof last_line, "returned; the broker will try again after a backoff");
+            fprintf(stderr, "%s %s[refuse]%s %s %s#%.0f%s — %s%s%s threw after %dms%s\n  %s\n  %s%s%s\n", TS(ts), RED_OPEN(), RED_CLOSE(), subject,
+                    DIM_OPEN(), index, DIM_CLOSE(), BOLD_OPEN(), path ? path : "?", BOLD_CLOSE(), ms, attempt, err, DIM_OPEN(), last_line, DIM_CLOSE());
+        } else {
+            free(html);
+            size_t produced = d->messages.count;
+            if (produced) dev_send(d, 0, 0);
+            done++;
+            char item[32]; snprintf(item, sizeof item, "%s%.0f", done_list[0] ? "," : "", index);
+            strncat(done_list, item, sizeof done_list - strlen(done_list) - 1);
+            char extra[64] = "";
+            if (produced) snprintf(extra, sizeof extra, " %s(published %zu)%s", DIM_OPEN(), produced, DIM_CLOSE());
+            printf("%s%s%s %s[%s]%s %s %s#%.0f%s → rendered %s%s%s in %s%dms%s%s%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(),
+                   is_dead ? RED_OPEN() : GREEN_OPEN(), is_dead ? "dead" : "deliver", is_dead ? RED_CLOSE() : GREEN_CLOSE(), subject,
+                   DIM_OPEN(), index, DIM_CLOSE(), BOLD_OPEN(), path ? path : "?", BOLD_CLOSE(), BOLD_OPEN(), ms, BOLD_CLOSE(), extra, attempt);
+        }
+        bjv_free(value);
+    }
+    free(path);
+    bjv_free(batch);
+    if (done == 0) httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
+    else if (failed) {
+        char hdr[4200]; snprintf(hdr, sizeof hdr, "X-Sukkal-Done: %s\r\n", done_list);
+        httpd_respond(s, req, 200, "text/plain", hdr, "", 0);
+    } else httpd_respond(s, req, 200, "text/plain", NULL, "", 0);
+    fflush(stdout);
+}
+
+static const char *mime_of(const char *path) {
+    static const struct { const char *ext, *type; } TYPES[] = {
+        { ".html", "text/html; charset=utf-8" }, { ".css", "text/css; charset=utf-8" },
+        { ".js", "text/javascript; charset=utf-8" }, { ".mjs", "text/javascript; charset=utf-8" },
+        { ".json", "application/json" }, { ".xml", "application/xml" }, { ".txt", "text/plain; charset=utf-8" },
+        { ".svg", "image/svg+xml" }, { ".png", "image/png" }, { ".jpg", "image/jpeg" }, { ".jpeg", "image/jpeg" },
+        { ".gif", "image/gif" }, { ".webp", "image/webp" }, { ".ico", "image/x-icon" }, { ".woff", "font/woff" }, { ".woff2", "font/woff2" },
+    };
+    const char *ext = extension_of(path);
+    for (size_t i = 0; i < sizeof TYPES / sizeof *TYPES; i++) if (ieq(ext, TYPES[i].ext)) return TYPES[i].type;
+    return "application/octet-stream";
+}
+
+/* HTML with the live-reload client injected — serve-time only. */
+static char *with_reload(const uint8_t *html, size_t len, size_t *out_len) {
+    const char *end = NULL;
+    for (size_t i = 0; i + 7 <= len; i++) if (memcmp(html + i, "</body>", 7) == 0) { end = (const char *)html + i; break; }
+    size_t n = len + strlen(RELOAD_SNIPPET) + 2;
+    char *out = malloc(n + 1);
+    if (end) {
+        size_t before = (size_t)(end - (const char *)html);
+        memcpy(out, html, before);
+        size_t o = before;
+        o += (size_t)snprintf(out + o, n + 1 - o, "%s\n", RELOAD_SNIPPET);
+        memcpy(out + o, end, len - before);
+        o += len - before;
+        out[o] = 0; *out_len = o;
+    } else {
+        memcpy(out, html, len);
+        memcpy(out + len, RELOAD_SNIPPET, strlen(RELOAD_SNIPPET));
+        *out_len = len + strlen(RELOAD_SNIPPET);
+        out[*out_len] = 0;
+    }
+    return out;
+}
+
+static void dev_handle(Httpd *s, HttpdRequest *req, void *ud) {
+    Dev *d = ud;
+    char consumer_path[300];
+    snprintf(consumer_path, sizeof consumer_path, "/mdy/%s", d->o->consumer);
+    if (d->live && strcmp(req->method, "POST") == 0 && strcmp(req->path, consumer_path) == 0) { dev_deliver(d, s, req); return; }
+    if (strcmp(req->path, RELOAD_PATH) == 0) {
+        httpd_keep_open(s, req, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\nretry: 300\n\n");
+        return;
+    }
+    const char *p = req->path;
+    while (*p == '/') p++;
+    /* rendered pages first: /, /posts/hello/, and the slashless /posts/hello */
+    char cand[3][4200]; int nc = 0;
+    if (!*p) snprintf(cand[nc++], sizeof cand[0], "index.html");
+    else if (p[strlen(p) - 1] == '/') snprintf(cand[nc++], sizeof cand[0], "%sindex.html", p);
+    else { snprintf(cand[nc++], sizeof cand[0], "%s", p); snprintf(cand[nc++], sizeof cand[0], "%s/index.html", p); }
+    for (int i = 0; i < nc; i++) {
+        for (size_t k = 0; k < d->pages.count; k++) {
+            Output *it = &d->pages.items[k];
+            if (strcmp(it->path, cand[i]) != 0) continue;
+            const char *type = mime_of(cand[i]);
+            if (strncmp(type, "text/html", 9) == 0) {
+                size_t n = 0; char *body = with_reload(it->bytes, it->len, &n);
+                httpd_respond(s, req, 200, type, NULL, body, n);
+                free(body);
+            } else httpd_respond(s, req, 200, type, NULL, it->bytes, it->len);
+            return;
+        }
+    }
+    for (size_t k = 0; k < d->binaries.count; k++) {
+        Output *it = &d->binaries.items[k];
+        if (strcmp(it->path, p) == 0) { httpd_respond(s, req, 200, mime_of(p), NULL, it->bytes, it->len); return; }
+    }
+    /* static/ from disk, the site's own first, pinned inside each against traversal */
+    if (*p && !ieq(extension_of(p), ".mdy") && !strstr(p, "..")) {
+        for (size_t r = 0; r < d->root_count; r++) {
+            char dir[4096]; snprintf(dir, sizeof dir, "%s/static", d->roots[r]);
+            size_t len = 0;
+            uint8_t *bytes = fsx_read(dir, p, &len);
+            if (!bytes) continue;
+            httpd_respond(s, req, 200, mime_of(p), NULL, bytes, len);
+            free(bytes);
+            return;
+        }
+    }
+    /* 404, still carrying the reload client */
+    const uint8_t *nf = NULL; size_t nflen = 0;
+    for (size_t k = 0; k < d->pages.count; k++) if (strcmp(d->pages.items[k].path, "404.html") == 0) { nf = d->pages.items[k].bytes; nflen = d->pages.items[k].len; }
+    char fallback[8300];
+    if (!nf) {
+        char esc[4200]; size_t o = 0;
+        for (const char *c = req->path; *c && o + 6 < sizeof esc; c++) {
+            if (*c == '&') o += (size_t)snprintf(esc + o, sizeof esc - o, "&amp;");
+            else if (*c == '<') o += (size_t)snprintf(esc + o, sizeof esc - o, "&lt;");
+            else if (*c == '>') o += (size_t)snprintf(esc + o, sizeof esc - o, "&gt;");
+            else if (*c == '"') o += (size_t)snprintf(esc + o, sizeof esc - o, "&quot;");
+            else esc[o++] = *c;
+        }
+        esc[o] = 0;
+        nflen = (size_t)snprintf(fallback, sizeof fallback, "<h1>404</h1>\n<p><code>%s</code> not found.</p>", esc);
+        nf = (const uint8_t *)fallback;
+    }
+    size_t n = 0; char *body = with_reload(nf, nflen, &n);
+    httpd_respond(s, req, 404, "text/html; charset=utf-8", NULL, body, n);
+    free(body);
+}
+
+/* A rebuild attempt: swap in on success, report either way as
+ * makeServeLogger reports it. `changed` is a NUL-separated list or NULL. */
+static int dev_rebuild(Dev *d, const char *changed, int first) {
+    char ts[32];
+    double started = now_ms();
+    Outputs pages = { 0 }, binaries = { 0 };
+    Messages messages = { 0 };
+    char err[1024];
+    mdy_engine *e = dev_build(d, &pages, &binaries, &messages, err, sizeof err);
+    progress_finish(&d->progress);
+    if (!first) for (const char *p = changed; p && *p; p += strlen(p) + 1)
+        printf("%s%s%s %s[change]%s %s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), YELLOW_OPEN(), YELLOW_CLOSE(), p);
+    if (!e) {
+        outputs_clear(&pages); outputs_clear(&binaries); messages_clear(&messages);
+        fprintf(stderr, "%s%s%s %s[mdy] build failed%s — still serving the last good build\n  %s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), RED_OPEN(), RED_CLOSE(), err);
+        return 0;
+    }
+    /* swap */
+    if (d->engine) mdy_engine_free(d->engine);
+    d->engine = e;
+    outputs_clear(&d->pages); free(d->pages.items); d->pages = pages;
+    outputs_clear(&d->binaries); free(d->binaries.items); d->binaries = binaries;
+    messages_clear(&d->messages); free(d->messages.names); free(d->messages.json); d->messages = messages;
+    /* The engine goes on rendering — deliveries — so its collectors must
+     * point at the maps that now live in `d`, not at the build's locals. */
+    mdy_engine_on_emit(e, collect_emit, &d->pages);
+    mdy_engine_on_binary(e, collect_binary, &d->binaries);
+    mdy_engine_on_publish(e, collect_message, &d->messages);
+    /* every root, the site's own first, for static/ and the watcher */
+    for (size_t i = 0; i < d->root_count; i++) free(d->roots[i]);
+    free(d->roots);
+    size_t n = mdy_engine_root_count(e);
+    d->roots = calloc(n + 1, sizeof *d->roots);
+    d->root_count = 0;
+    d->roots[d->root_count++] = strdup(d->root);
+    for (size_t i = 0; i < n; i++) {
+        const char *r = mdy_engine_root_at(e, i);
+        if (strcmp(r, d->root) != 0) d->roots[d->root_count++] = strdup(r);
+    }
+    /* what it would have published */
+    size_t held = d->messages.count;
+    if (!d->live) {
+        for (size_t i = 0; i < held; i++) {
+            if (seen_before(&d->announced, &d->announced_count, &(size_t){d->announced_count}, d->messages.names[i])) continue;
+            printf("%s%s%s %s[hold]%s %s %s— no broker; mdy build --publish sends%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), DIM_OPEN(), DIM_CLOSE(),
+                   d->messages.names[i], DIM_OPEN(), DIM_CLOSE());
+        }
+    }
+    if (!first) {
+        char holding[64] = "";
+        if (held && !d->live) snprintf(holding, sizeof holding, "%s, %zu message(s) held%s", DIM_OPEN(), held, DIM_CLOSE());
+        printf("%s%s%s %s[mdy]%s rendered %s%zu%s page(s) in %dms%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), CYAN_OPEN(), CYAN_CLOSE(),
+               BOLD_OPEN(), d->pages.count, BOLD_CLOSE(), (int)(now_ms() - started), holding);
+    }
+    if (d->live) dev_send(d, 1, 1);
+    fflush(stdout);
+    return 1;
+}
+
+static int cmd_dev(int argc, char **argv) {
+    DevOptions o = { ".", NULL, NULL, "mdy-bus", "mdy", 4321, 0, 0, 5, 1000, 300000 };
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) { fputs(SITE_USAGE, stdout); return 0; }
+        else if (strcmp(a, "--port") == 0 && i + 1 < argc) o.port = atoi(argv[++i]);
+        else if (strcmp(a, "--entry") == 0 && i + 1 < argc) o.entry = argv[++i];
+        else if (strcmp(a, "--broker") == 0 && i + 1 < argc) o.broker = argv[++i];
+        else if (strcmp(a, "--consumer") == 0 && i + 1 < argc) o.consumer = argv[++i];
+        else if (strcmp(a, "--group") == 0 && i + 1 < argc) o.group = argv[++i];
+        else if (strcmp(a, "--max-attempts") == 0 && i + 1 < argc) o.max_attempts = atoi(argv[++i]);
+        else if (strcmp(a, "--backoff") == 0 && i + 1 < argc) o.backoff = atoi(argv[++i]);
+        else if (strcmp(a, "--max-backoff") == 0 && i + 1 < argc) o.max_backoff = atoi(argv[++i]);
+        else if (strcmp(a, "--drafts") == 0) o.drafts = 1;
+        else if (strcmp(a, "--future") == 0) o.future = 1;
+        else o.root_arg = a;
+    }
+    Dev d = { 0 };
+    d.o = &o;
+    d.root = absolute(o.root_arg);
+    d.progress.enabled = isatty(fileno(stderr));
+    double started = now_ms();
+
+    /* the broker, if one answers */
+    char broker[2048] = "";
+    if (o.broker) {
+        snprintf(broker, sizeof broker, "%s", o.broker);
+        trim_slashes(broker);
+        o.broker = broker;
+        char url[2100]; snprintf(url, sizeof url, "%s/health", broker);
+        HttpResponse r;
+        if (http_request("GET", url, NULL, NULL, 0, &r) == 0 && r.status >= 200 && r.status < 300) d.live = 1;
+        if (r.status) http_response_free(&r);
+    }
+
+    dev_rebuild(&d, NULL, 1);           /* a broken first build still serves */
+    d.snapshots = calloc(d.root_count ? d.root_count : 1, sizeof *d.snapshots);
+    if (!d.root_count) { d.roots = calloc(1, sizeof *d.roots); d.roots[0] = strdup(d.root); d.root_count = 1; }
+    for (size_t i = 0; i < d.root_count; i++) snapshot_take(&d.snapshots[i], d.roots[i], NULL);
+
+    d.server = httpd_listen("0.0.0.0", o.port, dev_handle, &d);
+    if (!d.server) { fprintf(stderr, "%slisten EADDRINUSE: address already in use :::%d%s\n", RED_OPEN(), o.port, RED_CLOSE()); return 1; }
+    char url[128]; snprintf(url, sizeof url, "http://localhost:%d/", httpd_port(d.server));
+
+    if (d.live) {
+        char host[128] = "127.0.0.1";
+        http_local_address(o.broker, host, sizeof host);
+        snprintf(d.token, sizeof d.token, "%08x%08x%08x%08x", (unsigned)rand(), (unsigned)rand(), (unsigned)rand(), (unsigned)rand());
+        snprintf(d.callback, sizeof d.callback, "http://%s%s%s:%d/mdy/%s", strchr(host, ':') ? "[" : "", host, strchr(host, ':') ? "]" : "", httpd_port(d.server), o.consumer);
+        if (dev_register(&d) != 0) d.live = 0;
+        else { d.last_heartbeat = now_ms(); dev_send(&d, 1, 1); }
+    }
+
+    printf("\n  %s%sMDY%s%s  %sready in%s %s%d ms%s\n\n  %s➜%s  %sLocal:%s   %s%s%s\n%s  %s➜%s  %spress ctrl+c to stop%s\n\n",
+           BOLD_OPEN(), MAGENTA_OPEN(), MAGENTA_CLOSE(), BOLD_CLOSE(), DIM_OPEN(), DIM_CLOSE(), BOLD_OPEN(), (int)(now_ms() - started), BOLD_CLOSE(),
+           GREEN_OPEN(), GREEN_CLOSE(), BOLD_OPEN(), BOLD_CLOSE(), CYAN_OPEN(), url, CYAN_CLOSE(),
+           d.live ? "" : "", GREEN_OPEN(), GREEN_CLOSE(), DIM_OPEN(), DIM_CLOSE());
+    if (d.live) printf("  %s➜%s  %sBroker:%s  %s%s%s %s— publishing and delivering%s\n\n", GREEN_OPEN(), GREEN_CLOSE(), BOLD_OPEN(), BOLD_CLOSE(), CYAN_OPEN(), o.broker, CYAN_CLOSE(), DIM_OPEN(), DIM_CLOSE());
+    fflush(stdout);
+
+    /* the loop: serve, watch, rebuild, reload */
+    char *pending = NULL; size_t pending_len = 0;
+    double quiet_since = 0;
+    double last_scan = now_ms();
+    for (;;) {
+        httpd_poll(d.server, 80);
+        double t = now_ms();
+        if (t - last_scan >= 120) {
+            last_scan = t;
+            for (size_t i = 0; i < d.root_count; i++) {
+                Snapshot now; snapshot_take(&now, d.roots[i], NULL);
+                char *diff = snapshot_changes(&d.snapshots[i], &now);
+                if (diff) {
+                    for (const char *p = diff; *p; p += strlen(p) + 1) {
+                        size_t n = strlen(p) + 1;
+                        pending = realloc(pending, pending_len + n + 1);
+                        memcpy(pending + pending_len, p, n);
+                        pending_len += n;
+                        pending[pending_len] = 0;
+                    }
+                    free(diff);
+                    quiet_since = t;
+                }
+                snapshot_free(&d.snapshots[i]);
+                d.snapshots[i] = now;
+            }
+        }
+        if (pending && t - quiet_since >= 80) {
+            char *changed = pending; pending = NULL; pending_len = 0;
+            if (dev_rebuild(&d, changed, 0)) httpd_broadcast(d.server, "data: reload\n\n", 14);
+            free(changed);
+        }
+        if (d.live && t - d.last_heartbeat >= 30000) { d.last_heartbeat = t; dev_register(&d); }
+    }
 }
 
 int main(int argc, char **argv) {
@@ -1066,10 +1688,7 @@ int main(int argc, char **argv) {
                 RED_OPEN(), RED_CLOSE());
         return 1;
     }
-    if (argc > 1 && strcmp(argv[1], "dev") == 0) {
-        fprintf(stderr, "%smdy dev is not available in this build yet%s\n", RED_OPEN(), RED_CLOSE());
-        return 1;
-    }
+    if (argc > 1 && strcmp(argv[1], "dev") == 0) { srand((unsigned)time(NULL) ^ (unsigned)(size_t)&argc); return cmd_dev(argc - 2, argv + 2); }
     if (argc > 1 && strcmp(argv[1], "dead") == 0) return cmd_dead(argc - 2, argv + 2);
     return cmd_document(argc - 1, argv + 1);
 }
