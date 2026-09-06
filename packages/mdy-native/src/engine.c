@@ -25,6 +25,9 @@
 #include "mdyscript.h"
 #include "mdytext.h"
 #include "toolkit.h"
+#include "highlight_bundle.h"
+
+#define MDY_HIGHLIGHT_SPEC "mdy-docs/highlight"
 
 /* A tree a `$.render` parked, and the id of the token standing for it. */
 /*
@@ -114,6 +117,9 @@ struct mdy_engine {
     void *on_publish_ud;
     void (*on_binary)(void *ud, const char *path, const uint8_t *bytes, size_t len);
     void *on_binary_ud;
+    /* Fenced code's colouring: highlight.js, in lamassu — see load_highlighter(). */
+    JsValue highlight_fn;
+    int highlight_state;        /* 0 not yet asked for, 1 ready, -1 unavailable */
     /* Resizes already made, on the graph's token table so a theme and the site
      * that imported it do not each make their own copy. */
     Resized *resized;
@@ -2796,11 +2802,17 @@ static bool import_find_one_native(JsContext *ctx, JsValue this_val, const JsVal
 /* The options the document engine asks the parser for: front matter, document
  * splitting and the script layer are all already done by the time a document
  * calls one of these. */
-static void parse_options(mdy_options *options) {
+static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
+                            const char *value, size_t value_len,
+                            const char *language, size_t language_len);
+
+static void parse_options(mdy_engine *e, mdy_options *options) {
     mdy_options_default(options);
     options->frontmatter = 0;
     options->documents = 0;
     options->sanitize = 0;
+    options->highlight = engine_highlight;
+    options->highlight_ud = e;
 }
 
 /* MDY text as a tree, with any tokens in it spliced — `$.parse` is handed to
@@ -2813,7 +2825,7 @@ static bool parse_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     char *text = argc > 0 ? js_string_utf8(args[0]) : NULL;
 
     mdy_options options;
-    parse_options(&options);
+    parse_options(e, &options);
     mdy_doc *doc = mdy_parse(text ? text : "", text ? strlen(text) : 0, &options);
     free(text);
     if (!doc) {
@@ -2961,7 +2973,7 @@ static void table_cell(mdy_engine *e, mdy_doc *doc, mdy_node *row,
     }
 
     mdy_options options;
-    parse_options(&options);
+    parse_options(e, &options);
     mdy_doc *parsed = mdy_parse(body, strlen(body), &options);
     const mdy_node *root = parsed ? mdy_root(parsed) : NULL;
     const mdy_node *only = root ? root->first : NULL;
@@ -3222,7 +3234,7 @@ static bool toc_native(JsContext *ctx, JsValue this_val, const JsValue *args,
             if (h) tree = h->tree;
         } else {
             mdy_options options;
-            parse_options(&options);
+            parse_options(e, &options);
             owned = mdy_parse(s ? s : "", slen, &options);
             tree = owned ? mdy_root(owned) : NULL;
         }
@@ -3675,6 +3687,15 @@ static bool module_canonicalize(void *ud, const uint16_t *spec, size_t spec_len,
     char *from = ref_len ? from_utf16(referrer, ref_len) : NULL;
     if (!specifier) { free(from); return false; }
 
+    /* The engine's own module is its own name, from anywhere. */
+    if (strcmp(specifier, MDY_HIGHLIGHT_SPEC) == 0) {
+        free(specifier);
+        free(from);
+        *out = spec;
+        *out_len = spec_len;
+        return true;
+    }
+
     char base[4096];
     if (from && *from) {
         dirname_of(from, base, sizeof base);
@@ -3714,9 +3735,15 @@ static bool module_canonicalize(void *ud, const uint16_t *spec, size_t spec_len,
 /* The loader answers with a promise; these are the two already-settled cases,
  * which is all this needs — reading a file here is synchronous. */
 static JsValue settled(JsContext *ctx, JsValue v, int ok) {
+    /* `v` is a string made a moment ago and held nowhere but here, and
+     * making the promise allocates: without this, a collection between the
+     * two takes the module's source, and the compiler reads whatever the
+     * memory holds now. Found by MDY_GC_STRESS on the first 380 KB module. */
+    mdy_engine *e = js_context_userdata(ctx);
+    js_gc_protect(e->vm, &v);
     JsValue p = js_promise_new(ctx);
-    if (js_is_undefined(p)) return p;
-    if (ok) js_resolve(ctx, p, v); else js_reject(ctx, p, v);
+    if (!js_is_undefined(p)) { if (ok) js_resolve(ctx, p, v); else js_reject(ctx, p, v); }
+    js_gc_unprotect(e->vm, &v);
     return p;
 }
 
@@ -3730,6 +3757,15 @@ static JsValue module_load(void *ud, JsContext *ctx,
     char msg[1024];
 
     if (!specifier) return js_undefined();
+
+    /* highlight.js, in lamassu's subset, as an ES module: what a document
+     * gets from `import { highlightCode } from "mdy-docs/highlight"`, and
+     * what the engine itself loads to colour fences. See load_highlighter()
+     * and third_party/highlight.js. */
+    if (strcmp(specifier, MDY_HIGHLIGHT_SPEC) == 0) {
+        free(specifier);
+        return settled(ctx, str(e->vm, MDY_HIGHLIGHT_MODULE, strlen(MDY_HIGHLIGHT_MODULE)), 1);
+    }
 
     size_t n = strlen(specifier);
     int js = (n > 3 && ends_with_ci(specifier, ".js")) ||
@@ -3847,11 +3883,99 @@ mdy_engine *mdy_engine_new(void) {
     js_set_module_loader(e->ctx, module_load, module_canonicalize, e);
     js_enable_source_modules(e->ctx);
     register_natives(e);
+    e->highlight_fn = js_undefined();
+    e->highlight_state = 0;
     return e;
+}
+
+/* ---- fenced code ------------------------------------------------------------
+ *
+ * mdy-docs colours fenced code with lowlight — highlight.js's grammars,
+ * producing hast — as the parser builds the fence. This engine does the same
+ * with the same grammars: third_party/highlight.js is highlight.js and
+ * lowlight's emitter in lamassu's subset, bundled into MDY_HIGHLIGHT_MODULE
+ * and loaded as an ES module the first time a fence asks. The parser calls
+ * engine_highlight() with the fence's text and language; the guest returns
+ * hast children, which js_to_tree puts into the C tree, and `hljs` goes on
+ * the class list after `language-x` — the order mdy-docs writes them in.
+ *
+ * Loading is lazy and its failure is final: a site with no fences never
+ * compiles the 380 KB, and a bundle that will not load says so once and
+ * leaves every fence plain — which is also what mdy-docs does for a
+ * language it has no grammar for.
+ */
+
+static void load_highlighter(mdy_engine *e) {
+    e->highlight_state = -1;
+
+    size_t slen = 0;
+    uint16_t *spec = to_utf16(MDY_HIGHLIGHT_SPEC, strlen(MDY_HIGHLIGHT_SPEC), &slen);
+    if (!spec) return;
+    JsValue promise = js_eval_module(e->ctx, spec, slen);
+    free(spec);
+    if (js_is_undefined(promise)) return;
+    js_gc_protect(e->vm, &promise);
+    js_run_jobs(e->ctx);
+
+    if (js_promise_state(promise) != 1) {
+        JsValue reason = js_promise_result(promise);
+        char *text = js_is_object(reason)
+            ? js_string_utf8(js_object_get(e->vm, reason, key(e->vm, "message")))
+            : js_string_utf8(reason);
+        fprintf(stderr, "fenced code will not be highlighted: the highlighter did not load (%s)\n",
+                text ? text : "no reason given");
+        free(text);
+        js_gc_unprotect(e->vm, &promise);
+        return;
+    }
+
+    size_t nlen = 0;
+    uint16_t *name = to_utf16("highlightCode", 13, &nlen);
+    /* Rooted in its final home before the promise that reaches it lets go. */
+    e->highlight_fn = name ? js_module_get_export(e->ctx, js_promise_result(promise), name, nlen) : js_undefined();
+    js_gc_protect(e->vm, &e->highlight_fn);
+    free(name);
+    js_gc_unprotect(e->vm, &promise);
+    if (!js_is_function(e->highlight_fn)) {
+        fprintf(stderr, "fenced code will not be highlighted: the highlighter exports no highlightCode\n");
+        js_gc_unprotect(e->vm, &e->highlight_fn);
+        e->highlight_fn = js_undefined();
+        return;
+    }
+    e->highlight_state = 1;
+}
+
+static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
+                            const char *value, size_t value_len,
+                            const char *language, size_t language_len) {
+    mdy_engine *e = ud;
+    if (e->highlight_state == 0) load_highlighter(e);
+    if (e->highlight_state != 1) return 0;
+
+    /* One at a time: making the second string can collect the first. */
+    JsValue args[2] = { str(e->vm, value, value_len), js_undefined() };
+    js_gc_protect(e->vm, &args[0]);
+    args[1] = str(e->vm, language, language_len);
+    js_gc_protect(e->vm, &args[1]);
+    JsValue result = js_undefined();
+    int ok = js_call(e->ctx, e->highlight_fn, js_undefined(), args, 2, &result);
+    js_gc_unprotect(e->vm, &args[1]);
+    js_gc_unprotect(e->vm, &args[0]);
+    if (!ok || !js_is_object(result)) return 0;
+
+    js_gc_protect(e->vm, &result);
+    int highlighted = js_get_bool(js_object_get(e->vm, result, key(e->vm, "highlighted")));
+    if (highlighted) {
+        js_children_to_tree(e, doc, code, js_object_get(e->vm, result, key(e->vm, "children")));
+        mdy_add_class(doc, code, "hljs");
+    }
+    js_gc_unprotect(e->vm, &result);
+    return highlighted;
 }
 
 void mdy_engine_free(mdy_engine *e) {
     if (!e) return;
+    if (e->highlight_state == 1) js_gc_unprotect(e->vm, &e->highlight_fn);
 
     /*
      * The graph is freed by whoever owns the cache — every package in it,
@@ -4024,14 +4148,11 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
     char *text = flatten(out, &text_len);
     if (!text) return NULL;
 
-    mdy_options options;
-    mdy_options_default(&options);
     /* What the document engine asks the parser for: it has already taken the
      * front matter off and split the documents, and the code has already run
      * — so all three are the parser's business no longer. */
-    options.frontmatter = 0;
-    options.documents = 0;
-    options.sanitize = 0;
+    mdy_options options;
+    parse_options(e, &options);
 
     mdy_doc *tree = mdy_parse(text, text_len, &options);
     free(text);

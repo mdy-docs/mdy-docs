@@ -1,3 +1,15 @@
 = {{ req.line }}
 
 {{ req.count }} cities.
+
+A fence, for the highlighter — the one place this port's output was silently
+plain where mdy-docs' is coloured:
+
+```js
+const built = "natively"; // 42
+export function shout(s) { return `${s}!`.toUpperCase() }
+```
+
+```
+no language: stays as it is
+```

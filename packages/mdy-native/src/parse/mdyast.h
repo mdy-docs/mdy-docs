@@ -123,6 +123,21 @@ typedef struct mdy_node {
  * implement — see README.md's coverage table, which is generated from the
  * comparison harness rather than written by hand.
  */
+/*
+ * Colouring for fenced code, if the embedder has any. Called as a fence's
+ * <code> element is built, with the fence's text and the first word of its
+ * info string, exactly where mdy-docs calls its highlighter. Return 1 after
+ * appending the coloured children to `code` yourself (the parser then adds
+ * nothing, and the `hljs` class is yours to add); return 0 and the parser
+ * appends the text as it is. NULL means plain code, which is what the
+ * library does on its own — it has no grammars.
+ */
+struct mdy_doc;
+struct mdy_node;
+typedef int (*mdy_highlight_fn)(void *ud, struct mdy_doc *doc, struct mdy_node *code,
+                                const char *value, size_t value_len,
+                                const char *language, size_t language_len);
+
 typedef struct {
     int documents;      /* a line of exactly `---` starts a new document */
     /*
@@ -151,6 +166,8 @@ typedef struct {
      * that engine has to be able to say so.
      */
     int sanitize;
+    mdy_highlight_fn highlight;   /* see above; NULL for plain code */
+    void *highlight_ud;
 } mdy_options;
 
 void mdy_options_default(mdy_options *out);

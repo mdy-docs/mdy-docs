@@ -148,8 +148,20 @@ trip, which is the two `docs-site` files `check-sites` expects to differ.
 
 What the front end does **not** do is run a document's `%` and `{{ }}`
 lines: it compiles them to statements and hands them to lamassu, which is the
-engine's job (below), and it does not highlight fenced code, which is a
-decoration of a tree that is already correct.
+engine's job (below).
+
+**Fenced code is coloured exactly as mdy-docs colours it**, with highlight.js's
+own grammars. [third_party/highlight.js](third_party/highlight.js) is a fork of
+highlight.js and lowlight's emitter in lamassu's subset of JavaScript, bundled
+into one script the engine embeds and loads as the ES module
+`mdy-docs/highlight` the first time a fence asks — a document can
+`await import("mdy-docs/highlight")` itself. `make check-highlight` holds it
+to lowlight over every source file in this repository, under node and under
+lamassu, and the fixture site carries a fence so the golden checks and
+`check-sites` hold the engine to it too. It took two fixes in lamassu, both
+found by this: a stale cap on live regular expressions, and a module specifier
+left unrooted across an allocation, which AddressSanitizer and `MDY_GC_STRESS`
+turned into a use-after-free with a name.
 
 ## In a browser
 

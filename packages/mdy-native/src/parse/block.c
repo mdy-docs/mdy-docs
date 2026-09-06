@@ -28,6 +28,8 @@ void mdy_options_default(mdy_options *out) {
     out->emphasis = 1;
     out->max_heading = 6;
     out->line_offset = 0;
+    out->highlight = NULL;
+    out->highlight_ud = NULL;
     out->positions = 1;
     out->sanitize = 1;
 }
@@ -1314,7 +1316,13 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                     cls[9 + n] = '\0';
                     mdy_add_class(doc, code, cls);
                 }
-                if (o) mdy_append(code, mdy_new_text(doc, body, o));
+                /* The embedder's highlighter, if any, sees every fence — an
+                 * empty one too, which mdy-docs also colours (to nothing, but
+                 * with the class). Plain text otherwise. */
+                int highlighted = doc->options.highlight
+                    ? doc->options.highlight(doc->options.highlight_ud, doc, code, body, o, lang, lang_len)
+                    : 0;
+                if (!highlighted && o) mdy_append(code, mdy_new_text(doc, body, o));
                 mdy_append(pre, code);
                 /* The fence's whole span, closing line included — and `code`
                  * carries the same one, which is what the JavaScript does. */

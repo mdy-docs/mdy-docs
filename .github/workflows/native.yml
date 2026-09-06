@@ -19,6 +19,7 @@
 #   4. `make check-ingest`         — documents into nisaba
 #   5. `make check-determinism`    — a golden site's output does not move
 #   6. `make check-golden`         — byte-for-byte against committed output
+#   7. `make check-highlight`      — the highlighter against lowlight (Linux)
 #
 # The last is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
@@ -157,6 +158,14 @@ jobs:
       - name: Check against the golden output
         working-directory: packages/mdy-native
         run: make check-golden
+
+      # The highlighter — highlight.js in lamassu's subset — against lowlight
+      # over real files, under node and under lamassu's CLI. One platform is
+      # enough: it is JavaScript in a VM, and the VM is the same C everywhere.
+      - name: Check the highlighter against lowlight
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/mdy-native
+        run: make check-highlight
 
       # The binary, downloadable from the run. Only after every check has
       # passed, so what is there is what was proved; a release is a later

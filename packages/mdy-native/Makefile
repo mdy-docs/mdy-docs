@@ -276,6 +276,39 @@ bench: build/mdyast$(EXE)
 	@node test/compare.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(CORPUS_ABS)" --bench
 
 
+# ---- highlight.js, in lamassu -------------------------------------------
+#
+# Fenced code is coloured with highlight.js's own grammars, run inside the
+# JavaScript engine this binary already embeds: third_party/highlight.js is a
+# fork of highlight.js and lowlight's emitter in lamassu's subset, bundled
+# into one script. See its README for what changed and what it is held to.
+# Node is a build dependency for this one header; every CI job has it.
+HL_DIR := third_party/highlight.js
+HL_SRC := $(wildcard $(HL_DIR)/*.js) $(wildcard $(HL_DIR)/languages/*.js) \
+          $(HL_DIR)/aliases.json $(HL_DIR)/keyword-scopes.json $(HL_DIR)/VERSION
+HL_OUT := build/highlight.lamassu.js
+HL_HDR := build/highlight_bundle.h
+
+$(HL_OUT): $(HL_SRC) $(HL_DIR)/build.mjs
+	@node $(HL_DIR)/build.mjs
+
+# The same, as a C string constant src/engine.c embeds and loads as the ES
+# module "mdy-docs/highlight" the first time a fence asks for colour.
+$(HL_HDR): $(HL_SRC) $(HL_DIR)/build.mjs
+	@node $(HL_DIR)/build.mjs --c-header $@
+
+$(LAMASSU)/build/lamassu:
+	$(MAKE) -C $(LAMASSU) cli
+
+.PHONY: highlight check-highlight
+highlight: $(HL_OUT)
+
+# The fork against lowlight, over every source file in this repository plus
+# a sample per grammar, under node and under lamassu's CLI. Both must be
+# 100%: the first isolates the port, the second the engine.
+check-highlight: $(HL_OUT) $(LAMASSU)/build/lamassu
+	@node $(HL_DIR)/check.mjs
+
 # ---- the golden outputs ---------------------------------------------------
 #
 # What the node CLI produces for three deterministic sites, committed so CI can
@@ -343,7 +376,7 @@ check-golden: build/mdy-build$(EXE)
 # C, and it is the seam the engine will be built on.
 build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
+	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
 	  test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) -o $@ $(LDLIBS)
 
 check-ingest: build/ingest-test$(EXE)
@@ -352,25 +385,25 @@ check-ingest: build/ingest-test$(EXE)
 # One document, end to end, with no JavaScript engine but lamassu — the three
 # passes of src/mdy.js done in C. No JavaScript engine but lamassu is linked
 # into this binary.
-build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
+build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
+	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
 	  test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # The same driver under AddressSanitizer. A use-after-free in the boundary
 # between the tree, the document store and the VM is invisible without it:
 # a freed key cell is silently reused and a property becomes a different one.
-build/mdy-build-asan$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
+build/mdy-build-asan$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
 	$(CC) -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer \
-	  -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
+	  -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
 	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
-build/mdy-build$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB)
+build/mdy-build$(EXE): src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
+	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
 	  src/build_main.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
@@ -427,32 +460,6 @@ check-sites: build/mdy-build$(EXE)
 
 
 
-# ---- highlight.js, in lamassu -------------------------------------------
-#
-# Fenced code is coloured with highlight.js's own grammars, run inside the
-# JavaScript engine this binary already embeds: third_party/highlight.js is a
-# fork of highlight.js and lowlight's emitter in lamassu's subset, bundled
-# into one script. See its README for what changed and what it is held to.
-HL_DIR := third_party/highlight.js
-HL_SRC := $(wildcard $(HL_DIR)/*.js) $(wildcard $(HL_DIR)/languages/*.js) \
-          $(HL_DIR)/aliases.json $(HL_DIR)/keyword-scopes.json $(HL_DIR)/VERSION
-HL_OUT := build/highlight.lamassu.js
-
-$(HL_OUT): $(HL_SRC) $(HL_DIR)/build.mjs
-	@node $(HL_DIR)/build.mjs
-
-$(LAMASSU)/build/lamassu:
-	$(MAKE) -C $(LAMASSU) cli
-
-.PHONY: highlight check-highlight
-highlight: $(HL_OUT)
-
-# The fork against lowlight, over every source file in this repository plus
-# a sample per grammar, under node and under lamassu's CLI. Both must be
-# 100%: the first isolates the port, the second the engine.
-check-highlight: $(HL_OUT) $(LAMASSU)/build/lamassu
-	@node $(HL_DIR)/check.mjs
-
 # ---- wasm: the same engine, in a browser --------------------------------
 #
 # The fourth target. Every source above compiles with emcc as it is — the
@@ -499,9 +506,9 @@ build/wasm/libmdyparse.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS)
 	done
 	$(EMAR) rcs $@ build/wasm/parse/*.o
 
-$(WASM_OUT): src/build_main.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a
+$(WASM_OUT): src/build_main.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a $(HL_HDR)
 	@mkdir -p build/wasm
-	$(EMCC) -O2 -std=gnu11 -Isrc $(NIS_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
+	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
 	  src/build_main.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a \
 	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
 	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
