@@ -1,0 +1,11 @@
+diff --git a/src/engine.c b/src/engine.c
+index 3b1c2d4..9e8f7a6 100644
+--- a/src/engine.c
++++ b/src/engine.c
+@@ -10,7 +10,8 @@ static int count;
+ int main(void) {
+-    return old();
++    setup();
++    return run();
+ }
+ /* unchanged */

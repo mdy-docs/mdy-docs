@@ -1,0 +1,8 @@
+>>> import math
+>>> def area(r):
+...     return math.pi * r ** 2
+...
+>>> area(2)
+12.566370614359172
+>>> [x for x in range(3)]
+[0, 1, 2]

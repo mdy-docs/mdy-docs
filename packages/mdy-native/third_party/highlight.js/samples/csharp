@@ -1,0 +1,21 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace Demo
+{
+    public interface IShape { double Area { get; } }
+    public record Circle(double Radius) : IShape
+    {
+        public double Area => Math.PI * Radius * Radius;
+    }
+    public static class Program
+    {
+        public static async Task Main(string[] args)
+        {
+            var shapes = new List<IShape> { new Circle(1.5), new Circle(2) };
+            foreach (var s in shapes.Where(s => s.Area > 5))
+                Console.WriteLine($"area: {s.Area:F2}");
+            await Task.Delay(10);
+        }
+    }
+}

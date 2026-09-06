@@ -1,0 +1,24 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+type Greeter interface{ Greet(name string) string }
+
+type english struct{ punct rune }
+
+func (e english) Greet(name string) string {
+	return fmt.Sprintf("Hello, %s%c", strings.Title(name), e.punct)
+}
+
+func main() {
+	var g Greeter = english{'!'}
+	ch := make(chan string, 1)
+	go func() { ch <- g.Greet("world") }()
+	fmt.Println(<-ch) // prints the greeting
+	for i := 0; i < 3; i++ {
+		defer fmt.Println(i)
+	}
+}

@@ -1,0 +1,20 @@
+package demo
+
+import kotlinx.coroutines.*
+
+data class User(val name: String, val age: Int = 0)
+
+sealed class Result<out T> {
+    data class Ok<T>(val value: T) : Result<T>()
+    object Err : Result<Nothing>()
+}
+
+fun main() = runBlocking {
+    val users = listOf(User("Ann", 31), User("Bo"))
+    val adults = users.filter { it.age >= 18 }.map { "${it.name}!" }
+    launch { delay(100L); println(adults.joinToString()) }
+    when (val r: Result<Int> = Result.Ok(0x1F)) {
+        is Result.Ok -> println(r.value)
+        Result.Err -> println("err") // never
+    }
+}

@@ -1,0 +1,16 @@
+<?php
+declare(strict_types=1);
+namespace App;
+
+use InvalidArgumentException;
+
+final class Counter {
+    private int $n = 0;
+    public function __construct(private readonly string $name) {}
+    public function add(int $by = 1): static { $this->n += $by; return $this; }
+    public function __toString(): string { return "{$this->name}: {$this->n}"; }
+}
+$c = (new Counter('hits'))->add()->add(2);
+echo $c, PHP_EOL; // prints hits: 3
+$arr = ['a' => 1, 'b' => [2, 3]];
+foreach ($arr as $k => $v) { if (!is_array($v)) throw new InvalidArgumentException("bad $k"); }

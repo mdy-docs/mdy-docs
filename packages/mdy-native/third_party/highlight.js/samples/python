@@ -1,0 +1,24 @@
+import asyncio
+from dataclasses import dataclass, field
+from typing import Optional
+
+@dataclass
+class Node:
+    name: str
+    children: list["Node"] = field(default_factory=list)
+    parent: Optional["Node"] = None
+
+    def walk(self):
+        yield self
+        for c in self.children:
+            yield from c.walk()
+
+async def main(n: int = 3) -> None:
+    root = Node("root")
+    root.children = [Node(f"child{i}", parent=root) for i in range(n)]
+    names = [x.name for x in root.walk() if not x.name.startswith("_")]
+    print(", ".join(names), 0x1f, 1_000, 3.14e-2)  # a comment
+    await asyncio.sleep(0.01)
+
+if __name__ == "__main__":
+    asyncio.run(main())

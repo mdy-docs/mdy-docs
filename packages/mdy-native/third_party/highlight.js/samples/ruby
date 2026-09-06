@@ -1,0 +1,17 @@
+# frozen_string_literal: true
+require 'json'
+
+module Demo
+  class Counter
+    attr_reader :count
+    def initialize(start = 0) = @count = start
+    def bump!(by: 1) = @count += by
+    def to_s = "count=#{@count}"
+  end
+end
+
+c = Demo::Counter.new(0x1f)
+3.times { |i| c.bump!(by: i) }
+puts c unless c.count.zero?
+h = { name: 'ann', tags: %w[a b] }
+puts h.to_json =~ /ann/ ? "yes" : "no"

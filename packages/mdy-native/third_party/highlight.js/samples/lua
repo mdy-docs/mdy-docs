@@ -1,0 +1,15 @@
+-- a module
+local M = {}
+local function fib(n)
+  if n < 2 then return n end
+  return fib(n - 1) + fib(n - 2)
+end
+function M.greet(name, ...)
+  local extra = {...}
+  print(string.format("hello %s (%d)", name or "world", #extra))
+end
+for i = 1, 10, 2 do M.greet("n" .. i, i, i * 2) end
+local t = { x = 1, ["y"] = 2, 3 }
+--[[ multi
+line ]]
+return M

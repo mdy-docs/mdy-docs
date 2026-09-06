@@ -1,0 +1,10 @@
+import { readFile } from 'node:fs/promises';
+export default async function load(path, { retries = 2 } = {}) {
+  const re = /^\s*#(\w+)/gm;
+  let text;
+  try { text = await readFile(path, 'utf8'); } catch (err) { throw new Error(`no ${path}`, { cause: err }); }
+  class Tag { #name; constructor(name) { this.#name = name; } get name() { return this.#name; } }
+  return [...text.matchAll(re)].map(([, n]) => new Tag(n)).filter(Boolean);
+}
+const obj = { a: 1, 'b-c': 2, [Symbol.iterator]: null };
+console.log(obj?.a ?? 0, 1e3, 0b101, `template ${obj.a}`);

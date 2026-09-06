@@ -1,0 +1,7 @@
+$ ls -la /tmp
+total 0
+$ export NAME="world"
+$ echo "hello $NAME" | tr a-z A-Z
+HELLO WORLD
+# a comment
+$ for i in 1 2; do echo $i; done

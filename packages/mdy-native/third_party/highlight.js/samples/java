@@ -1,0 +1,19 @@
+package demo;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class Main {
+    private static final int LIMIT = 0x1F;
+    record Point(int x, int y) {}
+
+    public static void main(String[] args) throws Exception {
+        List<Point> points = List.of(new Point(1, 2), new Point(3, 4));
+        var xs = points.stream().map(Point::x).collect(Collectors.toList());
+        for (int x : xs) {
+            if (x > LIMIT) throw new IllegalStateException("too big: " + x);
+            System.out.printf("%d%n", x); // print it
+        }
+        @SuppressWarnings("unused") long big = 1_000_000L;
+    }
+}

@@ -1,0 +1,10 @@
+; a comment
+[server]
+host = 127.0.0.1
+port = 8080
+debug = true
+
+[paths]
+root = /var/www
+"quoted key" = "quoted value"
+list = [1, 2, 3]

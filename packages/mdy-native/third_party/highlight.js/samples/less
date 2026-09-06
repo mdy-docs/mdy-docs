@@ -1,0 +1,10 @@
+@primary: #428bca;
+@import (reference) "mixins.less";
+.bordered(@width: 2px) { border: @width solid darken(@primary, 10%); }
+#header {
+  color: @primary;
+  .navigation { font-size: 12px; &:hover { color: lighten(@primary, 20%); } }
+  .bordered(4px);
+  width: ~"calc(100% - @{gutter})";
+}
+@media (min-width: 768px) { .column { float: left; width: (100% / 3); } }

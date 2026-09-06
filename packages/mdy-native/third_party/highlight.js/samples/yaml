@@ -1,0 +1,20 @@
+# a document
+title: Hello, world
+version: 1.2
+published: true
+date: 2024-01-15
+tags: [a, b, "c d"]
+author:
+  name: Ann
+  email: ann@example.com
+items:
+  - id: 1
+    text: |
+      literal block
+      of text
+  - id: 2
+    text: >-
+      folded
+      text
+anchor: &base { x: 1 }
+merged: { <<: *base, y: 2 }

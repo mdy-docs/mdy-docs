@@ -1,0 +1,16 @@
+# The schema
+type Query {
+  user(id: ID!): User
+  users(first: Int = 10, after: String): [User!]!
+}
+type User implements Node {
+  id: ID!
+  name: String!
+  posts(status: Status): [Post]
+}
+enum Status { DRAFT PUBLISHED }
+query GetUser($id: ID!) {
+  user(id: $id) { ...UserFields posts(status: PUBLISHED) { title } }
+}
+fragment UserFields on User { id name }
+mutation { createUser(input: {name: "Ann"}) { id } }

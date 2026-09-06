@@ -1,0 +1,11 @@
+@import url("theme.css");
+:root { --gap: 1rem; color-scheme: light dark; }
+body > main.article:not(.wide) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12em, 1fr));
+  gap: var(--gap);
+  font: 14px/1.5 system-ui, sans-serif;
+}
+a:hover, a:focus-visible { color: #c33; text-decoration: underline 2px; }
+@media (max-width: 600px) { .sidebar { display: none !important; } }
+h1::before { content: "§ "; }

@@ -1,0 +1,20 @@
+import Foundation
+
+protocol Shape { var area: Double { get } }
+struct Circle: Shape {
+    let radius: Double
+    var area: Double { .pi * radius * radius }
+}
+enum Result<T> { case ok(T), err(String) }
+
+@MainActor
+final class Store: ObservableObject {
+    @Published private(set) var items: [String] = []
+    func add(_ item: String, count: Int = 1) async throws {
+        guard !item.isEmpty else { throw NSError(domain: "empty", code: 1) }
+        items.append(contentsOf: Array(repeating: item, count: count))
+    }
+}
+let shapes: [any Shape] = [Circle(radius: 1.5)]
+print(shapes.map(\.area).reduce(0, +), "done") // sum
+if #available(macOS 13, *) { print("new") } else { print("old") }

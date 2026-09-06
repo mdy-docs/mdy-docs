@@ -1,0 +1,16 @@
+(module
+  (import "env" "log" (func $log (param i32)))
+  (memory (export "mem") 1)
+  (global $counter (mut i32) (i32.const 0))
+  (func $add (param $a i32) (param $b i32) (result i32)
+    local.get $a
+    local.get $b
+    i32.add)
+  (func (export "run") (param i32) (result i32)
+    ;; a comment
+    (block $done
+      local.get 0
+      i32.eqz
+      br_if $done)
+    (call $add (local.get 0) (i32.const 0x2A)))
+  (data (i32.const 8) "hi\00"))

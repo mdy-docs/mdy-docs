@@ -1,0 +1,11 @@
+-- users and their posts
+CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+INSERT INTO users (name) VALUES ('ann'), ('bo');
+SELECT u.name, COUNT(p.id) AS posts
+FROM users u
+LEFT JOIN posts p ON p.user_id = u.id
+WHERE u.created_at > '2024-01-01' AND u.name LIKE 'a%'
+GROUP BY u.name
+HAVING COUNT(p.id) >= 1
+ORDER BY posts DESC LIMIT 10;
+UPDATE users SET name = UPPER(name) WHERE id IN (SELECT user_id FROM posts);

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<!-- a comment -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Demo &amp; test</title>
+    <style>body { margin: 0; } .x:hover { color: red; }</style>
+    <script type="module">
+      const items = document.querySelectorAll('li');
+      items.forEach((li, i) => { li.dataset.index = String(i); });
+    </script>
+  </head>
+  <body class="page" data-x='1'>
+    <ul><li>one</li><li>two <b>bold</b></li></ul>
+    <svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>
+  </body>
+</html>

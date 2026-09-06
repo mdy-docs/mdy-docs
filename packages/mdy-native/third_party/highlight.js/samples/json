@@ -1,0 +1,8 @@
+{
+  "name": "demo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "test": "node --test", "build": null },
+  "numbers": [1, -2.5, 3e10, 0],
+  "nested": { "ok": false, "tags": ["a", "b"] }
+}

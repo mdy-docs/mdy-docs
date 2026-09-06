@@ -1,0 +1,17 @@
+import type { Readable } from 'node:stream';
+
+export interface Node<T = unknown> { value: T; next?: Node<T> }
+type Mapper<A, B> = (a: A, index: number) => B;
+
+export abstract class List<T> implements Iterable<T> {
+  protected head?: Node<T>;
+  abstract map<U>(fn: Mapper<T, U>): List<U>;
+  *[Symbol.iterator](): Iterator<T> { for (let n = this.head; n; n = n.next) yield n.value; }
+}
+
+enum Color { Red = 'r', Blue = 'b' }
+export function first<T>(xs: readonly T[], pred: (x: T) => boolean = () => true): T | undefined {
+  return xs.find(pred) as T | undefined; // cast
+}
+const stream = null as unknown as Readable;
+declare const flag: boolean;

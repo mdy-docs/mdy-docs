@@ -1,0 +1,14 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+my %h = (one => 1, two => 2);
+my @sorted = sort { $h{$a} <=> $h{$b} } keys %h;
+foreach my $k (@sorted) {
+    printf "%s=%d\n", $k, $h{$k} if $k =~ /^t/;   # only t*
+}
+sub greet { my ($name) = @_; return "hello $name"; }
+my $s = greet('perl') . qq{ and "more"};
+$s =~ s/hello/HELLO/g;
+print <<"END";
+$s
+END

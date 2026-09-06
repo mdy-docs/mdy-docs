@@ -7,6 +7,7 @@
 #   make check-parse              the front end's own checks, no node needed
 #   make check-sites              every site here, built BOTH ways and diffed
 #   make check-site SITE=<dir>    one site, the same way
+#   make check-highlight          highlight.js in lamassu, against lowlight
 #   make wasm                     the same engine as WebAssembly (needs emcc)
 #   make check-wasm               the golden sites through it, under node
 #   make serve-wasm               and a page that builds a site in a browser
@@ -425,6 +426,32 @@ check-sites: build/mdy-build$(EXE)
 	done; exit $$fail
 
 
+
+# ---- highlight.js, in lamassu -------------------------------------------
+#
+# Fenced code is coloured with highlight.js's own grammars, run inside the
+# JavaScript engine this binary already embeds: third_party/highlight.js is a
+# fork of highlight.js and lowlight's emitter in lamassu's subset, bundled
+# into one script. See its README for what changed and what it is held to.
+HL_DIR := third_party/highlight.js
+HL_SRC := $(wildcard $(HL_DIR)/*.js) $(wildcard $(HL_DIR)/languages/*.js) \
+          $(HL_DIR)/aliases.json $(HL_DIR)/keyword-scopes.json $(HL_DIR)/VERSION
+HL_OUT := build/highlight.lamassu.js
+
+$(HL_OUT): $(HL_SRC) $(HL_DIR)/build.mjs
+	@node $(HL_DIR)/build.mjs
+
+$(LAMASSU)/build/lamassu:
+	$(MAKE) -C $(LAMASSU) cli
+
+.PHONY: highlight check-highlight
+highlight: $(HL_OUT)
+
+# The fork against lowlight, over every source file in this repository plus
+# a sample per grammar, under node and under lamassu's CLI. Both must be
+# 100%: the first isolates the port, the second the engine.
+check-highlight: $(HL_OUT) $(LAMASSU)/build/lamassu
+	@node $(HL_DIR)/check.mjs
 
 # ---- wasm: the same engine, in a browser --------------------------------
 #

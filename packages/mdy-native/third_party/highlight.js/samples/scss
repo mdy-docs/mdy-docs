@@ -1,0 +1,13 @@
+@use "sass:math";
+$primary: #333;
+$breakpoints: (small: 576px, medium: 768px);
+@mixin respond($name) {
+  @media (min-width: map-get($breakpoints, $name)) { @content; }
+}
+.card {
+  color: $primary;
+  padding: math.div(16px, 2);
+  &__title { font-weight: bold; &:hover { color: lighten($primary, 20%); } }
+  @include respond(medium) { display: flex; }
+  @each $n in 1, 2, 3 { .col-#{$n} { width: percentage($n / 3); } }
+}

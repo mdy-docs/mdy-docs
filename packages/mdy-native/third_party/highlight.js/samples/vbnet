@@ -1,0 +1,24 @@
+Imports System
+Imports System.Collections.Generic
+
+Namespace Demo
+    Public Class Counter
+        Private _count As Integer = 0
+        Public ReadOnly Property Count As Integer
+            Get
+                Return _count
+            End Get
+        End Property
+        Public Sub Bump(Optional ByVal by As Integer = 1)
+            _count += by ' add
+        End Sub
+    End Class
+    Module Program
+        Sub Main()
+            Dim c As New Counter()
+            For i As Integer = 1 To 3 : c.Bump(i) : Next
+            Console.WriteLine($"count={c.Count}")
+            If c.Count > 5 AndAlso True Then Console.WriteLine("big")
+        End Sub
+    End Module
+End Namespace

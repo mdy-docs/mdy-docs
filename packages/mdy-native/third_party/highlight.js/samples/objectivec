@@ -1,0 +1,22 @@
+#import <Foundation/Foundation.h>
+
+@interface Greeter : NSObject
+@property (nonatomic, copy) NSString *name;
+- (NSString *)greet:(NSString *)who times:(NSInteger)n;
+@end
+
+@implementation Greeter
+- (NSString *)greet:(NSString *)who times:(NSInteger)n {
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSInteger i = 0; i < n; i++) [parts addObject:[NSString stringWithFormat:@"hi %@", who]];
+    return [parts componentsJoinedByString:@", "]; // join
+}
+@end
+
+int main(int argc, const char *argv[]) {
+    @autoreleasepool {
+        Greeter *g = [[Greeter alloc] init];
+        NSLog(@"%@", [g greet:@"you" times:2]);
+    }
+    return 0;
+}

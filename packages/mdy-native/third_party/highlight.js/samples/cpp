@@ -1,0 +1,21 @@
+#include <iostream>
+#include <vector>
+#include <string>
+namespace demo {
+template <typename T>
+class Stack {
+public:
+    void push(T v) { items_.push_back(std::move(v)); }
+    T pop() { T v = items_.back(); items_.pop_back(); return v; }
+    [[nodiscard]] bool empty() const noexcept { return items_.empty(); }
+private:
+    std::vector<T> items_;
+};
+}
+int main() {
+    demo::Stack<std::string> s;
+    s.push("hello"); // a string
+    auto x = s.pop();
+    std::cout << x << '\n';
+    return 0;
+}

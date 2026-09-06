@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h1><?= htmlspecialchars($title) ?></h1>
+  <?php foreach ($items as $item): ?>
+    <li class="item"><?= $item['name'] ?> costs <?= number_format($item['price'], 2) ?></li>
+  <?php endforeach; ?>
+  <?php if ($user): ?><p>Hi <?= $user->name ?></p><?php endif; ?>
+</body>
+</html>

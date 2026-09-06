@@ -1,0 +1,250 @@
+{
+  "arduino": {
+    "false": [
+      "literal",
+      "false"
+    ],
+    "nullptr": [
+      "literal",
+      "nullptr"
+    ],
+    "true": [
+      "literal",
+      "true"
+    ],
+    "IPAddress": [
+      "_hints",
+      "IPAddress"
+    ]
+  },
+  "cpp": {
+    "false": [
+      "literal",
+      "false"
+    ],
+    "nullptr": [
+      "literal",
+      "nullptr"
+    ],
+    "true": [
+      "literal",
+      "true"
+    ]
+  },
+  "csharp": {
+    "dynamic": [
+      "built_in",
+      "dynamic"
+    ]
+  },
+  "objectivec": {
+    "id": [
+      "type",
+      "id|0"
+    ]
+  },
+  "rust": {
+    "false": [
+      "literal",
+      "false"
+    ],
+    "true": [
+      "literal",
+      "true"
+    ]
+  },
+  "sql": {
+    "bigint": [
+      "type",
+      "bigint"
+    ],
+    "binary": [
+      "type",
+      "binary"
+    ],
+    "blob": [
+      "type",
+      "blob"
+    ],
+    "boolean": [
+      "type",
+      "boolean"
+    ],
+    "char": [
+      "type",
+      "char"
+    ],
+    "character": [
+      "type",
+      "character"
+    ],
+    "clob": [
+      "type",
+      "clob"
+    ],
+    "current_catalog": [
+      "built_in",
+      "current_catalog"
+    ],
+    "current_date": [
+      "built_in",
+      "current_date"
+    ],
+    "current_default_transform_group": [
+      "built_in",
+      "current_default_transform_group"
+    ],
+    "current_path": [
+      "built_in",
+      "current_path"
+    ],
+    "current_role": [
+      "built_in",
+      "current_role"
+    ],
+    "current_schema": [
+      "built_in",
+      "current_schema"
+    ],
+    "current_time": [
+      "built_in",
+      "current_time"
+    ],
+    "current_timestamp": [
+      "built_in",
+      "current_timestamp"
+    ],
+    "current_transform_group_for_type": [
+      "built_in",
+      "current_transform_group_for_type"
+    ],
+    "current_user": [
+      "built_in",
+      "current_user"
+    ],
+    "date": [
+      "type",
+      "date"
+    ],
+    "dec": [
+      "type",
+      "dec"
+    ],
+    "decimal": [
+      "type",
+      "decimal"
+    ],
+    "decfloat": [
+      "type",
+      "decfloat"
+    ],
+    "false": [
+      "literal",
+      "false"
+    ],
+    "float": [
+      "type",
+      "float"
+    ],
+    "int": [
+      "type",
+      "int"
+    ],
+    "integer": [
+      "type",
+      "integer"
+    ],
+    "interval": [
+      "type",
+      "interval"
+    ],
+    "localtime": [
+      "built_in",
+      "localtime"
+    ],
+    "localtimestamp": [
+      "built_in",
+      "localtimestamp"
+    ],
+    "national": [
+      "type",
+      "national"
+    ],
+    "nchar": [
+      "type",
+      "nchar"
+    ],
+    "nclob": [
+      "type",
+      "nclob"
+    ],
+    "numeric": [
+      "type",
+      "numeric"
+    ],
+    "real": [
+      "type",
+      "real"
+    ],
+    "row": [
+      "type",
+      "row"
+    ],
+    "session_user": [
+      "built_in",
+      "session_user"
+    ],
+    "smallint": [
+      "type",
+      "smallint"
+    ],
+    "system_time": [
+      "built_in",
+      "system_time"
+    ],
+    "system_user": [
+      "built_in",
+      "system_user"
+    ],
+    "time": [
+      "type",
+      "time"
+    ],
+    "timestamp": [
+      "type",
+      "timestamp"
+    ],
+    "true": [
+      "literal",
+      "true"
+    ],
+    "unknown": [
+      "literal",
+      "unknown"
+    ],
+    "varbinary": [
+      "type",
+      "varbinary"
+    ],
+    "varchar": [
+      "type",
+      "varchar"
+    ],
+    "varying": [
+      "type",
+      "varying"
+    ]
+  },
+  "typescript": {
+    "void": [
+      "built_in",
+      "void"
+    ]
+  },
+  "vbnet": {
+    "new": [
+      "built_in",
+      "new"
+    ]
+  }
+}

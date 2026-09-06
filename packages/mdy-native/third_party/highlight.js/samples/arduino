@@ -1,0 +1,15 @@
+#include <Servo.h>
+Servo myServo;
+const int ledPin = 13;
+void setup() {
+  pinMode(ledPin, OUTPUT);
+  Serial.begin(9600);
+  myServo.attach(9);
+}
+void loop() {
+  int value = analogRead(A0);
+  digitalWrite(ledPin, value > 512 ? HIGH : LOW);
+  myServo.write(map(value, 0, 1023, 0, 180));
+  Serial.println(value);
+  delay(100);
+}
