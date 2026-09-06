@@ -32,8 +32,10 @@
 #  include <sys/time.h>
 #endif
 
+#include "bjval.h"
 #include "engine.h"
 #include "fsx.h"
+#include "http.h"
 #include "mdydoc.h"
 #include "mdyscript.h"
 #include "mdyyaml.h"
@@ -324,15 +326,153 @@ static void collect_binary(void *ud, const char *path, const uint8_t *bytes, siz
 
 /* ---- messages a build holds ---------------------------------------------------- */
 
-typedef struct { char **names; size_t count, cap; } Messages;
+typedef struct { char **names; char **json; size_t count, cap; } Messages;
 static void collect_message(void *ud, const char *name, const char *data_json, size_t doc_index) {
-    (void)data_json; (void)doc_index;
+    (void)doc_index;
     Messages *m = ud;
     if (m->count == m->cap) {
         m->cap = m->cap ? m->cap * 2 : 8;
         m->names = realloc(m->names, m->cap * sizeof *m->names);
+        m->json = realloc(m->json, m->cap * sizeof *m->json);
     }
-    m->names[m->count++] = strdup(name);
+    m->names[m->count] = strdup(name);
+    m->json[m->count] = strdup(data_json);
+    m->count++;
+}
+
+/* ---- the broker ------------------------------------------------------------------
+ *
+ * What @mdy-docs/mdy-bus does, request for request: a message is one
+ * binjson value POSTed to /pub/<name>, dead letters are GET /dead/<name>,
+ * and a requeue is POST /requeue/<name>?index=N. Success bodies are binjson;
+ * an error's is text, which is what the messages below quote.
+ */
+static const char DEFAULT_BROKER[] = "http://127.0.0.1:8080";
+
+static void trim_slashes(char *url) {
+    size_t n = strlen(url);
+    while (n > 0 && url[n - 1] == '/') url[--n] = 0;
+}
+
+/* The JavaScript's error line for a failed request, and out. */
+static void broker_fail(const char *fmt, const char *a, const char *b, int status, const HttpResponse *r) {
+    char msg[2048];
+    if (status) {
+        char detail[512] = "";
+        if (r && r->body_len) {
+            snprintf(detail, sizeof detail, "%.*s", (int)(r->body_len > 400 ? 400 : r->body_len), (const char *)r->body);
+            size_t n = strlen(detail);
+            while (n && (detail[n - 1] == '\n' || detail[n - 1] == ' ')) detail[--n] = 0;
+        }
+        snprintf(msg, sizeof msg, fmt, a, b, status, detail[0] ? " — " : "", detail);
+    } else {
+        snprintf(msg, sizeof msg, fmt, a, b, 0, "", "");
+    }
+    fprintf(stderr, "%s%s%s\n", RED_OPEN(), msg, RED_CLOSE());
+    exit(1);
+}
+
+/* Every held message to the broker, after a build that succeeded. */
+static int publish_messages(mdy_engine *e, const Messages *m, const char *broker) {
+    char url[2048];
+    snprintf(url, sizeof url, "%s", broker ? broker : DEFAULT_BROKER);
+    trim_slashes(url);
+    int sent = 0;
+    for (size_t i = 0; i < m->count; i++) {
+        uint8_t *bytes = NULL; size_t len = 0;
+        if (mdy_engine_encode_json(e, m->json[i], &bytes, &len) != 0) {
+            fprintf(stderr, "%spublish: %s carries data that is not JSON%s\n", RED_OPEN(), m->names[i], RED_CLOSE());
+            exit(1);
+        }
+        char target[2300];
+        snprintf(target, sizeof target, "%s/pub/%s", url, m->names[i]);
+        HttpResponse r;
+        if (http_request("POST", target, "application/binjson", bytes, len, &r) != 0) {
+            char msg[1024];
+            snprintf(msg, sizeof msg, "publish: cannot reach the sukkal broker at %s (%s)", url, r.error);
+            fprintf(stderr, "%s%s%s\n", RED_OPEN(), msg, RED_CLOSE());
+            exit(1);
+        }
+        if (r.status < 200 || r.status >= 300)
+            broker_fail("publish: %s refused with %.0s%d%s%s", m->names[i], "", r.status, &r);
+        http_response_free(&r);
+        free(bytes);
+        sent++;
+        printf("%s[send]%s %s %s(%zu bytes)%s\n", MAGENTA_OPEN(), MAGENTA_CLOSE(), m->names[i], DIM_OPEN(), len, DIM_CLOSE());
+    }
+    return sent;
+}
+
+/* mdy dead <name> [--broker <url>] [--requeue <index>] */
+static int cmd_dead(int argc, char **argv) {
+    if (argc == 0) { fputs(SITE_USAGE, stdout); return 1; }
+    const char *name = NULL, *broker = NULL, *requeue = NULL;
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) { fputs(SITE_USAGE, stdout); return 0; }
+        else if (strcmp(a, "--broker") == 0 && i + 1 < argc) broker = argv[++i];
+        else if (strcmp(a, "--requeue") == 0 && i + 1 < argc) requeue = argv[++i];
+        else name = a;
+    }
+    if (!name) name = ".";
+    char url[2048];
+    snprintf(url, sizeof url, "%s", broker ? broker : DEFAULT_BROKER);
+    trim_slashes(url);
+    char target[2300];
+    HttpResponse r;
+
+    if (requeue) {
+        snprintf(target, sizeof target, "%s/requeue/%s?index=%s", url, name, requeue);
+        if (http_request("POST", target, NULL, NULL, 0, &r) != 0) {
+            fprintf(stderr, "%srequeue: cannot reach the sukkal broker at %s (%s)%s\n", RED_OPEN(), url, r.error, RED_CLOSE());
+            return 1;
+        }
+        if (r.status < 200 || r.status >= 300) {
+            char who[512]; snprintf(who, sizeof who, "%s#%s", name, requeue);
+            broker_fail("requeue: %s — %.0s%d %.0s%s", who, "", r.status, &r);
+        }
+        bjv *result = bjv_decode(r.body, r.body_len);
+        double index = bjv_number(result, "index", -1);
+        char at[32]; if (index >= 0) snprintf(at, sizeof at, "%.0f", index); else snprintf(at, sizeof at, "?");
+        printf("%s✓%s requeued %s%s%s %s(dead #%s → #%s)%s\n", GREEN_OPEN(), GREEN_CLOSE(), CYAN_OPEN(), name, CYAN_CLOSE(),
+               DIM_OPEN(), requeue, at, DIM_CLOSE());
+        bjv_free(result);
+        http_response_free(&r);
+        return 0;
+    }
+
+    snprintf(target, sizeof target, "%s/dead/%s", url, name);
+    if (http_request("GET", target, NULL, NULL, 0, &r) != 0) {
+        fprintf(stderr, "%sdead: cannot reach the sukkal broker at %s (%s)%s\n", RED_OPEN(), url, r.error, RED_CLOSE());
+        return 1;
+    }
+    if (r.status < 200 || r.status >= 300) broker_fail("dead: %s — %.0s%d %.0s%s", name, "", r.status, &r);
+    bjv *entries = bjv_decode(r.body, r.body_len);
+    size_t n = entries && entries->type == BJV_ARRAY ? entries->count : 0;
+    if (n == 0) {
+        printf("%snothing has died on %s%s\n", DIM_OPEN(), name, DIM_CLOSE());
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            const bjv *entry = entries->items[i];
+            /* the envelope carries the letter as a binjson payload, or is the letter */
+            const bjv *payload = bjv_get(entry, "payload");
+            bjv *inner = payload && payload->type == BJV_BINARY ? bjv_decode(payload->bytes, payload->len) : NULL;
+            const bjv *letter = inner ? inner : entry;
+            double index = bjv_number(entry, "index", 0);
+            const char *why = bjv_string(letter, "error");
+            if (!why) why = bjv_string(letter, "reason");
+            double attempts = bjv_number(letter, "attempts", 0);
+            printf("%s[dead]%s %s#%.0f%s %s%s%s", RED_OPEN(), RED_CLOSE(), DIM_OPEN(), index, DIM_CLOSE(), BOLD_OPEN(), name, BOLD_CLOSE());
+            if (attempts) printf("%s after %.0f attempt(s)%s", DIM_OPEN(), attempts, DIM_CLOSE());
+            if (why) printf(" — %s", why);
+            printf("\n");
+            bjv_free(inner);
+        }
+        printf("%s  %zu dead — `mdy dead %s --requeue <index>` puts one back%s\n", DIM_OPEN(), n, name, DIM_CLOSE());
+    }
+    bjv_free(entries);
+    http_response_free(&r);
+    return 0;
 }
 
 /* ---- the progress line ------------------------------------------------------------
@@ -506,7 +646,6 @@ static int cmd_build(int argc, char **argv) {
         else if (strcmp(a, "--quiet") == 0) quiet = 1;
         else root = a;
     }
-    (void)broker;
     char out_default[4096];
     if (!out) {
         size_t n = strlen(root);
@@ -558,25 +697,28 @@ static int cmd_build(int argc, char **argv) {
      * is the one that survives. */
     size_t roots = mdy_engine_root_count(e);
     for (size_t i = 0; i < roots; i++) copy_static(mdy_engine_root_at(e, i), &sink);
-    mdy_engine_free(e);
     progress_finish(&progress);
-    if (sink.failed) return 1;
+    if (sink.failed) { mdy_engine_free(e); return 1; }
 
     if (!quiet) {
         printf("%s✓%s built %s%d%s page(s) → %s%s%s %s(%dms)%s\n",
                GREEN, BOLD_OPEN(), sink.pages, BOLD_CLOSE(), CYAN_OPEN(), out_abs, CYAN_CLOSE(),
                DIM_OPEN(), (int)(now_ms() - started), DIM_CLOSE());
-        if (messages.count) {
-            if (publish) {
-                fprintf(stderr, "%smdy build --publish is not available in this build yet%s\n", RED_OPEN(), RED_CLOSE());
-                return 1;
-            }
+    }
+    /* Strictly after the build reported success — that ordering IS the
+     * deferred half of $.publish, not a formatting choice. */
+    if (messages.count) {
+        if (publish) {
+            int sent = publish_messages(e, &messages, broker);
+            if (!quiet) printf("%s✓%s published %s%d%s message(s)\n", GREEN, BOLD_OPEN(), sent, BOLD_CLOSE());
+        } else if (!quiet) {
             for (size_t i = 0; i < messages.count; i++)
                 printf("%s[hold]%s %s\n", DIM_OPEN(), DIM_CLOSE(), messages.names[i]);
             printf("%s  %zu message(s) not sent — pass --publish to send them to a sukkal broker%s\n",
                    DIM_OPEN(), messages.count, DIM_CLOSE());
         }
     }
+    mdy_engine_free(e);
     free(out_abs);
     return 0;
 }
@@ -914,13 +1056,20 @@ int main(int argc, char **argv) {
     use_color = (force && *force) || (isatty(fileno(stdout)) && !(no && *no));
 
     if (argc > 1 && strcmp(argv[1], "build") == 0) return cmd_build(argc - 2, argv + 2);
-    if (argc > 1 && (strcmp(argv[1], "dev") == 0 || strcmp(argv[1], "serve") == 0)) {
+    if (argc > 1 && strcmp(argv[1], "serve") == 0) {
+        /* Not an alias: the rename exists to stop the CLI implying it is
+         * somewhere to host a site, and a working `serve` would keep implying it. */
+        fprintf(stderr, "%smdy: `mdy serve` is now `mdy dev`%s\n"
+                        "  It was renamed to say what it is: a development server that rebuilds\n"
+                        "  the whole site on every save and injects a live-reload script into\n"
+                        "  every page. To publish a site, deploy what `mdy build` writes.\n",
+                RED_OPEN(), RED_CLOSE());
+        return 1;
+    }
+    if (argc > 1 && strcmp(argv[1], "dev") == 0) {
         fprintf(stderr, "%smdy dev is not available in this build yet%s\n", RED_OPEN(), RED_CLOSE());
         return 1;
     }
-    if (argc > 1 && strcmp(argv[1], "dead") == 0) {
-        fprintf(stderr, "%smdy dead is not available in this build yet%s\n", RED_OPEN(), RED_CLOSE());
-        return 1;
-    }
+    if (argc > 1 && strcmp(argv[1], "dead") == 0) return cmd_dead(argc - 2, argv + 2);
     return cmd_document(argc - 1, argv + 1);
 }

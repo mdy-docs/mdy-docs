@@ -118,6 +118,15 @@ void mdy_engine_set_context_bool(mdy_engine *engine, const char *name, int value
  */
 void mdy_engine_set_context_json(mdy_engine *engine, const char *name,
                                  const char *json, int strict);
+/*
+ * JSON text as binjson — what `--publish` sends: a message's data arrives
+ * from `$.publish` as the guest's own JSON.stringify, and the broker takes
+ * one binjson value. Parsed by the guest's JSON.parse and encoded by the
+ * same encoder that puts documents into nisaba, so nothing is formatted
+ * twice. Caller frees `*out`; -1 when the text is not JSON.
+ */
+int mdy_engine_encode_json(mdy_engine *engine, const char *json,
+                           uint8_t **out, size_t *out_len);
 /* Forget every context field set so far — a watch re-reads them per pass. */
 void mdy_engine_clear_context(mdy_engine *engine);
 /*

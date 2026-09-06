@@ -44,6 +44,7 @@ LDLIBS  += -lm
 # nothing here starts a thread.
 ifeq ($(OS),Windows_NT)
   EXE := .exe
+  LDLIBS += -lws2_32
 else
   LDLIBS += -lpthread
   EXE :=
@@ -393,26 +394,26 @@ check-ingest: build/ingest-test$(EXE)
 # One document, end to end, with no JavaScript engine but lamassu — the three
 # passes of src/mdy.js done in C. No JavaScript engine but lamassu is linked
 # into this binary.
-build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/engine-test$(EXE): test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
+	  test/engine.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # The same driver under AddressSanitizer. A use-after-free in the boundary
 # between the tree, the document store and the VM is invisible without it:
 # a freed key cell is silently reused and a property becomes a different one.
-build/mdy-asan$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/mdy-asan$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
 	$(CC) -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer \
 	  -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
-	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
+	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
-build/mdy$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
+build/mdy$(EXE): src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c $(NIS_SRCS) \
+	  src/cli.c src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c $(NIS_SRCS) \
 	  $(PARSE_LIB) $(LAM_LIBS) -o $@ $(LDLIBS)
 
 # Twice: once normally, once collecting at EVERY safe point.
@@ -489,7 +490,7 @@ LAM_SRCS := $(wildcard $(LAMASSU)/src/runtime/*.c) $(wildcard $(LAMASSU)/src/fro
             $(LAMASSU)/third_party/baru-re/src/re_compiler.c $(LAMASSU)/third_party/baru-re/src/re_vm.c
 LAM_INC  := -I$(LAMASSU)/include -I$(LAMASSU)/src -I$(LAMASSU)/src/runtime -I$(LAMASSU)/src/frontend \
             -I$(LAMASSU)/third_party/baru-re/include -DLAMASSU_HAS_REGEX
-ENGINE_SRCS := src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c
+ENGINE_SRCS := src/engine.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c
 WASM_OUT := build/wasm/mdy-native.mjs
 
 build/wasm/liblamassu.a: $(LAM_SRCS)

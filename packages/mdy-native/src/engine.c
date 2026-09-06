@@ -2477,6 +2477,28 @@ void mdy_engine_set_context_bool(mdy_engine *e, const char *name, int value) {
     mdy_engine_set_context_json(e, name, value ? "true" : "false", 1);
 }
 
+static JsValue context_value(mdy_engine *e, const char *json, int strict);
+
+int mdy_engine_encode_json(mdy_engine *e, const char *json, uint8_t **out, size_t *out_len) {
+    *out = NULL; *out_len = 0;
+    JsValue v = context_value(e, json, 1);
+    if (js_is_undefined(v)) return -1;
+    js_gc_protect(e->vm, &v);
+    bj_builder *b = bj_builder_new();
+    int rc = b ? js_to_binjson(e, b, v) : -1;
+    js_gc_unprotect(e->vm, &v);
+    if (rc == 0 && !bj_builder_error(b)) {
+        size_t n = 0;
+        const uint8_t *data = bj_builder_data(b, &n);
+        *out = malloc(n + 1);
+        memcpy(*out, data, n);
+        (*out)[n] = 0;
+        *out_len = n;
+    } else rc = -1;
+    bj_builder_free(b);
+    return rc;
+}
+
 void mdy_engine_clear_context(mdy_engine *e) {
     for (size_t i = 0; i < e->ctx_count; i++) { free(e->ctx_names[i]); free(e->ctx_json[i]); }
     e->ctx_count = 0;
