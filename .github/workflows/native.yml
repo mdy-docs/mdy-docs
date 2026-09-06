@@ -162,15 +162,19 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       # Pinned to what nisaba's own CI pins, and what the wasm target was
       # first built with.
       - uses: mymindstorm/setup-emsdk@v14
         with:
           version: 5.0.7
+
+      # AFTER emsdk, deliberately. setup-emsdk prepends the emsdk root to
+      # PATH, and that directory holds a subdirectory named `node`, so a
+      # `node` looked up through it is a directory — `make: node: Permission
+      # denied`. setup-node running second puts the real one first.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Build the engine as WebAssembly
         working-directory: packages/mdy-native
