@@ -22,10 +22,11 @@
  *   - `$` is present but every native refuses, loudly. A document that calls
  *     `$.render` gets an error naming it rather than a wrong page.
  *   - `transform` needs the tree to reach the guest and come back.
- *   - Positions point at the GENERATED lines rather than the source ones:
- *     mdy-docs carries a line map from the script layer into the parser, and
- *     this does not yet. It does not change any HTML, only where a warning
- *     would say it came from.
+ *   - Positions point at the source lines: the script layer's `[line, text]`
+ *     pairs carry which line of the body each produced line came from, the
+ *     data-fence extractor says where each body line was in the file, and
+ *     the parser is handed the map — so a warning, and a task's form, name
+ *     the line a person could go and edit.
  */
 #ifndef MDY_ENGINE_H
 #define MDY_ENGINE_H
@@ -53,6 +54,57 @@ void mdy_engine_free(mdy_engine *engine);
  */
 int mdy_engine_open(mdy_engine *engine, const char *source, size_t len,
                     char *error, size_t error_len);
+
+/*
+ * How a source opened with mdy_engine_open is read — mdy-docs/parse's own
+ * knobs, set BEFORE open or render as each says. All default to what the
+ * document engine does for a site.
+ *
+ *   split     1: a bare `---` starts a new document (the site engine, and the
+ *             command line); 0: the whole source is one document and `---`
+ *             is a thematic break, which is mdy-docs/parse's default and
+ *             what a playground rendering one document wants. Before open.
+ *   sanitize  0: the element allowlist is off, since the template already
+ *             ran in a sandbox (the site engine); 1: on, with what it drops
+ *             reported through on_message. Before render.
+ *   tasks     1: a task's box is a form carrying the line and column of its
+ *             `[x]` (mdy-docs' `tasks: true`); 0: a disabled checkbox.
+ *             Before render.
+ */
+void mdy_engine_set_split(mdy_engine *engine, int split);
+void mdy_engine_set_sanitize(mdy_engine *engine, int sanitize);
+void mdy_engine_set_tasks(mdy_engine *engine, int tasks);
+
+/*
+ * A value in scope for the document's code, by name — mdy-docs/parse's
+ * `script.scope`: "a plain object, and its keys arrive in the document as
+ * variables". JSON text, parsed by the guest's JSON.parse at render. The name
+ * must be an identifier and may not be one of the toolkit's (transform,
+ * visit, h, toText, slug); -1 when it is either. Call before render.
+ */
+int mdy_engine_set_scope_json(mdy_engine *engine, const char *name, const char *json);
+
+/*
+ * What the parser changed or dropped — a `<script>` the sanitizer removed, a
+ * heading deeper than six, YAML that did not parse — as mdy-docs reports it
+ * on the vfile. Called once per message as each document's produced lines
+ * are parsed, with the document's index and the line and column IN THE
+ * FILE. Without one they are silently kept on the tree and discarded with it.
+ */
+void mdy_engine_on_message(mdy_engine *engine,
+                           void (*fn)(void *ud, size_t doc_index, uint32_t line, uint32_t column,
+                                      const char *rule, const char *reason),
+                           void *ud);
+
+/*
+ * Keep what the document answered WITH. `res` as the render left it, as JSON
+ * — its `data` (front matter, plus the `tags`, `users` and `links` the text
+ * was found to refer to) and whatever else the code put on it — minus `doc`,
+ * which is the tree and is the HTML's business. mdy-docs' `file.data.response`.
+ * Set before render; read after; valid until the next render or free.
+ */
+void mdy_engine_set_response(mdy_engine *engine, int keep);
+const char *mdy_engine_last_response(mdy_engine *engine);
 
 /*
  * Open a DIRECTORY as a document set — mdy-docs' `walkSources`, where every

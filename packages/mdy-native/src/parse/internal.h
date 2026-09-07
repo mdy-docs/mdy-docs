@@ -128,6 +128,7 @@ struct mdy_doc {
     mdy_reference *refs;
     size_t ref_count, ref_cap;
     uint32_t ref_document;   /* which document the parser is inside */
+    int ref_off;             /* >0 while parsing text that is not a reference's — a wiki label */
 };
 
 /* Note a `#tag`, an `@mention` or a link to a page of ours. Names go in as
@@ -213,6 +214,7 @@ typedef struct {
     const char *text;   /* not NUL terminated — use len */
     size_t len;
     size_t indent;      /* columns of leading space, tabs counted as 2 */
+    size_t indent_chars; /* the CHARACTERS that indentation took — a task's column counts these */
     int blank;
     uint32_t number;    /* 1-based line number in the original file */
     /* The whole line's length in UTF-16 units, indentation included — what a

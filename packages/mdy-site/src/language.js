@@ -1,8 +1,9 @@
-import {defaultArrows, defaultMarkers, mdy, scriptBrackets} from 'mdy-docs/parse'
+import {defaultArrows, defaultMarkers, scriptBrackets} from 'mdy-docs/parse'
 import {enhanceTasks} from 'mdy-docs/tasks'
 import {followFragments, headingAnchors} from './anchor.js'
 import {draftKey} from './draft.js'
 import {createEditor} from './editor.js'
+import {render as renderNative} from './native.js'
 import {scope} from './scope.js'
 import {blockRegions, embed, highlightMdy} from './syntax.js'
 import {setupTheme} from './theme.js'
@@ -23,11 +24,9 @@ const request = {pane: 'the preview pane', renders: 0}
 
 // The playground runs what you type, which is the point of showing the script
 // rule. A page that processes input it did not write should leave `script`
-// off.
-const processor = mdy({
-  script: {scope, request},
-  tasks: true
-}).use(headingAnchors)
+// off — here it is the C engine's script stage, in the tab, as WebAssembly
+// (native.js): `scope` and `request` reach it the way they reached the
+// JavaScript parser, and the output is the HTML it wrote.
 
 const views = [
   {id: 'preview', label: 'Preview'},
@@ -54,7 +53,8 @@ document.querySelector('#app').innerHTML = `
         toggling inline syntax, and a script stage, parsed straight to
         <a href="https://github.com/syntax-tree/hast">hast</a>. Everything
         below is one document carrying its own data and rendering itself —
-        including the contents list, which it builds from its own tree.
+        including the contents list, which it builds from its own tree — and
+        what renders it here is the C engine, compiled to WebAssembly.
       </p>
       <pre class="snippet"><code>npm install mdy-docs
 
@@ -158,6 +158,12 @@ const caretStat = document.querySelector('#stat-caret')
 const tabs = [...document.querySelectorAll('[role="tab"]')]
 
 let view = 'preview'
+// Renders are numbered so one that finishes after a newer one started says
+// nothing: the engine is asynchronous now, and a fast typist outruns it.
+let sequence = 0
+// The last good render, so a keystroke that breaks the document leaves the
+// document on screen under its message rather than blanking the pane.
+let last = {html: '', data: null, blocks: 0}
 
 // The editor paints MDY behind a plain textarea, so what you type is still a
 // textarea: same caret, same undo, same shortcuts.
@@ -234,27 +240,37 @@ function schedule() {
   frame = requestAnimationFrame(render)
 }
 
-function render() {
+async function render() {
   const document_ = editor.value
+  const mine = ++sequence
 
   // One more time round, which is the one thing on the request that moves.
   request.renders += 1
-  /** @type {import('vfile').VFile} */
-  let file
-  /** @type {import('hast').Root} */
-  let tree
+
+  let result
 
   try {
-    file = processor.processSync(document_)
-    tree = processor.parse(document_)
+    result = await renderNative(document_, {scope, request})
   } catch (error) {
+    if (mine !== sequence) return
     showMessages([{fatal: true, reason: error.message}])
     return
   }
 
-  showMessages(file.messages)
+  if (mine !== sequence) return
 
-  const blocks = tree.children.length
+  if (result.error) {
+    showMessages([{fatal: true, reason: result.error}])
+  } else {
+    showMessages(result.warnings)
+    last = {
+      html: result.html,
+      data: result.data?.data,
+      blocks: countBlocks(result.html)
+    }
+  }
+
+  const {html, data, blocks} = last
 
   sourceStat.textContent =
     `${document_.length} chars · ` +
@@ -264,19 +280,29 @@ function render() {
   code.hidden = view === 'preview'
 
   if (view === 'preview') {
-    rendered.innerHTML = String(file)
+    rendered.innerHTML = html
     if (!blocks) rendered.innerHTML = '<p class="empty">Nothing yet.</p>'
+    // Headings become links to themselves once the pane holds them.
+    headingAnchors(rendered)
     return
   }
 
-  // What the document answered with, which is the front matter at the top of
-  // the editor: edit the `+++` block and this follows.
-  const data = file.data.response?.data
-
+  // What the document answered with: `res.data` as the engine left it — the
+  // block at the top of the editor, the tags, users and links the text refers
+  // to, and the record's own fields. Edit the `+++` block and this follows.
   codeBody.innerHTML =
-    data === undefined
-      ? '<span class="empty">No front matter, so nothing on res.data.</span>'
+    data === undefined || data === null
+      ? '<span class="empty">Nothing on res.data yet.</span>'
       : embed(JSON.stringify(data, undefined, 2), 'json')
+}
+
+/** How many blocks the HTML holds at its top level. */
+function countBlocks(html) {
+  const holder = document.createElement('div')
+
+  holder.innerHTML = html
+
+  return holder.childElementCount
 }
 
 /** @param {Array<{fatal?: boolean | null, reason: string, line?: number | null}>} messages */

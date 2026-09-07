@@ -10,17 +10,15 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "hastscript": "^9.0.1",
     "lowlight": "^3.3.0",
-    "mdy-docs": "file:../..",
-    "unist-util-visit": "^5.1.0"
+    "mdy-docs": "file:../.."
   },
   "devDependencies": {
     "happy-dom": "^20.11.2",
     "vite": "^6.0.7",
     "vitest": "^4.1.10"
   },
-  "description": "The mdy-docs landing page: the language, live, in a two-pane editor that runs the real parser in the browser.",
+  "description": "The mdy-docs landing page: the language, live, in a two-pane editor that runs the real engine in the browser — packages/mdy-native, the C engine, as WebAssembly.",
   "license": "BSD-2-Clause",
   "exports": {
     ".": "./src/language.js",

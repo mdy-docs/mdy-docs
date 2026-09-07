@@ -1,14 +1,31 @@
 // @vitest-environment happy-dom
-import {mdy} from 'mdy-docs/parse'
 import {beforeEach, describe, expect, test, vi} from 'vitest'
 import {followFragments, headingAnchors, reveal} from '../src/anchor.js'
+import {render} from '../src/native.js'
 
 /**
+ * Render with the engine (C, as WebAssembly) and link the headings the way
+ * the page does: over the HTML, once a pane holds it.
+ *
  * @param {string} source
- * @returns {string}
+ * @returns {Promise<string>}
  */
-function run(source) {
-  return String(mdy().use(headingAnchors).processSync(source))
+async function run(source) {
+  const {html, error} = await render(source)
+
+  if (error) throw new Error(error)
+
+  return anchored(html)
+}
+
+/** `headingAnchors` over `html`, serialised back. */
+function anchored(html) {
+  const holder = document.createElement('div')
+
+  holder.innerHTML = html
+  headingAnchors(holder)
+
+  return holder.innerHTML
 }
 
 /**
@@ -37,54 +54,48 @@ beforeEach(() => {
 })
 
 describe('a heading is a link to itself', () => {
-  test('the whole heading is inside the anchor', () => {
-    expect(run('== The Rules')).toBe(
+  test('the whole heading is inside the anchor', async () => {
+    expect(await run('== The Rules')).toBe(
       '<h2 id="the-rules"><a href="#the-rules" class="heading-anchor">' +
         'The Rules<span class="heading-sign" aria-hidden="true">§</span>' +
         '</a></h2>'
     )
   })
 
-  test('at every level, and the id stays on the heading', () => {
-    const html = run('= One\n\n=== Three')
+  test('at every level, and the id stays on the heading', async () => {
+    const html = await run('= One\n\n=== Three')
 
     expect(html).toContain('<h1 id="one"><a href="#one"')
     expect(html).toContain('<h3 id="three"><a href="#three"')
   })
 
-  test('inline markup inside the heading is kept', () => {
-    expect(run('== !!Bold!! Heading')).toContain(
+  test('inline markup inside the heading is kept', async () => {
+    expect(await run('== !!Bold!! Heading')).toContain(
       '<strong>Bold</strong> Heading<span class="heading-sign"'
     )
   })
 
-  test('the sign is hidden from a screen reader, the link is not', () => {
-    const html = run('== Notes')
+  test('the sign is hidden from a screen reader, the link is not', async () => {
+    const html = await run('== Notes')
 
     expect(html).toContain('aria-hidden="true">§')
     expect(html).not.toContain('aria-hidden="true" href')
   })
 
   test('a heading with no id is left alone', () => {
-    expect(run('== Notes', {headingId: false})).toBeTruthy()
-    expect(String(mdy({headingId: false}).use(headingAnchors).processSync('== Notes')))
-      .toBe('<h2>Notes</h2>')
+    expect(anchored('<h2>Notes</h2>')).toBe('<h2>Notes</h2>')
   })
 
-  test('the footnotes heading is not a place to link to', () => {
-    const html = String(
-      mdy({footnotes: true})
-        .use(headingAnchors)
-        .processSync('Text[[ ^1 ]]\n\n[[ ^1 ]]: note')
-    )
+  test('the footnotes heading is not a place to link to', async () => {
+    const html = await run('Text[[ ^1 ]]\n\n[[ ^1 ]]: note')
 
     expect(html).toContain('<h2 class="sr-only" id="footnote-label">Footnotes</h2>')
   })
 })
 
 describe('following a fragment inside the pane', () => {
-  test('scrolls to the heading and leaves a shareable URL', () => {
-    const {root, scrolled} = pane(run('== The Rules'))
+  test('scrolls to the heading and leaves a shareable URL', async () => {
+    const {root, scrolled} = pane(await run('== The Rules'))
     const replaceState = vi.fn()
 
     followFragments(root, {history: {replaceState}, location: {hash: ''}})
@@ -104,8 +115,8 @@ describe('following a fragment inside the pane', () => {
     expect(replaceState).not.toHaveBeenCalled()
   })
 
-  test('a link someone shared is followed once the content is there', () => {
-    const {root, scrolled} = pane(run('== The Rules'))
+  test('a link someone shared is followed once the content is there', async () => {
+    const {root, scrolled} = pane(await run('== The Rules'))
 
     followFragments(root, {
       history: {replaceState() {}},
@@ -115,16 +126,16 @@ describe('following a fragment inside the pane', () => {
     expect(scrolled).toEqual(['the-rules'])
   })
 
-  test('an id that is not a valid selector still resolves', () => {
+  test('an id that is not a valid selector still resolves', async () => {
     // Slugs begin with a digit and hold dots, which `#id` could not express.
-    const {root, scrolled} = pane(run('== 12. Script'))
+    const {root, scrolled} = pane(await run('== 12. Script'))
 
     expect(reveal(root, '12.-script', 'auto')).toBe(true)
     expect(scrolled).toEqual(['12.-script'])
   })
 
-  test('an unknown hash on the way in does nothing', () => {
-    const {root, scrolled} = pane(run('== The Rules'))
+  test('an unknown hash on the way in does nothing', async () => {
+    const {root, scrolled} = pane(await run('== The Rules'))
 
     followFragments(root, {
       history: {replaceState() {}},

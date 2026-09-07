@@ -32,6 +32,8 @@ struct mdy_data {
     char *body;
     size_t body_len;
     char *sources;        /* every fence's YAML, back to back */
+    uint32_t *body_lines; /* for each line of `body`, its 0-based line in the text given */
+    size_t body_line_count;
 };
 
 typedef struct { const char *s; size_t len; size_t indent; } Line;
@@ -175,15 +177,22 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
         i = last;                          /* past this fence either way */
     }
 
-    /* The body without them, rejoined exactly as it was split. */
+    /* The body without them, rejoined exactly as it was split — and, for
+     * each line kept, which line it was, since a fence taken out moves every
+     * line under it and a position has to know by how much. */
     Buf body = { NULL, 0, 0, 1 };
-    for (size_t i = 0, written = 0; i < count; i++) {
+    uint32_t *body_lines = malloc((count ? count : 1) * sizeof *body_lines);
+    size_t written = 0;
+    if (!body_lines) { free(body.s); goto fail; }
+    for (size_t i = 0; i < count; i++) {
         if (drop[i]) continue;
         if (written) put(&body, "\n", 1);
         put(&body, lines[i].s, lines[i].len);
-        written++;
+        body_lines[written++] = (uint32_t)i;
     }
-    if (!body.ok || !sources.ok) { free(body.s); goto fail; }
+    if (!body.ok || !sources.ok) { free(body.s); free(body_lines); goto fail; }
+    out->body_lines = body_lines;
+    out->body_line_count = written;
 
     for (size_t i = 0; i < nfences; i++)
         fences[i].source = (sources.s ? sources.s : "") + offsets[i];
@@ -220,10 +229,16 @@ const char *mdy_data_body(const mdy_data *d, size_t *len) {
     return d->body;
 }
 
+const uint32_t *mdy_data_body_lines(const mdy_data *d, size_t *count) {
+    if (count) *count = d ? d->body_line_count : 0;
+    return d ? d->body_lines : NULL;
+}
+
 void mdy_data_free(mdy_data *d) {
     if (!d) return;
     free(d->fences);
     free(d->sources);
     free(d->body);
+    free(d->body_lines);
     free(d);
 }

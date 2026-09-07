@@ -32,7 +32,17 @@ static int is_fence(const char *s, size_t len) {
     return 1;
 }
 
+static mdy_documents *build(const char *text, size_t len, int split);
+
 mdy_documents *mdy_split_documents(const char *text, size_t len) {
+    return build(text, len, 1);
+}
+
+mdy_documents *mdy_one_document(const char *text, size_t len) {
+    return build(text, len, 0);
+}
+
+static mdy_documents *build(const char *text, size_t len, int split) {
     if (!text) return NULL;
     if (len == 0) len = strlen(text);
 
@@ -60,7 +70,7 @@ mdy_documents *mdy_split_documents(const char *text, size_t len) {
         size_t line_end = i;
         if (line_end > line_start && text[line_end - 1] == '\r') line_end--;
 
-        if (is_separator(text + line_start, line_end - line_start)) {
+        if (split && is_separator(text + line_start, line_end - line_start)) {
             if (count == cap) {
                 cap *= 2;
                 mdy_chunk *g = realloc(chunks, cap * sizeof *g);

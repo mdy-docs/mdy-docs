@@ -202,6 +202,21 @@ exists for the browser: the live-preview demo's messages pane
 ([packages/mdy-live-preview-native](../mdy-live-preview-native)) is that
 log, parsed.
 
+Document mode also carries mdy-docs/parse's own knobs, for a host that
+renders one document the way that package's callers do: `--one-document`
+reads the whole file as one document with a bare `---` a thematic break;
+`--tasks` makes a task's box a form carrying the line and column of its
+`[x]`, which is what `mdy-docs/tasks` posts back into a file; `--sanitize`
+applies the element allowlist and reports what it drops; `--scope <file>`
+puts a mapping's keys in the document's code as variables; `--response
+<file>` writes what the document answered with — `res` minus the tree, its
+`data` carrying the tags, users and links the text referred to. Parser
+warnings go to stderr as `mdy: warning: line N: … (rule)`, naming the line
+in the file: the script layer's `[line, text]` pairs, the data-fence
+extractor's map of the body back to the file, and the parser's line map
+between them (a gap the engine header used to list). The language tour at
+[packages/mdy-site](../mdy-site) runs on exactly these, in the tab.
+
 ## In a browser
 
 The same sources compile with emscripten unchanged, because the engine's only

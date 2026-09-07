@@ -168,6 +168,26 @@ typedef struct {
     int sanitize;
     mdy_highlight_fn highlight;   /* see above; NULL for plain code */
     void *highlight_ud;
+    /*
+     * A task's box as a FORM rather than a disabled checkbox — mdy-docs'
+     * `tasks: true`: hidden fields carrying the line and column of the
+     * character between the brackets and what it is now, and a submit
+     * button wearing a checkbox's role, so that one click posts what a
+     * handler needs to write the `x` into the file. Off by default, as
+     * mdy-docs' is.
+     */
+    int tasks;
+    /*
+     * Which line of the ORIGINAL file each line of `text` came from, 1-based,
+     * `line_map[i]` for the i-th line; lines past `line_map_len` count from
+     * where the map left off. What the script layer knows and the parser
+     * cannot: code lines were taken out and loops wrote lines that have no
+     * line of their own, so a position — and a warning, and a task — would
+     * otherwise name a line of the GENERATED text. `line_offset` is added on
+     * top. NULL means the lines are the file's own.
+     */
+    const uint32_t *line_map;
+    size_t line_map_len;
 } mdy_options;
 
 void mdy_options_default(mdy_options *out);

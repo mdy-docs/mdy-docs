@@ -43,6 +43,10 @@ const mdy_data_fence *mdy_data_at(const mdy_data *data, size_t index);
 
 /* The document with its data fences removed — what the script layer compiles. */
 const char *mdy_data_body(const mdy_data *data, size_t *len);
+/* For each line of that body, its 0-based line in the text given — a fence
+ * taken out moves every line under it, and a position needs to know by how
+ * much. `count` is the body's line count. */
+const uint32_t *mdy_data_body_lines(const mdy_data *data, size_t *count);
 
 void mdy_data_free(mdy_data *data);
 

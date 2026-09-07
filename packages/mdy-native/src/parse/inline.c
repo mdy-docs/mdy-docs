@@ -721,7 +721,9 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
      * across the corpus, every one of them with a plausible href, which is why
      * counting nodes found it and checking hrefs did not.
      */
+    ctx->doc->ref_off++;
     mdy_parse_inline(ctx->doc, a, label, label_len);
+    ctx->doc->ref_off--;
     unwrap_links(a);
 
     mdy_append(ctx->parent, a);

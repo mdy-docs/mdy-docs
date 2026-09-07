@@ -104,14 +104,29 @@ export async function build(input, options = {}) {
  * output printed under the [deliver] line. That output comes back parsed
  * into `messages`, so a page need not know the log's shape.
  *
+ * The rest are mdy-docs/parse's own knobs, for a host rendering one document
+ * as that package's callers do: `oneDocument` reads the whole source as one
+ * document with `---` a thematic break; `tasks` makes each task's box a form
+ * carrying its line and column; `sanitize` applies the element allowlist and
+ * reports what it drops; `scope` is an object whose keys become variables in
+ * the document's code; `response` asks for what the document answered with —
+ * `res` as the render left it, minus the tree — back as `data`. Parser
+ * warnings come back as `warnings`, each with the line in the source.
+ *
  * @param {string | Uint8Array} source
  * @param {{ html?: boolean, publish?: boolean, data?: Record<string, unknown>,
+ *           oneDocument?: boolean, tasks?: boolean, sanitize?: boolean,
+ *           scope?: Record<string, unknown>, response?: boolean,
  *           createModule?: Function }} [options]
- * @returns {Promise<{ output: string, messages: Array<object>, log: string,
- *                     errors: string, status: number }>}
+ * @returns {Promise<{ output: string, messages: Array<object>, warnings: Array<object>,
+ *                     data: object | null, log: string, errors: string, status: number }>}
  */
 export async function document(source, options = {}) {
-  const { html = true, publish = false, data = null, createModule } = options;
+  const {
+    html = true, publish = false, data = null,
+    oneDocument = false, tasks = false, sanitize = false, scope = null, response = false,
+    createModule,
+  } = options;
 
   const factory = createModule ?? (await import('../build/wasm/mdy-native.mjs')).default;
   const out = [];
@@ -129,10 +144,18 @@ export async function document(source, options = {}) {
   const args = [`${ROOT}/document.mdy`, '-o', `${OUT}/document.out`];
   if (html) args.push('--html');
   if (publish) args.push('--publish');
+  if (oneDocument) args.push('--one-document');
+  if (tasks) args.push('--tasks');
+  if (sanitize) args.push('--sanitize');
   if (data) {
     FS.writeFile(`${ROOT}/data.json`, JSON.stringify(data));
     args.push('--data-file', `${ROOT}/data.json`);
   }
+  if (scope) {
+    FS.writeFile(`${ROOT}/scope.json`, JSON.stringify(scope));
+    args.push('--scope', `${ROOT}/scope.json`);
+  }
+  if (response) args.push('--response', `${OUT}/response.json`);
 
   let status;
   try {
@@ -144,9 +167,26 @@ export async function document(source, options = {}) {
 
   let output = '';
   try { output = text(FS.readFile(`${OUT}/document.out`)); } catch { /* a failed render writes nothing */ }
-  const errors = err.filter((line) => !line.startsWith('[read] ')).join('\n');
-  return { output, messages: parseMessages(out, err), log: out.join('\n'), errors, status };
+  let answered = null;
+  if (response) {
+    try { answered = JSON.parse(text(FS.readFile(`${OUT}/response.json`))); } catch { /* none on failure */ }
+  }
+  const warnings = [];
+  const rest = [];
+  for (const line of err) {
+    if (line.startsWith('[read] ')) continue;
+    const w = WARNING.exec(line);
+    if (w) warnings.push({ line: w[1] ? Number(w[1]) : null, reason: w[2], rule: w[3] });
+    else rest.push(line);
+  }
+  return {
+    output, messages: parseMessages(out, err), warnings, data: answered,
+    log: out.join('\n'), errors: rest.join('\n'), status,
+  };
 }
+
+/* `mdy: warning: line 12: <script> is not allowed, dropping it (sanitize)` */
+const WARNING = /^mdy: warning: (?:line (\d+): )?(.*) \((\S+)\)$/;
 
 /*
  * The --publish log, line by line. stdout carries sends and deliveries,

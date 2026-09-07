@@ -1076,24 +1076,20 @@ int main(void) {
           "= Untouched", "<h1 id=\"untouched\">Untouched</h1>");
 
     /*
-     * ATTRIBUTE ORDER through the round trip, which is worth pinning because
-     * it looks like a bug and is not.
+     * ATTRIBUTE ORDER through the round trip: an element written `href class
+     * rel title` comes back exactly so after passing through a transform.
      *
-     * An element written `href class rel title` comes back `href title class
-     * rel` after passing through a transform — and mdy-docs does exactly the
-     * same under node. The expectation
-     * below is what `node bin/mdy.js build` produces for this document, taken
-     * from it rather than reasoned out.
-     *
-     * (lamassu does not keep objects in insertion order, which the language
-     * requires — see js_object_key_at's note. It does not decide this case,
-     * but it is a real gap and this is the check that would notice if it
-     * started to.)
+     * It did not always. lamassu kept an object's keys in hash order, so the
+     * tree's properties came back shuffled — `href title class rel` — and
+     * mdy-docs under node, running its transforms in the same lamassu, did
+     * the same, which is what this check used to pin. lamassu keeps string
+     * keys in insertion order now, as the language requires, and both
+     * engines answer with the document's own order.
      */
-    check("attribute order matches what mdy-docs produces",
+    check("attribute order survives the round trip",
           "%% transform((tree) => {})\n"
           "<a href=\"/x\" class=\"one two\" rel=\"noopener\" title=\"t\">link",
-          "<a href=\"/x\" title=\"t\" class=\"one two\" rel=\"noopener\">link</a>");
+          "<a href=\"/x\" class=\"one two\" rel=\"noopener\" title=\"t\">link</a>");
 
     refuses("a transform that returns something that is not a node",
             "%% transform(() => 42)\n= x", "transform must return a hast node");

@@ -186,6 +186,21 @@ static const char USAGE[] =
 "                        the page it names renders with the message as `req`,\n"
 "                        its output printed under the [deliver] line. One\n"
 "                        attempt each; a refusal is dead-lettered at once.\n"
+"      --one-document    The whole file is one document, and a bare `---` is\n"
+"                        a thematic break — mdy-docs/parse's default, rather\n"
+"                        than the site engine's split. A file input only.\n"
+"      --tasks           A task's box is a form carrying the line and column\n"
+"                        of its `[x]`, for a handler to write the file (the\n"
+"                        parser's `tasks: true`); default: a disabled box.\n"
+"      --sanitize        Apply the element allowlist to the output and report\n"
+"                        what it drops as a warning (the site engine leaves\n"
+"                        it off: its templates ran in a sandbox already).\n"
+"      --scope <f>       A YAML/JSON mapping whose keys are variables in the\n"
+"                        document's code — what a host hands a template.\n"
+"      --response <f>    Write what the document answered with — `res` as\n"
+"                        JSON: its data, with the tags, users and links it\n"
+"                        referred to, and whatever its code put there.\n"
+"                        Warnings from the parse go to stderr either way.\n"
 "  -h, --help            Show this help.\n"
 "\n"
 "Extra context (from --data / --data-file) overrides the document's front matter.\n"
@@ -738,6 +753,10 @@ static int cmd_build(int argc, char **argv) {
 typedef struct {
     const char *out, *entry, *data_file;
     int html, emit_js, watch, publish;
+    /* mdy-docs/parse's knobs, for a host rendering one document as that
+     * package's callers do — the playground page, above all */
+    int one_document, tasks, sanitize;
+    const char *scope_file, *response_file;
     char **data; size_t data_count;
     const char *input; int is_stdin, is_dir;
     char *input_abs;
@@ -833,6 +852,69 @@ static char *load_context(mdy_engine *e, const DocOptions *o) {
 static void publish_document(mdy_engine *e, Messages *m);
 static void messages_clear(Messages *m);
 
+/* A parser warning, as the JavaScript's vfile would carry it, to stderr:
+ * `mdy: warning: line 12: <script> is not allowed, dropping it (sanitize)`. */
+static void doc_message(void *ud, size_t doc_index, uint32_t line, uint32_t column,
+                        const char *rule, const char *reason) {
+    (void)ud; (void)doc_index; (void)column;
+    if (line) fprintf(stderr, "%smdy: warning: line %u: %s (%s)%s\n", YELLOW_OPEN(), (unsigned)line, reason, rule ? rule : "mdy", YELLOW_CLOSE());
+    else fprintf(stderr, "%smdy: warning: %s (%s)%s\n", YELLOW_OPEN(), reason, rule ? rule : "mdy", YELLOW_CLOSE());
+}
+
+/* `--scope`: a YAML/JSON mapping, each key a variable in the document's code. */
+static char *load_scope(mdy_engine *e, const DocOptions *o) {
+    static char msg[4096];
+    if (!o->scope_file) return NULL;
+    size_t len = 0;
+    char *path = absolute(o->scope_file);
+    uint8_t *text = fsx_read("/", path, &len);
+    free(path);
+    if (!text) { snprintf(msg, sizeof msg, "cannot read --scope: no such file: %s", o->scope_file); return msg; }
+    char yerr[256];
+    mdy_yaml *doc = mdy_yaml_parse((const char *)text, len, yerr, sizeof yerr);
+    free(text);
+    if (!doc) { snprintf(msg, sizeof msg, "cannot read --scope: %s", yerr); return msg; }
+    const mdy_yaml_node *root = mdy_yaml_root(doc);
+    if (mdy_yaml_type_of(root) != MDY_YAML_MAPPING) {
+        mdy_yaml_free(doc);
+        snprintf(msg, sizeof msg, "--scope must contain a YAML/JSON mapping");
+        return msg;
+    }
+    size_t n = mdy_yaml_count(root);
+    for (size_t i = 0; i < n; i++) {
+        size_t klen = 0;
+        const char *k = mdy_yaml_key(root, i, &klen);
+        char *json = mdy_yaml_to_json(mdy_yaml_value(root, i));
+        char *name = malloc(klen + 1);
+        memcpy(name, k, klen); name[klen] = 0;
+        int rc = mdy_engine_set_scope_json(e, name, json ? json : "null");
+        if (rc != 0) {
+            snprintf(msg, sizeof msg, "--scope: \"%s\" cannot be a variable — not an identifier, or one the document already has (req, res, transform, visit, h, toText, slug)", name);
+            free(name); free(json); mdy_yaml_free(doc);
+            return msg;
+        }
+        free(name); free(json);
+    }
+    mdy_yaml_free(doc);
+    return NULL;
+}
+
+/* `--response`: what the document answered with, as JSON, to a file. */
+static char *write_response(mdy_engine *e, const DocOptions *o) {
+    static char msg[4096];
+    if (!o->response_file) return NULL;
+    const char *json = mdy_engine_last_response(e);
+    if (!json) json = "null";
+    char *path = absolute(o->response_file);
+    FILE *f = fopen(path, "wb");
+    if (!f) { snprintf(msg, sizeof msg, "cannot write --response: %s", o->response_file); free(path); return msg; }
+    fputs(json, f);
+    fputc('\n', f);
+    fclose(f);
+    free(path);
+    return NULL;
+}
+
 static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) {
     static char msg[4096];
     *out = NULL;
@@ -841,6 +923,13 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
     if (!e) return "out of memory";
     char *cerr = load_context(e, o);
     if (cerr) { mdy_engine_free(e); return cerr; }
+    cerr = load_scope(e, o);
+    if (cerr) { mdy_engine_free(e); return cerr; }
+    mdy_engine_set_split(e, !o->one_document);
+    mdy_engine_set_sanitize(e, o->sanitize);
+    mdy_engine_set_tasks(e, o->tasks);
+    mdy_engine_set_response(e, o->response_file != NULL);
+    mdy_engine_on_message(e, doc_message, NULL);
     mdy_engine_on_emit(e, collect_emit, emitted);
     mdy_engine_on_binary(e, collect_binary, emitted);
     /* $.publish: collected, and sent only with --publish and only once the
@@ -881,9 +970,11 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
         char *text = o->html ? mdy_engine_render(e, (size_t)at, err, sizeof err)
                              : mdy_engine_render_text(e, (size_t)at, err, sizeof err);
         if (text && o->publish) publish_document(e, &messages);
+        char *rerr = text ? write_response(e, o) : NULL;
         messages_clear(&messages); free(messages.names); free(messages.json);
         mdy_engine_free(e);
         if (!text) { snprintf(msg, sizeof msg, "%s", err); return msg; }
+        if (rerr) { free(text); return rerr; }
         *out = text;
         return NULL;
     }
@@ -923,9 +1014,11 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
     char *rendered = o->html ? mdy_engine_render(e, 0, err, sizeof err)
                              : mdy_engine_render_text(e, 0, err, sizeof err);
     if (rendered && o->publish) publish_document(e, &messages);
+    char *rerr = rendered ? write_response(e, o) : NULL;
     messages_clear(&messages); free(messages.names); free(messages.json);
     mdy_engine_free(e);
     if (!rendered) { snprintf(msg, sizeof msg, "%s", err); return msg; }
+    if (rerr) { free(rendered); return rerr; }
     *out = rendered;
     return NULL;
 }
@@ -1097,6 +1190,11 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(name, "data-file") == 0) { canonical = "data-file"; takes_value = 1; }
         else if (strcmp(name, "watch") == 0 || strcmp(name, "w") == 0) canonical = "watch";
         else if (strcmp(name, "publish") == 0) canonical = "publish";
+        else if (strcmp(name, "one-document") == 0) canonical = "one-document";
+        else if (strcmp(name, "tasks") == 0) canonical = "tasks";
+        else if (strcmp(name, "sanitize") == 0) canonical = "sanitize";
+        else if (strcmp(name, "scope") == 0) { canonical = "scope"; takes_value = 1; }
+        else if (strcmp(name, "response") == 0) { canonical = "response"; takes_value = 1; }
         else if (strcmp(name, "help") == 0 || strcmp(name, "h") == 0) { canonical = "help"; is_help = 1; }
         if (!canonical) {
             char m[256];
@@ -1116,6 +1214,11 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(canonical, "data-file") == 0) o.data_file = value;
         else if (strcmp(canonical, "watch") == 0) o.watch = 1;
         else if (strcmp(canonical, "publish") == 0) o.publish = 1;
+        else if (strcmp(canonical, "one-document") == 0) o.one_document = 1;
+        else if (strcmp(canonical, "tasks") == 0) o.tasks = 1;
+        else if (strcmp(canonical, "sanitize") == 0) o.sanitize = 1;
+        else if (strcmp(canonical, "scope") == 0) o.scope_file = value;
+        else if (strcmp(canonical, "response") == 0) o.response_file = value;
         else if (strcmp(canonical, "help") == 0) { fputs(USAGE, stdout); fputc('\n', stdout); return 0; }
     }
 
@@ -1142,6 +1245,8 @@ static int cmd_document(int argc, char **argv) {
     if (o.emit_js && o.html) fail("--emit-js cannot be combined with --html");
     if (o.publish && o.emit_js) fail("--publish cannot be combined with --emit-js");
     if (o.publish && o.watch) fail("--publish cannot be combined with --watch: a re-render would send again");
+    if (o.one_document && o.is_dir) fail("--one-document is only valid with a file or stdin input");
+    if (o.response_file && o.emit_js) fail("--response cannot be combined with --emit-js");
     if (o.out && !o.is_stdin) {
         char *out_abs = absolute(o.out);
         int same = strcmp(out_abs, o.input_abs) == 0;

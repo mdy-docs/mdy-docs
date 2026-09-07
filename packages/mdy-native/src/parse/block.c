@@ -32,6 +32,9 @@ void mdy_options_default(mdy_options *out) {
     out->highlight_ud = NULL;
     out->positions = 1;
     out->sanitize = 1;
+    out->tasks = 0;
+    out->line_map = NULL;
+    out->line_map_len = 0;
 }
 
 /* ---- lines --------------------------------------------------------------- */
@@ -55,7 +58,17 @@ static mdy_line *split_lines(mdy_doc *doc, const char *text, size_t len, size_t 
         mdy_line *line = &lines[out];
         line->text = text + start;
         line->len = end - start;
-        line->number = (uint32_t)out + 1 + doc->options.line_offset;
+        /* Its line in the file: through the map when the script layer left
+         * one, else its own count. A line the map does not reach — one a
+         * loop wrote past the end — takes the map's last line, since that
+         * is the line of the code that wrote it. */
+        const mdy_options *o = &doc->options;
+        if (o->line_map && o->line_map_len) {
+            size_t at = out < o->line_map_len ? out : o->line_map_len - 1;
+            line->number = o->line_map[at] + o->line_offset;
+        } else {
+            line->number = (uint32_t)out + 1 + o->line_offset;
+        }
         /* Before the indent is stripped: a position's end column counts from
          * the start of the line, indentation and all. */
         line->units = (uint32_t)mdy_utf16_length(text + start, end - start);
@@ -72,6 +85,7 @@ static mdy_line *split_lines(mdy_doc *doc, const char *text, size_t len, size_t 
             k++;
         }
         line->indent = indent;
+        line->indent_chars = k;
         line->text += k;
         line->len -= k;
         line->blank = line->len == 0;
@@ -172,6 +186,10 @@ static void record_matter(mdy_doc *doc, const char *source, size_t len,
 }
 
 void mdy_collect(mdy_doc *doc, mdy_ref_kind kind, const char *name, size_t len) {
+    /* A wiki link's label is parsed as content, and a `#tag` in it is text
+     * of the link, not a reference the document makes — `parseInline(label,
+     * {...options, collect: undefined})`. */
+    if (doc->ref_off) return;
     /* Only once each, per document — `!list.includes(name)`. */
     for (size_t i = 0; i < doc->ref_count; i++) {
         const mdy_reference *r = &doc->refs[i];
@@ -586,16 +604,105 @@ static int doctype_line(const mdy_line *l) {
  * box carries a position because the JavaScript builds it with the block
  * element helper, which gives every node one.
  */
+static void prepend(mdy_node *parent, mdy_node *child) {
+    child->next = parent->first;
+    parent->first = child;
+    if (!parent->last) parent->last = child;
+}
+
+/* All the text under a node, the markup taken off — `toText`, for a task's
+ * label. Into `buf`, which is `cap` bytes; the result is cut to fit. */
+static size_t text_of(const mdy_node *node, char *buf, size_t cap, size_t at) {
+    if (!node) return at;
+    if (node->type == MDY_TEXT) {
+        size_t n = strlen(node->text);
+        if (at + n >= cap) n = cap - 1 - at;
+        memcpy(buf + at, node->text, n);
+        at += n;
+        buf[at] = '\0';
+        return at;
+    }
+    for (const mdy_node *c = node->first; c; c = c->next) at = text_of(c, buf, cap, at);
+    return at;
+}
+
+/* `<input type="hidden" name=… value=…>` */
+static mdy_node *hidden(mdy_doc *doc, const char *name, const char *value) {
+    mdy_node *in = mdy_new_element(doc, "input", 5);
+    mdy_set_string(doc, in, "type", "hidden", 6);
+    mdy_set_string(doc, in, "name", name, strlen(name));
+    mdy_set_string(doc, in, "value", value, strlen(value));
+    return in;
+}
+
+/*
+ * A task's box as a form — src/parse/task.js's `taskForm`, property for
+ * property: the line and column of the character between the brackets,
+ * what it is now, and a submit button wearing a checkbox's role, state and
+ * shape, with the glyph that shape is drawn with. The label is the item's
+ * own text, which is why this runs after the inline parse.
+ */
+static mdy_node *task_form(mdy_doc *doc, int checked, uint32_t line, size_t column,
+                           const char *label) {
+    mdy_node *form = mdy_new_element(doc, "form", 4);
+    mdy_set_string(doc, form, "method", "post", 4);
+    mdy_add_class(doc, form, "task-list-item-form");
+    char num[24];
+    snprintf(num, sizeof num, "%u", (unsigned)line);
+    mdy_append(form, hidden(doc, "line", num));
+    snprintf(num, sizeof num, "%zu", column);
+    mdy_append(form, hidden(doc, "column", num));
+    mdy_append(form, hidden(doc, "was", checked ? "x" : " "));
+    mdy_node *button = mdy_new_element(doc, "button", 6);
+    mdy_set_string(doc, button, "type", "submit", 6);
+    mdy_set_string(doc, button, "name", "next", 4);
+    mdy_set_string(doc, button, "value", checked ? " " : "x", 1);
+    mdy_set_string(doc, button, "role", "checkbox", 8);
+    mdy_set_string(doc, button, "ariaChecked", checked ? "true" : "false", checked ? 4 : 5);
+    if (label && *label) mdy_set_string(doc, button, "ariaLabel", label, strlen(label));
+    mdy_add_class(doc, button, "task-list-item-toggle");
+    mdy_node *glyph = mdy_new_element(doc, "span", 4);
+    mdy_set_string(doc, glyph, "ariaHidden", "true", 4);
+    mdy_append(glyph, mdy_new_text(doc, checked ? "\xe2\x98\x91" : "\xe2\x98\x90", 3));
+    mdy_append(button, glyph);
+    mdy_append(form, button);
+    return form;
+}
+
+/*
+ * The box at the head of a task item, and the space that separates it from
+ * the text — put in FRONT of the item's parsed content, which is why this
+ * runs after the inline parse: with `tasks` on, the box is a form whose
+ * label is that content's text.
+ *
+ * The space goes in only when there IS text — `content.unshift({text: ' '})`
+ * runs under `if (content.length)` — so an empty task ends at its box. The
+ * box carries a position because the JavaScript builds it with the block
+ * element helper, which gives every node one.
+ */
 static void add_task_box(mdy_doc *doc, mdy_node *into, int task, size_t content_len,
-                         const mdy_line *lines, size_t line) {
+                         const mdy_line *lines, size_t line, size_t column) {
     if (task < 0) return;
-    mdy_node *box = mdy_new_element(doc, "input", 5);
-    mdy_set_string(doc, box, "type", "checkbox", 8);
-    mdy_set_bool(doc, box, "checked", task);
-    mdy_set_bool(doc, box, "disabled", 1);
-    mdy_set_position(box, lines, line, line);
-    mdy_append(into, box);
-    if (content_len) mdy_append(into, mdy_new_text(doc, " ", 1));
+    mdy_node *box;
+    if (doc->options.tasks) {
+        char label[1024];
+        label[0] = '\0';
+        size_t n = text_of(into, label, sizeof label, 0);
+        /* `.trim()` */
+        size_t start = 0;
+        while (start < n && (label[start] == ' ' || label[start] == '\t' || label[start] == '\n')) start++;
+        while (n > start && (label[n - 1] == ' ' || label[n - 1] == '\t' || label[n - 1] == '\n')) n--;
+        label[n] = '\0';
+        box = task_form(doc, task, lines[line].number, column, label + start);
+    } else {
+        box = mdy_new_element(doc, "input", 5);
+        mdy_set_string(doc, box, "type", "checkbox", 8);
+        mdy_set_bool(doc, box, "checked", task);
+        mdy_set_bool(doc, box, "disabled", 1);
+        mdy_set_position(box, lines, line, line);
+    }
+    if (content_len) prepend(into, mdy_new_text(doc, " ", 1));
+    prepend(into, box);
 }
 
 /*
@@ -1463,10 +1570,15 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                  * paragraph and not the <li>.
                  */
                 int task = -1;
+                /* the column of the character between the brackets, 1-based
+                 * and counted from the start of the line, indentation and
+                 * all — what a handler needs to find the `x` to write */
+                size_t task_column = 0;
                 if (body_len >= 3 && body[0] == '[' && body[2] == ']' &&
                     (body[1] == ' ' || body[1] == 'x' || body[1] == 'X') &&
                     (body_len == 3 || body[3] == ' ' || body[3] == '\t')) {
                     task = body[1] == ' ' ? 0 : 1;
+                    task_column = lines[i].indent_chars + (size_t)(body - lines[i].text) + 2;
                     body += 3;
                     body_len -= 3;
                     while (body_len && (*body == ' ' || *body == '\t')) { body++; body_len--; }
@@ -1507,8 +1619,8 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                     /* `li("\n" p(content) "\n")` — the shape a blank line
                      * between items produces. */
                     mdy_node *wrap = mdy_new_element(doc, "p", 1);
-                    add_task_box(doc, wrap, task, o, lines, i);
                     mdy_parse_inline(doc, wrap, joined, o);
+                    add_task_box(doc, wrap, task, o, lines, i, task_column);
                     /* The paragraph a loose item wraps its content in spans
                      * the same lines the item does — it IS the item's
                      * content, not a block of its own. */
@@ -1517,8 +1629,8 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                     mdy_append(item, wrap);
                     mdy_append(item, mdy_new_text(doc, "\n", 1));
                 } else {
-                    add_task_box(doc, item, task, o, lines, i);
                     mdy_parse_inline(doc, item, joined, o);
+                    add_task_box(doc, item, task, o, lines, i, task_column);
                 }
 
                 if (item_end > plain_end) {

@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs'
 import {fileURLToPath} from 'node:url'
-import {mdy} from 'mdy-docs/parse'
+import {render} from '../src/native.js'
 import {scope} from '../src/scope.js'
 import {describe, expect, test} from 'vitest'
 
@@ -13,10 +13,11 @@ const source = /<script type="text\/mdy" id="sample">\r?\n([\s\S]*?)<\/script>/
   .exec(page)[1]
   .replace(/\s+$/, '')
 // The same two the page hands it: a request to answer, and the values a host
-// puts in scope.
+// puts in scope — and the same engine, which is the C one as WebAssembly
+// (src/native.js), asked exactly as the page asks it.
 const request = {pane: 'the preview pane', renders: 1}
-const file = mdy({script: {scope, request}, tasks: true}).processSync(source)
-const html = String(file)
+const file = await render(source, {scope, request})
+const html = file.html
 
 /**
  * Every rule in the language should be visible on the demo page, not just
@@ -35,7 +36,8 @@ function shows(what, expected) {
 
 describe('the sample parses cleanly', () => {
   test('reports nothing on the file', () => {
-    expect(file.messages.map(String)).toEqual([])
+    expect(file.error).toBeNull()
+    expect(file.warnings).toEqual([])
   })
 })
 
@@ -201,13 +203,13 @@ describe('9. links', () => {
   shows('a tag', '<a href="/tags/syntax-trees">#syntax-trees</a>')
   shows('a mention', '<a href="/users/wooorm">@wooorm</a>')
   test('every tag and mention is written down on res.data', () => {
-    const {tags, users} = file.data.response.data
+    const {tags, users} = file.data.data
 
     expect(tags).toContain('syntax-trees')
     expect(users).toContain('wooorm')
   })
   test('a link to another page is tidied and written down', () => {
-    const {links} = file.data.response.data
+    const {links} = file.data.data
 
     // `[[ Getting Started ]]` on the page, which is a page of its own rather
     // than a URL or a fragment.
@@ -246,7 +248,7 @@ describe('11. front matter', () => {
     expect(html.startsWith('<h1 id="mdy">MDY</h1>')).toBe(true)
   })
   test('the data reaches the tree and the file', () => {
-    expect(file.data.matter).toMatchObject({
+    expect(file.data.data).toMatchObject({
       title: 'MDY',
       tagline: 'markup that compiles to hast',
       fences: 'yaml'
@@ -254,7 +256,7 @@ describe('11. front matter', () => {
   })
 
   test('the tags and users it refers to are written down beside them', () => {
-    const {tags, users} = file.data.matter
+    const {tags, users} = file.data.data
 
     // The page writes these in its links rule, and never in the block at the
     // top: they are collected from the text as it is read.
@@ -268,9 +270,16 @@ describe('11. front matter', () => {
     expect(block).not.toContain('tags:')
     expect(block).not.toContain('users:')
 
-    // Every one of them is a link in the output, and each is listed once.
-    for (const tag of tags) {
-      expect(html).toContain('>#' + tag + '</a>')
+    // Every tag and mention the output links to is listed, and each once.
+    // (The engine's record lists a few more: its own scan of the text takes
+    // `#mdy` inside `[[ back | #mdy ]]` for a tag, which is what a site's
+    // `$.withTag` sees, and this page writes several such fragments.)
+    for (const [, tag] of html.matchAll(/href="\/tags\/[^"]*">#([^<]+)<\/a>/g)) {
+      expect(tags).toContain(tag)
+    }
+
+    for (const [, user] of html.matchAll(/href="\/users\/[^"]*">@([^<]+)<\/a>/g)) {
+      expect(users).toContain(user)
     }
 
     expect(new Set(tags).size).toBe(tags.length)
@@ -311,7 +320,7 @@ describe('12. script', () => {
   test('res.doc reaches the transform, and res comes back on the file', () => {
     // The count is written into the tree by the transform rather than
     // interpolated, because at interpolation time there is no tree to count.
-    const blocks = file.data.response.blocks
+    const blocks = file.data.blocks
 
     expect(typeof blocks).toBe('number')
     expect(blocks).toBeGreaterThan(50)
@@ -320,7 +329,15 @@ describe('12. script', () => {
     )
   })
   test('res.data is the block at the top of the file', () => {
-    expect(file.data.response.data).toEqual(file.data.matter)
+    // ...plus what the engine's record adds beside it — the lists above, and
+    // the tags its own scan of the text found — but the block is all there.
+    const {title, tagline, fences} = file.data.data
+
+    expect({title, tagline, fences}).toEqual({
+      title: 'MDY',
+      tagline: 'markup that compiles to hast',
+      fences: 'yaml'
+    })
   })
   shows('a table of contents built from the tree', [
     '<nav id="toc"><ol>',

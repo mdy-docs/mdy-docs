@@ -44,6 +44,7 @@ typedef struct Resized Resized;
 typedef struct {
     mdy_chunk chunk;      /* the document's own text */
     mdy_chunk matter;     /* its front matter, unparsed */
+    size_t matter_lines;  /* how many lines of the chunk come before the body */
     mdy_data *fences;     /* its ```data fences, and the body without them */
     uint8_t oid[12];
     /*
@@ -136,6 +137,17 @@ struct mdy_engine {
      * see the render memo. Saved and restored around each render. */
     int taint;
     char last_render_key[24];   /* the memo key of the render just done, base 36 */
+    /* mdy-docs/parse's knobs — see engine.h */
+    int split, sanitize, tasks;
+    char **scope_names;
+    char **scope_json;
+    size_t scope_count;
+    void (*on_message)(void *ud, size_t doc_index, uint32_t line, uint32_t column,
+                       const char *rule, const char *reason);
+    void *on_message_ud;
+    int want_response;
+    char *last_response;
+    JsValue render_res;         /* the `res` of the render in progress, for its references */
     /* `_id` to index, in insertion order, so a hit maps back to its document. */
     uint8_t (*ids)[12];
 
@@ -2265,7 +2277,7 @@ int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
     if (error && error_len) error[0] = '\0';
     close_set(e);
 
-    e->source_docs = mdy_split_documents(source, len);
+    e->source_docs = e->split ? mdy_split_documents(source, len) : mdy_one_document(source, len);
     if (!e->source_docs) return -1;
 
     size_t n = mdy_documents_count(e->source_docs);
@@ -2336,6 +2348,12 @@ int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
         mdy_chunk body;
         mdy_split_frontmatter(d->chunk.text, d->chunk.len, &d->matter, &body);
         d->fences = mdy_data_extract(body.text, body.len);
+        /* The lines the front matter took, so a position in the body can
+         * step over them — mdy-docs' `lineOffset`. */
+        d->matter_lines = 0;
+        if (body.text >= d->chunk.text && body.text <= d->chunk.text + d->chunk.len)
+            for (const char *p = d->chunk.text; p < body.text; p++)
+                if (*p == '\n') d->matter_lines++;
         d->is_markdown = e->ident_is_md && i < e->identity_count && e->ident_is_md[i];
 
         /*
@@ -2476,6 +2494,50 @@ void mdy_engine_set_context_json(mdy_engine *e, const char *name, const char *js
 void mdy_engine_set_context_bool(mdy_engine *e, const char *name, int value) {
     mdy_engine_set_context_json(e, name, value ? "true" : "false", 1);
 }
+
+void mdy_engine_set_split(mdy_engine *e, int split) { e->split = split ? 1 : 0; }
+void mdy_engine_set_sanitize(mdy_engine *e, int sanitize) { e->sanitize = sanitize ? 1 : 0; }
+void mdy_engine_set_tasks(mdy_engine *e, int tasks) { e->tasks = tasks ? 1 : 0; }
+
+int mdy_engine_set_scope_json(mdy_engine *e, const char *name, const char *json) {
+    /* an identifier, and not one the toolkit or the wrapper already binds */
+    if (!name || !*name) return -1;
+    for (const char *p = name; *p; p++) {
+        int ok = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || *p == '_' || *p == '$' ||
+                 (p > name && *p >= '0' && *p <= '9');
+        if (!ok) return -1;
+    }
+    static const char *const taken[] = { "transform", "visit", "h", "toText", "slug", "req", "res", "$", "$$", NULL };
+    for (int i = 0; taken[i]; i++) if (strcmp(name, taken[i]) == 0) return -1;
+    char **names = realloc(e->scope_names, (e->scope_count + 1) * sizeof *names);
+    if (names) e->scope_names = names;
+    char **texts = realloc(e->scope_json, (e->scope_count + 1) * sizeof *texts);
+    if (texts) e->scope_json = texts;
+    if (!names || !texts) return -1;
+    /* the same name again replaces the value */
+    for (size_t i = 0; i < e->scope_count; i++) {
+        if (strcmp(e->scope_names[i], name) == 0) {
+            free(e->scope_json[i]);
+            e->scope_json[i] = strdup(json);
+            return 0;
+        }
+    }
+    e->scope_names[e->scope_count] = strdup(name);
+    e->scope_json[e->scope_count] = strdup(json);
+    e->scope_count++;
+    return 0;
+}
+
+void mdy_engine_on_message(mdy_engine *e,
+                           void (*fn)(void *ud, size_t doc_index, uint32_t line, uint32_t column,
+                                      const char *rule, const char *reason),
+                           void *ud) {
+    e->on_message = fn;
+    e->on_message_ud = ud;
+}
+
+void mdy_engine_set_response(mdy_engine *e, int keep) { e->want_response = keep ? 1 : 0; }
+const char *mdy_engine_last_response(mdy_engine *e) { return e->last_response; }
 
 static JsValue context_value(mdy_engine *e, const char *json, int strict);
 
@@ -2686,6 +2748,7 @@ static bool data_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  * directions.
  */
 static mdy_doc *parse_lines(JsValue out, mdy_engine *e);
+static void note_references(mdy_engine *e, const mdy_doc *tree);
 
 static bool compose_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                            int argc, JsValue *result) {
@@ -2705,6 +2768,7 @@ static bool compose_native(JsContext *ctx, JsValue this_val, const JsValue *args
     /* Composed before the transforms see it: a transform works on the
      * document's FINISHED tree, renders and all. */
     splice_tree(e, tree, mdy_root(tree));
+    note_references(e, tree);
     /* The document owns the tree until the render finishes with it. */
     mdy_free(e->tree_owner);
     e->tree_owner = tree;
@@ -2904,9 +2968,60 @@ static void parse_options(mdy_engine *e, mdy_options *options) {
     mdy_options_default(options);
     options->frontmatter = 0;
     options->documents = 0;
-    options->sanitize = 0;
+    options->sanitize = e->sanitize;
+    options->tasks = e->tasks;
     options->highlight = engine_highlight;
     options->highlight_ud = e;
+}
+
+/*
+ * The document's references, onto its `res.data` — mdy-docs' `collectReferences`:
+ * `tags`, `users` and `links` are always there to be asked about, an array
+ * each unless the front matter made one something else, and a name goes in
+ * as it was written, once. Filled as the text is parsed, which is after the
+ * code has run and before the transforms do — so from `$.compose` for a
+ * document with a transform, and from the host's parse for one without.
+ */
+static void note_references(mdy_engine *e, const mdy_doc *tree) {
+    if (!js_is_object(e->render_res)) return;
+    JsValue data = js_object_get(e->vm, e->render_res, key(e->vm, "data"));
+    if (!js_is_object(data)) return;
+    static const char *const lists[] = { "tags", "users", "links" };
+    /* Every value made here is a GC root until it is stored: interning a key
+     * or growing an array can run the collector, and a fresh array or string
+     * nothing points at yet is exactly what it sweeps. */
+    js_gc_protect(e->vm, &data);
+    JsValue arrays[3];
+    for (int k = 0; k < 3; k++) {
+        JsValue have = js_object_get(e->vm, data, key(e->vm, lists[k]));
+        if (js_is_undefined(have)) {
+            have = js_array_new(e->ctx, 0);
+            js_gc_protect(e->vm, &have);
+            set_val(e, data, lists[k], have);
+            js_gc_unprotect(e->vm, &have);
+        }
+        arrays[k] = js_is_array(have) ? have : js_undefined();
+    }
+    size_t n = mdy_reference_count(tree);
+    for (size_t i = 0; i < n; i++) {
+        const mdy_reference *r = mdy_reference_at(tree, i);
+        int k = r->kind == MDY_REF_TAG ? 0 : r->kind == MDY_REF_MENTION ? 1 : 2;
+        if (js_is_undefined(arrays[k])) continue;
+        int seen = 0;
+        uint32_t len = js_array_length(arrays[k]);
+        for (uint32_t j = 0; j < len && !seen; j++) {
+            char *s = js_string_utf8(js_array_get(arrays[k], j));
+            seen = s && strlen(s) == r->name_len && memcmp(s, r->name, r->name_len) == 0;
+            free(s);
+        }
+        if (!seen) {
+            JsValue name = str(e->vm, r->name, r->name_len);
+            js_gc_protect(e->vm, &name);
+            js_array_push(e->vm, arrays[k], name);
+            js_gc_unprotect(e->vm, &name);
+        }
+    }
+    js_gc_unprotect(e->vm, &data);
 }
 
 /* MDY text as a tree, with any tokens in it spliced — `$.parse` is handed to
@@ -3945,6 +4060,7 @@ static void register_natives(mdy_engine *e) {
 
 mdy_engine *mdy_engine_new(void) {
     mdy_engine *e = calloc(1, sizeof *e);
+    if (e) e->split = 1;            /* a bare `---` starts a document, as the site engine reads it */
     if (!e) return NULL;
     JsVmConfig cfg = {0};
     /*
@@ -4075,6 +4191,10 @@ static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
 void mdy_engine_free(mdy_engine *e) {
     if (!e) return;
     if (e->highlight_state == 1) js_gc_unprotect(e->vm, &e->highlight_fn);
+    for (size_t i = 0; i < e->scope_count; i++) { free(e->scope_names[i]); free(e->scope_json[i]); }
+    free(e->scope_names);
+    free(e->scope_json);
+    free(e->last_response);
 
     /*
      * The graph is freed by whoever owns the cache — every package in it,
@@ -4134,7 +4254,7 @@ void mdy_engine_free(mdy_engine *e) {
  * every render of the document — which is the whole reason the script layer
  * produces statements that never mention the request.
  */
-static char *wrap(const char *statements) {
+static char *wrap(mdy_engine *e, const char *statements) {
     /*
      * Every `$` native. There is no longer a refusing stand-in behind any of
      * them: the last one, `$.resize`, was the only native that needed a codec
@@ -4182,7 +4302,22 @@ static char *wrap(const char *statements) {
      * shapes are told apart by which key the result carries.
      */
     static const char CLOSE[] =
-        "\nif (__transforms.length > 0) {\n"
+        /* What the document answered with, for a host that asked to keep it:
+         * `res` minus `doc`, which is the tree. */
+        "\nconst __answer = () => {\n"
+        "  if (!$$.__wantResponse) return;\n"
+        "  $$.__answered = true;\n"
+        "  const __r = {};\n"
+        "  for (const k of Object.keys(res)) if (k !== \"doc\") __r[k] = res[k];\n"
+        /* the record's own store id is the store's, not the document's */
+        "  if (__r.data && typeof __r.data === \"object\") { const d = {}; for (const k of Object.keys(__r.data)) if (k !== \"_id\") d[k] = __r.data[k]; __r.data = d; }\n"
+        "  $$.__response = JSON.stringify(__r);\n"
+        "};\n"
+        /* ...and for the host, which parses a transform-less document's lines
+         * itself and finds the references only then: called again once the
+         * tree is final, so the answer has them. */
+        "$$.__answer = __answer;\n"
+        "if (__transforms.length > 0) {\n"
         "  let __tree = $.compose(__out);\n"
         "  res.doc = __tree;\n"
         "  for (const fn of __transforms) {\n"
@@ -4195,12 +4330,23 @@ static char *wrap(const char *statements) {
         "    }\n"
         "    res.doc = __tree;\n"
         "  }\n"
+        "  __answer();\n"
         "  return { tree: __tree };\n"
         "}\n"
+        "__answer();\n"
         "return { out: __out };\n})";
-    size_t n = strlen(OPEN) + strlen(MDY_TOOLKIT) + strlen(statements) + strlen(CLOSE) + 1;
+    /* The host's values, each a `const` of its own name — after the
+     * toolkit, so the names are checked against it rather than shadowing
+     * it (mdy_engine_set_scope_json refuses the toolkit's). */
+    size_t scope_len = 0;
+    for (size_t i = 0; i < e->scope_count; i++) scope_len += 2 * strlen(e->scope_names[i]) + 32;
+    size_t n = strlen(OPEN) + strlen(MDY_TOOLKIT) + scope_len + strlen(statements) + strlen(CLOSE) + 1;
     char *out = malloc(n);
-    if (out) snprintf(out, n, "%s%s%s%s", OPEN, MDY_TOOLKIT, statements, CLOSE);
+    if (!out) return NULL;
+    size_t o = (size_t)snprintf(out, n, "%s%s", OPEN, MDY_TOOLKIT);
+    for (size_t i = 0; i < e->scope_count; i++)
+        o += (size_t)snprintf(out + o, n - o, "const %s = $$.__scope[\"%s\"];\n", e->scope_names[i], e->scope_names[i]);
+    snprintf(out + o, n - o, "%s%s", statements, CLOSE);
     return out;
 }
 
@@ -4230,7 +4376,9 @@ static char *flatten(JsValue out, size_t *out_len) {
             if (!grown) { free(piece); free(text); return NULL; }
             text = grown;
         }
-        if (len) text[len++] = '\n';
+        /* between EVERY pair, empty ones included — `lines.join('\n')` keeps
+         * a leading blank line, and a position counts it */
+        if (i) text[len++] = '\n';
         memcpy(text + len, piece, plen);
         len += plen;
         text[len] = '\0';
@@ -4243,7 +4391,6 @@ static char *flatten(JsValue out, size_t *out_len) {
 /* The lines a document produced, parsed — what `$.compose` returns and what a
  * document with no transform gets at the end. */
 static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
-    (void)e;
     size_t text_len = 0;
     char *text = flatten(out, &text_len);
     if (!text) return NULL;
@@ -4254,8 +4401,58 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
     mdy_options options;
     parse_options(e, &options);
 
+    /*
+     * Where each produced line came from, in the FILE: the pair's line is a
+     * 0-based line of the body, the body's lines were once lines of the
+     * chunk (a ```data fence taken out moved the ones under it), and the
+     * chunk's lines sit under its front matter. One pair can be several
+     * lines when what was interpolated had newlines in it; they all name the
+     * line of the code that wrote them, which is the only honest answer.
+     */
+    uint32_t *map = NULL;
+    size_t map_len = 0;
+    if (e->current < e->count) {
+        const Document *d = &e->docs[e->current];
+        size_t body_count = 0;
+        const uint32_t *body_lines = mdy_data_body_lines(d->fences, &body_count);
+        uint32_t n = js_array_length(out);
+        size_t cap = n + 16;
+        map = malloc(cap * sizeof *map);
+        for (uint32_t i = 0; map && i < n; i++) {
+            JsValue pair = js_array_get(out, i);
+            JsValue at = js_array_get(pair, 0);
+            size_t body_line = js_is_number(at) ? (size_t)js_get_number(at) : 0;
+            size_t chunk_line = body_lines && body_line < body_count ? body_lines[body_line] : body_line;
+            uint32_t file_line = (uint32_t)(d->matter_lines + chunk_line + 1);
+            char *piece = js_string_utf8(js_array_get(pair, 1));
+            size_t lines_in = 1;
+            for (const char *p = piece; p && *p; p++) if (*p == '\n') lines_in++;
+            free(piece);
+            if (map_len + lines_in > cap) {
+                while (map_len + lines_in > cap) cap *= 2;
+                uint32_t *grown = realloc(map, cap * sizeof *map);
+                if (!grown) { free(map); map = NULL; break; }
+                map = grown;
+            }
+            for (size_t k = 0; k < lines_in; k++) map[map_len++] = file_line;
+            if (getenv("MDY_LINEMAP_DEBUG"))
+                fprintf(stderr, "linemap doc %zu: pair %u body %zu chunk %zu file %u (matter %zu, body lines %zu)\n",
+                        e->current, i, body_line, chunk_line, file_line, d->matter_lines, body_count);
+        }
+        if (map) { options.line_map = map; options.line_map_len = map_len; }
+    }
+
     mdy_doc *tree = mdy_parse(text, text_len, &options);
     free(text);
+    free(map);
+
+    if (tree && e->on_message) {
+        size_t n = mdy_message_count(tree);
+        for (size_t i = 0; i < n; i++) {
+            const mdy_message *m = mdy_message_at(tree, i);
+            e->on_message(e->on_message_ud, e->current, m->line, m->column, m->rule, m->reason);
+        }
+    }
     return tree;
 }
 
@@ -4465,6 +4662,8 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     JsValue fn = js_undefined(), promise = js_undefined(), callable = js_undefined();
     JsValue req = js_undefined(), res = js_undefined(), dollar = js_undefined();
     JsValue result = js_undefined();
+    /* the enclosing render's `res`, put back at `done` whatever happened */
+    JsValue outer_res = e->render_res;
 
     /* A render inside a render inside a render is a cycle somebody wrote. */
     if (e->depth > 32) {
@@ -4529,7 +4728,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     if (!script) FAIL("the script layer could not compile this document");
 
     size_t src_len = 0;
-    char *wrapped = wrap(mdy_script_source(script, &src_len));
+    char *wrapped = wrap(e, mdy_script_source(script, &src_len));
     if (!wrapped) FAIL("out of memory");
 
     size_t ulen = 0;
@@ -4564,6 +4763,18 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     set_val(e, res, "data", document_record(e, index));
     dollar = js_object_new(e->ctx);
     js_gc_protect(e->vm, &dollar);
+    /* the host's scope values, for the `const`s the wrapper declared */
+    if (e->scope_count) {
+        JsValue scope = js_object_new(e->ctx);
+        set_val(e, dollar, "__scope", scope);
+        for (size_t i = 0; i < e->scope_count; i++) {
+            JsValue v = context_value(e, e->scope_json[i], 1);
+            set_val(e, scope, e->scope_names[i], js_is_undefined(v) ? js_null() : v);
+        }
+    }
+    if (e->want_response) set_val(e, dollar, "__wantResponse", js_bool(true));
+    /* This render's `res`, for the references its parse will find. */
+    e->render_res = res;
     JsValue args[3] = { req, res, dollar };
     if (!js_call(e->ctx, callable, js_undefined(), args, 3, &result)) {
         size_t mlen = 0;
@@ -4611,6 +4822,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     }
 
     if (!js_is_object(result)) FAIL("the document did not produce a result");
+
 
     /*
      * 3. the tree. A document with a transform already has one — it asked for
@@ -4661,12 +4873,23 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         if (!tree) FAIL("the produced lines did not parse");
         /* The held trees go back where their tokens are. */
         splice_tree(e, tree, mdy_root(tree));
+        note_references(e, tree);
         out = tree;
     }
 
     /* Last of all, on the finished tree: a contents list names every heading
      * the document ended up with, including ones written below it. */
     if (out) fill_toc(e, out);
+    /* What it answered with, now that the parse has added what the text
+     * refers to — the guest's own serialiser, called from here. */
+    if (out && e->want_response) {
+        JsValue answer = js_object_get(e->vm, dollar, key(e->vm, "__answer"));
+        JsValue ignored = js_undefined();
+        if (js_is_function(answer) && js_call(e->ctx, answer, js_undefined(), NULL, 0, &ignored)) {
+            char *text = js_string_utf8(js_object_get(e->vm, dollar, key(e->vm, "__response")));
+            if (text) { free(e->last_response); e->last_response = text; }
+        }
+    }
     if (out && !e->taint && mkey) {
         /* Its text as well as its tree, since a later hit may be asked for
          * either — `$.text` and the CLI's default output want the text. */
@@ -4683,6 +4906,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
 done:
 #undef FAIL
     e->taint = outer_taint;
+    e->render_res = outer_res;
     /* Recorded LAST, after any render inside this one recorded its own, so
      * what $.render holds its result under is this render's key. */
     key_base36(mkey, e->last_render_key);

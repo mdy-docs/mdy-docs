@@ -55,6 +55,13 @@ A render that fails exits non-zero with the error in `errors` and an empty
 `output`. [packages/mdy-live-preview-native](../../mdy-live-preview-native)
 is this call behind an editor.
 
+The rest of its options are mdy-docs/parse's knobs, one flag each in the
+command: `oneDocument`, `tasks`, `sanitize`, `scope` (an object whose keys
+become variables in the document's code) and `response`, which brings back
+what the document answered with as `data`. Parser warnings come back as
+`warnings`, each with its line in the source. The language tour at
+[packages/mdy-site](../../mdy-site) is `document()` with all of them on.
+
 Each call instantiates the module afresh. That is cheap next to a build, and
 it is the honest way to promise that two builds share nothing: the engine
 keeps a little static state that a process never had to reset.

@@ -7,37 +7,43 @@
  * makes such a link scroll the pane and leave a shareable URL behind.
  */
 
-import {h} from 'hastscript'
-import {visit} from 'unist-util-visit'
-
 /**
- * Make every heading a link to itself.
+ * Make every heading under `root` a link to itself.
  *
- * The whole heading is the target rather than a marker beside it, so the way to
- * a link worth sharing is to click the words already in front of you. A `§`
+ * The whole heading is the target rather than a marker beside it, so the way
+ * to a link worth sharing is to click the words already in front of you. A `§`
  * turns up alongside on hover to say the heading is clickable at all, and the
  * stylesheet is what makes the anchor fill the row.
  *
- * @returns {(tree: import('hast').Root) => void}
+ * On the DOM rather than on hast: the engine writes HTML now (it is C, and
+ * the tree never leaves it), so this runs over what the pane holds, once the
+ * pane holds it.
+ *
+ * @param {ParentNode} root
+ * @returns {void}
  */
-export function headingAnchors() {
-  return (tree) => {
-    visit(tree, 'element', (node) => {
-      if (!/^h[1-6]$/.test(node.tagName)) return
+export function headingAnchors(root) {
+  for (const node of root.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+    const id = node.getAttribute('id')
 
-      const id = node.properties?.id
+    // The footnotes heading names its section rather than marking a place
+    // anyone would link to, and it is only there for screen readers.
+    if (!id || id === 'footnote-label') continue
+    if (node.querySelector(':scope > a.heading-anchor')) continue
 
-      // The footnotes heading names its section rather than marking a place
-      // anyone would link to, and it is only there for screen readers.
-      if (!id || id === 'footnote-label') return
+    const anchor = node.ownerDocument.createElement('a')
 
-      node.children = [
-        h('a', {href: '#' + id, class: 'heading-anchor'}, [
-          ...node.children,
-          h('span', {class: 'heading-sign', ariaHidden: 'true'}, '§')
-        ])
-      ]
-    })
+    anchor.setAttribute('href', '#' + id)
+    anchor.setAttribute('class', 'heading-anchor')
+    anchor.append(...node.childNodes)
+
+    const sign = node.ownerDocument.createElement('span')
+
+    sign.setAttribute('class', 'heading-sign')
+    sign.setAttribute('aria-hidden', 'true')
+    sign.textContent = '§'
+    anchor.append(sign)
+    node.append(anchor)
   }
 }
 

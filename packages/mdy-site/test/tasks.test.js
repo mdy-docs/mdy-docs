@@ -1,18 +1,44 @@
 // @vitest-environment happy-dom
 import {beforeEach, describe, expect, test, vi} from 'vitest'
 import {enhanceTasks} from 'mdy-docs/tasks'
-import {mdyToHtml} from 'mdy-docs/parse'
+import {render as renderNative} from '../src/native.js'
 
 /**
- * Render a document into the page, the way a browser would meet it.
+ * Render a document into the page, the way a browser would meet it — through
+ * the engine (C, as WebAssembly), whose task forms are the parser's `tasks:
+ * true` shape. The two variants the enhancer also handles — a form with an
+ * `action`, and a checkbox for a control — are made from that form here,
+ * which is what a page that wanted either would do to it.
  *
  * @param {string} source
  * @param {object} [options]
  */
-function render(source, options = {tasks: true}) {
-  document.body.innerHTML = '<div id="root">' + mdyToHtml(source, options) + '</div>'
+async function render(source, options = {tasks: true}) {
+  const {html, error} = await renderNative(source)
 
-  return document.querySelector('#root')
+  if (error) throw new Error(error)
+
+  document.body.innerHTML = '<div id="root">' + html + '</div>'
+
+  const root = document.querySelector('#root')
+  const tasks = options.tasks === true ? {} : options.tasks
+
+  for (const form of root.querySelectorAll('form.task-list-item-form')) {
+    if (tasks.action !== undefined) form.setAttribute('action', tasks.action)
+    if (tasks.control === 'checkbox') {
+      const button = form.querySelector('button[name="next"]')
+      const box = document.createElement('input')
+
+      box.type = 'checkbox'
+      box.name = 'next'
+      box.value = 'x'
+      box.checked = button.getAttribute('aria-checked') === 'true'
+      if (button.hasAttribute('aria-label')) box.setAttribute('aria-label', button.getAttribute('aria-label'))
+      button.replaceWith(box)
+    }
+  }
+
+  return root
 }
 
 /** @param {Element} root */
@@ -36,7 +62,7 @@ beforeEach(() => {
 
 describe('enhanceTasks', () => {
   test('sends what the form was carrying', async () => {
-    const root = render('- [ ] feed the cat')
+    const root = await render('- [ ] feed the cat')
     const submit = vi.fn(async () => true)
 
     enhanceTasks(root, {submit})
@@ -54,7 +80,7 @@ describe('enhanceTasks', () => {
   })
 
   test('does not let the browser submit it', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     let defaultPrevented = false
 
     enhanceTasks(root, {submit: async () => true})
@@ -69,7 +95,7 @@ describe('enhanceTasks', () => {
   })
 
   test('moves the box once the change has landed', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
 
     enhanceTasks(root, {submit: async () => true})
 
@@ -85,7 +111,7 @@ describe('enhanceTasks', () => {
   })
 
   test('leaves the box alone when it fails', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
 
     enhanceTasks(root, {
       submit: async () => {
@@ -100,7 +126,7 @@ describe('enhanceTasks', () => {
   })
 
   test('reports success', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     const onResult = vi.fn()
 
     enhanceTasks(root, {submit: async () => true, onResult})
@@ -113,7 +139,7 @@ describe('enhanceTasks', () => {
   })
 
   test('reports failure, with the reason', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     const onResult = vi.fn()
 
     enhanceTasks(root, {
@@ -134,7 +160,7 @@ describe('enhanceTasks', () => {
   })
 
   test('treats a returned false as a refusal', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     const onResult = vi.fn()
 
     enhanceTasks(root, {submit: async () => false, onResult})
@@ -145,7 +171,7 @@ describe('enhanceTasks', () => {
   })
 
   test('says it is working while it works', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     let release
 
     enhanceTasks(root, {
@@ -165,7 +191,7 @@ describe('enhanceTasks', () => {
   })
 
   test('ignores a second click while the first is in the air', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     const submit = vi.fn(() => new Promise(() => {}))
 
     enhanceTasks(root, {submit})
@@ -178,7 +204,7 @@ describe('enhanceTasks', () => {
   })
 
   test('announces politely', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
 
     enhanceTasks(root, {submit: async () => true})
     toggle(root).click()
@@ -190,7 +216,7 @@ describe('enhanceTasks', () => {
   })
 
   test('fires an event anything can listen for', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     const seen = []
 
     root.addEventListener('mdy:task', (event) => seen.push(event.detail))
@@ -204,7 +230,7 @@ describe('enhanceTasks', () => {
   })
 
   test('takes the messages it says', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
 
     enhanceTasks(root, {
       submit: async () => true,
@@ -217,7 +243,7 @@ describe('enhanceTasks', () => {
   })
 
   test('posts to the form action by default', async () => {
-    const root = render('- [ ] a', {tasks: {action: '/toggle'}})
+    const root = await render('- [ ] a', {tasks: {action: '/toggle'}})
     const fetched = []
 
     globalThis.fetch = vi.fn(async (url, init) => {
@@ -233,7 +259,7 @@ describe('enhanceTasks', () => {
   })
 
   test('a failing response is a failure', async () => {
-    const root = render('- [ ] a', {tasks: {action: '/toggle'}})
+    const root = await render('- [ ] a', {tasks: {action: '/toggle'}})
     const onResult = vi.fn()
 
     globalThis.fetch = vi.fn(async () => ({
@@ -251,7 +277,7 @@ describe('enhanceTasks', () => {
   })
 
   test('submits a real checkbox when it changes', async () => {
-    const root = render('- [ ] a', {tasks: {control: 'checkbox'}})
+    const root = await render('- [ ] a', {tasks: {control: 'checkbox'}})
     const submit = vi.fn(async () => true)
 
     enhanceTasks(root, {submit})
@@ -267,7 +293,7 @@ describe('enhanceTasks', () => {
   })
 
   test('stops when told to', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     const submit = vi.fn(async () => true)
     const stop = enhanceTasks(root, {submit})
 
@@ -279,7 +305,7 @@ describe('enhanceTasks', () => {
   })
 
   test('leaves other forms alone', async () => {
-    const root = render('- [ ] a')
+    const root = await render('- [ ] a')
     const submit = vi.fn(async () => true)
 
     root.insertAdjacentHTML('beforeend', '<form id="other"></form>')
