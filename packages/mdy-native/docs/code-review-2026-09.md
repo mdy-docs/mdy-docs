@@ -36,10 +36,11 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13–B27 | Low | various | Rooting fragility, portability, leaks on error paths, truncation, UB casts |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
-| B29 | Medium | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
+| B29 | ~~Medium~~ **fixed** | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
 | B30 | Low | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
 | B31 | Low | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
+| B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -544,7 +545,7 @@ The original finding follows. Its line numbers are the file as it stood at
 $.render?)". `test/engine.c:1114` exercises exactly this path and cannot
 notice. Move the check above the state changes.
 
-#### B29 — `$.count` is missing from `$` (Medium)
+#### B29 — `$.count` is missing from `$` (Medium) — FIXED
 
 mdy-docs gives a document `$.count`, the number of documents in the set — it
 is written into the generated program beside `$.data` and the rest
@@ -561,6 +562,39 @@ node ../../bin/mdy.js c.mdy --html   # <h1 id="2">2</h1>
 Found while fixing B2; it has nothing to do with the walk. `$.find({}).length`
 is the workaround a site would have reached for, which is probably why no site
 in the tree has noticed.
+
+**Fixed, in three places rather than one.** `$` is built in the guest by
+`wrap()`, and `count` is the only member of it that is not a call
+([engine.c:2510](../src/engine.c#L2510)). mdy-docs can write the number in as a
+literal because it builds a program per document; this wrapper is compiled once
+and reused for every render of the document — that is what makes the request an
+argument — so the number arrives on `$$` beside `__scope` and `__wantResponse`
+([engine.c:3098](../src/engine.c#L3098)) and is read at object construction, so
+`$.count` is a plain number to the document either way.
+
+The third place is the memo, and it is the half that was not obvious. **The
+size of the set is not part of any document's text or its record**, so adding a
+file to a directory leaves every other document's fingerprint untouched. A
+second build in the same process — which is what `mdy dev` is — would then
+serve each of them the render made when the set was smaller, with `$.count`
+frozen at the old number in a page that is otherwise correct and reports
+nothing. So the size goes into the fingerprint beside the knobs
+([engine.c:2903](../src/engine.c#L2903)), which is the same argument that
+comment already makes for the element allowlist: what the ENGINE brings to a
+render belongs in the key.
+
+It costs no reuse. Two builds of `examples/blog` in one process: 48 memo hits
+and 60 misses with the set size in the key, and 48 and 60 without it — the
+count cannot differ between two builds of a set that did not change, which is
+exactly when the memo is being asked to help.
+
+`count_checks` in `test/engine.c` covers both halves, and each half was
+confirmed to fail with only the other applied: without the binding, `= {{
+$.count }}` renders `= undefined`; without the size in the key, the second
+build of a three-document set renders `<h1 id="2">2</h1>`.
+
+**mdy-docs has the second half of this bug** — see B33, which is this
+measurement pointed the other way.
 
 #### B30 — A CRLF source: the splitter normalises, node does not (Low)
 
@@ -642,6 +676,55 @@ Found while fixing B8, and the same shape as it — a file name carried through
 a text encoding that cannot hold every file name — but a different component:
 this one is decided before identity is built, so escaping identity does not
 reach it.
+
+#### B33 — mdy-docs: the render memo serves a stale `$.count` (Medium)
+
+This one is node's, not this engine's. It was found by asking what B29's fix
+had to do about the memo, and then checking what mdy-docs does about it.
+
+`buildProgram` embeds the count in the program text as a literal
+(`src/mdy.js`, `count: ${count}` from `documents.length`). The render memo is
+keyed on `doc.fingerprint`, which is
+
+```js
+`${setSignature}\u0000${doc.data?.path ?? doc.index}\u0000${doc.body ?? ''}\u0000${JSON.stringify(doc.data ?? null)}`
+```
+
+— the native names, the path, the body and the record. **Not the size of the
+set.** So a document that reads `$.count` has a fingerprint that does not
+change when the count does, and `renderMemoPrev` hands the previous build's
+render back.
+
+Two builds in one process, a file added between them:
+
+```js
+import { renderSite } from 'mdy-docs/src/build.js';
+await build('two documents:');            // main.mdy emits $.html($.render({ path: "card.mdy" }))
+fs.writeFileSync(dir + '/c.mdy', '= c\n'); // card.mdy is `= count is {{ $.count }}`
+await build('after adding a third:');
+```
+
+```
+two documents:           <h1 id="count-is-2">count is 2</h1>   (files on disk: 2)
+after adding a third:    <h1 id="count-is-2">count is 2</h1>   (files on disk: 3)
+```
+
+The page is otherwise correct and nothing is reported. It needs all three of:
+a long-lived process (`mdy dev`, `--watch`, or an embedder calling
+`renderSite` twice), a document whose render is memoised at all — one that
+emits or otherwise taints re-runs every build and so hides this — and a
+document that reads `$.count`. The last is rare, which is the same reason
+B29 went unnoticed here.
+
+**This engine deliberately does not reproduce it** (B29): `e->count` is in the
+fingerprint. That makes `mdy dev` a place where the two engines disagree, and
+it is the one divergence in this document where the C answer is the right one
+by construction rather than by accident. `check-sites` does not see it: it
+builds each site once per process, where the two agree.
+
+The fix in node is one term in one template string — the fingerprint wants
+`documents.length` in it, next to `setSignature`, for the reason the comment
+above `setSignature` already gives about two sets meeting in one process.
 
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
@@ -1052,8 +1135,10 @@ accumulating.
 4. ~~B5~~: call `nis_close` from `close_set` and finish `nis_close`
    (`bpt_free`). Done.
 5. ~~B11~~, ~~B7~~ (a depth cap — in what BUILDS the trees, not in the
-   thirteen things that walk them), ~~B9~~, ~~B10~~, B13 — each a few lines.
-   B13 is what is left.
+   thirteen things that walk them), ~~B9~~, ~~B10~~, ~~B29~~, B13 — each a few
+   lines, except B29, which was three: the binding, the value, and the memo
+   key that has to know the set's size now that a document can read it. B13 is
+   what is left.
 6. Delete §2's dead code; add the `check-sites` fixture and a
    `check-generated` target; make the default build warning-free.
 7. ~~Then the structural work in §3, starting with splitting engine.c along its

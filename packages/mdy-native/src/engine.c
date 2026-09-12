@@ -2501,6 +2501,13 @@ static char *wrap(mdy_engine *e, const char *statements) {
     static const char OPEN[] =
         "(async (req, res, $$) => {\n"
         "const $ = {\n"
+        /* The one `$` member that is not a call. mdy-docs embeds it in the
+         * program text because it builds a program per document; this wrapper
+         * is compiled once and reused for every render of the document, so the
+         * number arrives beside `req` instead, on `$$`. Read here, at object
+         * construction, so `$.count` is a plain number to the document either
+         * way — and so a document cannot reach the host through it. */
+        "  count: $$.__count,\n"
         "  find: (q) => __find(q === undefined ? {} : q),\n"
         "  findOne: (q) => __findOne(q === undefined ? {} : q),\n"
         "  withTag: (t) => __find({ tags: String(t).toLowerCase() }),\n"
@@ -2882,8 +2889,18 @@ static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
     Document *d = &e->docs[index];
     if (d->fingerprint) return d->fingerprint;
     uint64_t h = 1469598103934665603u;
-    char knobs[8];
-    int klen = snprintf(knobs, sizeof knobs, "s%dt%d", e->sanitize ? 1 : 0, e->tasks ? 1 : 0);
+    /*
+     * `n` is the size of the set, and it is here because `$.count` reads it.
+     * Without it the memo answers a question it did not key on: add a file to
+     * a directory and every OTHER document keeps its fingerprint, so a second
+     * build in the same process serves each of them the render made when the
+     * set was one document smaller — `$.count` frozen at the old number, in a
+     * page that is otherwise correct. mdy-docs has this bug (B33); it embeds
+     * the count in the program text and then keys the memo on the text it had
+     * before the count was substituted in.
+     */
+    char knobs[32];
+    int klen = snprintf(knobs, sizeof knobs, "s%dt%dn%zu", e->sanitize ? 1 : 0, e->tasks ? 1 : 0, e->count);
     h = fnv64(h, knobs, klen > 0 ? (size_t)klen : 0);
     for (size_t i = 0; i < e->scope_count; i++) {
         h = fnv64(h, e->scope_names[i], strlen(e->scope_names[i]));
@@ -3075,6 +3092,10 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         }
     }
     if (e->want_response) set_val(e, dollar, "__wantResponse", js_bool(true));
+    /* `$.count`: the documents in THIS set. A render into an imported package
+     * runs on that package's engine, so it counts the package's, which is
+     * what mdy-docs does by giving each set its own program. */
+    set_val(e, dollar, "__count", js_number((double)e->count));
     /* This render's `res`, for the references its parse will find. */
     e->render_res = res;
     JsValue args[3] = { req, res, dollar };

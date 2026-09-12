@@ -705,6 +705,98 @@ static void memo_key_checks(void) {
 }
 
 
+/* ---- $.count ----------------------------------------------------------------
+ *
+ * mdy-docs writes `$.count` into every document's program as a literal, beside
+ * `$.data` and the rest. This engine never set it, so `{{ $.count }}` was
+ * `undefined` where node said `2` — a missing property, which reports nothing
+ * and renders the word into the page. That was B29.
+ *
+ * The second half is the memo, and it is why this is not a one-line fix. The
+ * size of the set is not part of any document's text or record, so adding a
+ * file leaves every other document's fingerprint alone; a second build in the
+ * same process would then serve each of them the render made when the set was
+ * smaller, with `$.count` frozen at the old number. mdy-docs does exactly that
+ * (B33). Here the size is in the fingerprint, so the two builds below disagree
+ * on purpose.
+ */
+static char *count_of(const char *source, int *docs) {
+    mdy_engine *e = mdy_engine_new();
+    char err[256];
+    char *text = NULL;
+    if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0) {
+        if (docs) *docs = (int)mdy_engine_count(e);
+        text = mdy_engine_render_text(e, 0, err, sizeof err);
+    }
+    mdy_engine_free(e);
+    return text;
+}
+
+static void count_checks(void) {
+    printf("\n--- engine: $.count ---\n");
+
+    int n = 0;
+    char *two = count_of("= {{ $.count }}\n---\n+++\na: 1\n+++\n", &n);
+    ok_("$.count is the size of the set, not undefined",
+        two && strstr(two, "2") != NULL && strstr(two, "undefined") == NULL, two);
+    ok_("...and it is the number the engine itself reports", n == 2, two);
+    free(two);
+
+    char *one = count_of("= {{ $.count }}\n", NULL);
+    ok_("a set of one counts one", one && strstr(one, "1") != NULL, one);
+    free(one);
+
+    /*
+     * The control first: the memo must still HIT for a set that did not
+     * change, or everything below would pass for an engine that had merely
+     * stopped reusing renders. The token a composed document hands back is the
+     * key of the render it stands for, base 36, so equal tokens are one key.
+     */
+    const char *nested = "{{ $.render(1) }}\n---\n= {{ $.count }}\n";
+    mdy_engine_rotate_memo();
+    char *before = count_of(nested, NULL);
+    mdy_engine_rotate_memo();
+    char *unchanged = count_of(nested, NULL);
+    ok_("a nested render's token is the key of the render it stands for",
+        before && before[0] && strstr(before, "undefined") == NULL, before);
+    ok_("...and the same set built again names the same render",
+        before && unchanged && strcmp(before, unchanged) == 0, unchanged);
+    free(before);
+    free(unchanged);
+
+    /*
+     * And the bug itself. Document 0 is byte-identical in both sets and sits
+     * at the same index; only the SET is bigger. Without the size in the
+     * fingerprint the second build hits the first build's entry and answers 2
+     * — which is what mdy-docs does (B33), measured, not inferred.
+     */
+    char *html_small = NULL, *html_big = NULL;
+    const char *set2 = "= {{ $.count }}\n---\n= b\n";
+    const char *set3 = "= {{ $.count }}\n---\n= b\n---\n= c\n";
+    mdy_engine_rotate_memo();
+    {
+        mdy_engine *e = mdy_engine_new();
+        char err[256];
+        if (mdy_engine_open(e, set2, strlen(set2), err, sizeof err) == 0)
+            html_small = mdy_engine_render(e, 0, err, sizeof err);
+        mdy_engine_free(e);
+    }
+    mdy_engine_rotate_memo();
+    {
+        mdy_engine *e = mdy_engine_new();
+        char err[256];
+        if (mdy_engine_open(e, set3, strlen(set3), err, sizeof err) == 0)
+            html_big = mdy_engine_render(e, 0, err, sizeof err);
+        mdy_engine_free(e);
+    }
+    ok_("the same document in a two-document set says 2",
+        html_small && strstr(html_small, ">2<") != NULL, html_small);
+    ok_("...and in a three-document set says 3, not the 2 it said last build",
+        html_big && strstr(html_big, ">3<") != NULL, html_big);
+    free(html_small);
+    free(html_big);
+}
+
 /* ---- values a document can make deeper than the walk ------------------------
  *
  * Everything that carries a tree or a value recurses per level, and a document
@@ -1893,6 +1985,7 @@ int main(void) {
     query_order_checks();
     reopen_checks();
     memo_key_checks();
+    count_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();
