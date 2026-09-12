@@ -233,6 +233,96 @@ static void site_checks(void) {
 }
 
 
+/* ---- a data file's own YAML -------------------------------------------------
+ *
+ * A .yaml file is a record, and its bytes are read as YAML and nothing else.
+ * They used to be written into the one source the walk builds, as the
+ * document's front matter — and that source is split on `---` lines, so a data
+ * file opening with the document marker YAML itself allows became TWO
+ * documents where the walk had counted one. Every identity after it then
+ * belonged to the wrong document: the roll call below came back shifted, and
+ * `$.render({ path: … })` answered with a neighbour.
+ *
+ * The roll call is the check. Each line is one document's own path beside the
+ * field only that file declared, so a document wearing another's identity
+ * cannot produce it. Every expected line here is what `node bin/mdy.js` writes
+ * for the same directory.
+ */
+static void data_file_checks(void) {
+    printf("\n--- engine: a data file's own YAML ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-data", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "main.mdy",
+        "% const roll = $.find({}).map((d) => [d.path, d.title ?? '-',\n"
+        "%   (d.tags ?? []).join('/') || '-'].join('|')).join('\\n')\n"
+        "% $.emit('roll.txt', roll)\n"
+        "% $.emit('by-query.txt', $.findOne({ path: 'zed.yaml' }).title)\n");
+    /* The bug, exactly: a document marker opening a data file. */
+    write_file(root, "data.yaml", "---\ntitle: Data file\n");
+    write_file(root, "zed.yaml", "title: Bee\n");
+    /* A data record's `tags` are ITS value — not the lowercased, deduplicated
+     * hashtag list a document body earns. mdy-docs merges a source's `meta`
+     * after that list is computed, so the file's own array comes through. */
+    write_file(root, "tagged.yaml", "tags:\n  - Alpha\n  - alpha\n");
+    /* Two the walk cannot read. Both warn and keep their raw identity rather
+     * than failing the build — a directory walk cannot assume every stray
+     * .yaml under the root was meant to be a record. */
+    write_file(root, "plus.yaml", "title: Before\n+++\nafter: yes\n");
+    write_file(root, "list.yaml", "- one\n- two\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    printf("  (two `keeps its raw identity` warnings below are the point)\n");
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of data files\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    ok_("a data file opening with `---` is ONE document", mdy_engine_count(e) == 6, NULL);
+
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    /* Walk order is sorted (fsx_list's contract), so this is the whole set. */
+    const char *roll = emitted("roll.txt");
+    ok_("...and every identity after it still belongs to its own document",
+        roll && strcmp(roll,
+            "data.yaml|Data file|-\n"
+            "list.yaml|-|-\n"
+            "main.mdy|-|-\n"
+            "plus.yaml|-|-\n"
+            "tagged.yaml|-|Alpha/alpha\n"
+            "zed.yaml|Bee|-") == 0,
+        roll);
+    ok_("...so a query by path answers with that file's record",
+        emitted("by-query.txt") && strcmp(emitted("by-query.txt"), "Bee") == 0,
+        emitted("by-query.txt"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1119,6 +1209,7 @@ int main(void) {
     }
 
     site_checks();
+    data_file_checks();
     natives_checks();
     resize_checks();
     gc_checks();

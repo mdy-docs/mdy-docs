@@ -188,8 +188,20 @@ struct mdy_engine {
      *
      * So `ident_pre` goes in before the document's own fields and `ident_post`
      * after: one is set for a data file, the other for everything else.
+     *
+     * `ident_data` is a data file's OWN mapping, parsed from the file's bytes
+     * and carried here rather than written into the concatenated source as
+     * front matter. That source is split on `---` lines, so a `.yaml` file
+     * opening with the document marker YAML itself allows was read as a
+     * document SEPARATOR: the file became two documents where the walk had
+     * counted one, and every identity after it belonged to the wrong
+     * document. The bytes never become document structure now — a `---` or a
+     * `+++` among them is just YAML. It merges after the document's own
+     * fields and before `ident_post`, which is where mdy-docs puts a source's
+     * `meta` (parseDocuments, src/mdy.js).
      */
     char **ident_pre;
+    mdy_yaml **ident_data;
     char **ident_post;
     char *ident_is_md;
     size_t identity_count;
@@ -1621,32 +1633,24 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         len += (size_t)head_len;
 
         /*
-         * A front-matter block only for the kinds that HAVE no front matter of
-         * their own and need one built. A .mdy file's text goes in untouched:
-         * its own `+++` block must be the first thing the splitter sees, or it
-         * is read as body text.
+         * A built front-matter block, for the one kind that has no front
+         * matter of its own and needs one: .md. A .mdy file's text goes in
+         * untouched — its own `+++` block must be the first thing the splitter
+         * sees, or it is read as body text — and a .yaml file's text does not
+         * go in AT ALL: its fields are parsed below, out of the source, where
+         * a `---` or a `+++` line among them cannot be read as structure.
+         * Everything else is the placeholder body.
          */
-        if (is_md || is_yaml) {
+        if (is_md) {
+            /* Never compiled — a bare `---` or a literal `{{ }}` in prose
+             * must not be misread — so the text is DATA: findable in `body`,
+             * with the document itself a placeholder. Indented into a block
+             * scalar, which is also what keeps a `---` in the prose out of
+             * the splitter's way. */
             len += (size_t)snprintf(source + len, cap - len, "+++\n");
-            if (is_md && bytes) {
-                /* Never compiled — a bare `---` or a literal `{{ }}` in prose
-                 * must not be misread — so the text is DATA: findable in
-                 * `body`, with the document itself a placeholder. */
+            if (bytes) {
                 put_block_scalar(&source, &len, &cap, "body", (const char *)bytes, body_len);
                 put_tags_from_text(&source, &len, &cap, (const char *)bytes, body_len);
-            }
-            if (is_yaml && bytes) {
-                /* A data file's own fields — it IS the front matter. */
-                size_t need2 = len + body_len + 64;
-                if (need2 > cap) {
-                    while (need2 > cap) cap *= 2;
-                    char *grown = realloc(source, cap);
-                    if (!grown) { free(bytes); free(source); free(listing); return -1; }
-                    source = grown;
-                }
-                memcpy(source + len, bytes, body_len);
-                len += body_len;
-                if (body_len && source[len - 1] != '\n') source[len++] = '\n';
             }
             len += (size_t)snprintf(source + len, cap - len, "+++\n");
         }
@@ -1697,16 +1701,49 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
          */
         source[len] = '\0';
 
+        /*
+         * A data file IS its record, so its bytes are read here — once, as
+         * YAML, never as document text. Unreadable, or not a mapping at all,
+         * is not a build failure: a whole-directory walk cannot assume every
+         * stray .yaml under the root (a CI config, anything) is meant to be a
+         * record, so the file keeps its raw identity and says so, which is
+         * what mdy-docs' walkRawSources does.
+         */
+        mdy_yaml *own = NULL;
+        if (is_yaml && bytes && body_len) {
+            char yerr[256];
+            yerr[0] = '\0';
+            own = mdy_yaml_parse((const char *)bytes, body_len, yerr, sizeof yerr);
+            mdy_yaml_type kind = own ? mdy_yaml_type_of(mdy_yaml_root(own)) : MDY_YAML_NULL;
+            if (!own)
+                fprintf(stderr, "mdy: %s — %s keeps its raw identity, no parsed fields\n",
+                        yerr[0] ? yerr : "unreadable YAML", rel);
+            else if (kind == MDY_YAML_NULL)
+                { mdy_yaml_free(own); own = NULL; }      /* nothing in it, nothing to say */
+            else if (kind != MDY_YAML_MAPPING) {
+                fprintf(stderr, "mdy: %s must be a YAML mapping — %s keeps its raw identity,"
+                                " no parsed fields\n", rel, rel);
+                mdy_yaml_free(own);
+                own = NULL;
+            }
+        }
+
         /* One identity per document this file became. */
         for (size_t k = 0; k < doc_count; k++) {
             char **pre = realloc(e->ident_pre, (e->identity_count + 1) * sizeof *pre);
+            mdy_yaml **data = realloc(e->ident_data, (e->identity_count + 1) * sizeof *data);
             char **post = realloc(e->ident_post, (e->identity_count + 1) * sizeof *post);
             char *md = realloc(e->ident_is_md, e->identity_count + 1);
             if (pre) e->ident_pre = pre;
+            if (data) e->ident_data = data;
             if (post) e->ident_post = post;
             if (md) e->ident_is_md = md;
-            if (!pre || !post || !md) break;
+            if (!pre || !data || !post || !md) break;
             e->ident_is_md[e->identity_count] = (char)(is_md ? 1 : 0);
+            /* The parsed mapping belongs to the FIRST document of the file —
+             * only a .mdy holds more than one, and a .mdy has no mapping. */
+            e->ident_data[e->identity_count] = own;
+            own = NULL;
             if (is_yaml) {
                 /* A default: the file's own fields win, except `path`. */
                 char only_path[2048];
@@ -1719,6 +1756,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             }
             e->identity_count++;
         }
+        mdy_yaml_free(own);        /* only if no identity took it */
         free(bytes);
     }
 
@@ -2367,8 +2405,8 @@ int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
         if (d->matter.len) matter = mdy_yaml_parse(d->matter.text, d->matter.len, err, sizeof err);
 
         size_t fence_count = d->fences ? mdy_data_count(d->fences) : 0;
-        /* identity-as-default + front matter + fences + tags + identity */
-        const mdy_yaml_node **maps = calloc(fence_count + 4, sizeof *maps);
+        /* identity-as-default + front matter + fences + tags + data + identity */
+        const mdy_yaml_node **maps = calloc(fence_count + 5, sizeof *maps);
         mdy_yaml **parsed = calloc(fence_count + 1, sizeof *parsed);
         if (!maps || !parsed) { free(maps); free(parsed); mdy_yaml_free(matter); close_set(e); return -1; }
 
@@ -2412,6 +2450,15 @@ int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
                 free(text);
             }
         }
+
+        /* A data file's own mapping, after everything the document itself
+         * said and before the one field identity still wins. It is merged
+         * HERE, not as front matter, so `tags` above never saw it: a data
+         * record's `tags` are its own value, not the normalized hashtag list
+         * a document body earns — which is where mdy-docs' `meta` leaves
+         * them too. */
+        if (e->ident_data && i < e->identity_count && e->ident_data[i])
+            maps[used++] = mdy_yaml_root(e->ident_data[i]);
 
         /* After them, where identity WINS — and, for a data file, the one
          * field that must be real whatever it declared. */
@@ -4226,9 +4273,11 @@ void mdy_engine_free(mdy_engine *e) {
     free(e->imports);
     for (size_t i = 0; i < e->identity_count; i++) {
         if (e->ident_pre) free(e->ident_pre[i]);
+        if (e->ident_data) mdy_yaml_free(e->ident_data[i]);
         if (e->ident_post) free(e->ident_post[i]);
     }
     free(e->ident_pre);
+    free(e->ident_data);
     free(e->ident_post);
     free(e->ident_is_md);
     free(e->module_spec);
