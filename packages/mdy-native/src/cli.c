@@ -1094,12 +1094,30 @@ static char *emit_output(const DocOptions *o, const char *output) {
  * directory, as bin/mdy.js watches it, and this watcher's snapshot of a
  * single name behaves the same way.
  */
+/*
+ * "9:05:07 PM", as the JavaScript's toLocaleTimeString.
+ *
+ * %I and not %l. %l is a GNU extension — space-padded rather than zero-padded
+ * — and emscripten's strftime does not have it: asked for "%l:%M:%S %p" it
+ * returns 0 and writes nothing, so the whole stamp disappears rather than
+ * losing a space. A `strftime` that returns 0 also leaves the buffer
+ * UNSPECIFIED, which is why `out` is terminated here before anything reads
+ * it: report() used to walk it looking for spaces to skip.
+ *
+ * The zero %I pads with is dropped, which is what %l was reached for.
+ */
+static void stamp_now(char *out, size_t cap) {
+    if (!cap) return;
+    time_t t = time(NULL);
+    if (strftime(out, cap, "%I:%M:%S %p", localtime(&t)) == 0) { out[0] = '\0'; return; }
+    if (out[0] == '0') memmove(out, out + 1, strlen(out));
+}
+#define TS(buf) (stamp_now(buf, sizeof buf), buf)
+
 static void report(const char *msg, int error) {
     char stamp[32];
-    time_t t = time(NULL);
-    strftime(stamp, sizeof stamp, "%l:%M:%S %p", localtime(&t));
-    const char *s = stamp; while (*s == ' ') s++;
-    fprintf(stderr, "%s%s%s%s %s[mdy]%s %s%s\n", error ? RED_OPEN() : "", DIM_OPEN(), s, DIM_CLOSE(),
+    stamp_now(stamp, sizeof stamp);
+    fprintf(stderr, "%s%s%s%s %s[mdy]%s %s%s\n", error ? RED_OPEN() : "", DIM_OPEN(), stamp, DIM_CLOSE(),
             CYAN_OPEN(), CYAN_CLOSE(), msg, error ? RED_CLOSE() : "");
 }
 
@@ -1358,16 +1376,6 @@ typedef struct {
     char **sent; size_t sent_count;             /* name\0data fingerprints already sent */
     double last_heartbeat;
 } Dev;
-
-/* "9:05:07 PM", as the JavaScript's toLocaleTimeString. %I rather than %l:
- * every libc has it (emscripten's has no %l), and the zero it pads with is
- * dropped here. */
-static void stamp_now(char *out, size_t cap) {
-    time_t t = time(NULL);
-    strftime(out, cap, "%I:%M:%S %p", localtime(&t));
-    if (out[0] == '0') memmove(out, out + 1, strlen(out));
-}
-#define TS(buf) (stamp_now(buf, sizeof buf), buf)
 
 static int seen_before(char ***list, size_t *count, size_t *cap, const char *s) {
     for (size_t i = 0; i < *count; i++) if (strcmp((*list)[i], s) == 0) return 1;

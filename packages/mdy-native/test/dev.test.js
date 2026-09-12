@@ -102,6 +102,29 @@ test('a delivery arriving before the first good build is held, not fatal', async
     assert.equal(await deliver(port), 200);
     await dev.until(/\[deliver\][^\n]*a\.b/);
     assert.equal(dev.child.exitCode, null);
+
+    /*
+     * The timestamp on every one of those lines — the one thing in this binary
+     * that used to be formatted two ways. `report()` asked for %l, a GNU
+     * extension emscripten's strftime does not have: given "%l:%M:%S %p" it
+     * returns 0 and writes NOTHING, so the stamp vanished rather than losing a
+     * space (B14). Both callers go through stamp_now now.
+     *
+     * The two assertions are a pair and neither is redundant. The first
+     * catches an EMPTY stamp and a space-padded one; it tolerates an ANSI
+     * prefix, which also lets it match "09:..." by eating the 0, so the second
+     * is what catches zero-padding. Between them: empty, " 9:", "09:" and "9:"
+     * are told apart.
+     *
+     * Half of this is hour-dependent, honestly: %I and a stripped %I agree for
+     * hours 10, 11 and 12, so the padding assertion only bites between 1 and
+     * 9 o'clock. The emptiness one bites at any hour, and emptiness is the
+     * bug. All 24 hours were compared off-line, in the review.
+     */
+    assert.match(dev.log(), /(^|\n)\x1b?\[?[0-9;]*m?[1-9]\d?:[0-5]\d:[0-5]\d [AP]M /,
+                 'the log lines carry an unpadded 12-hour stamp');
+    assert.doesNotMatch(dev.log(), /(^|\n)[^\S\n]*0\d:\d\d:\d\d [AP]M /,
+                        'and never a zero-padded one');
   } finally {
     dev.child.kill();
   }

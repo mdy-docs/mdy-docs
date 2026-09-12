@@ -35,7 +35,8 @@ what those checks do not reach.
 | B11 | ~~Medium~~ **fixed** | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
-| B14, B18–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
+| B18–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B15 | Low | `cli.c` dev server | A refused publish's response is never freed |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
 | B17 | ~~Low~~ **fixed** | `cli.c` / `httpd.c` | Dev server bound every interface, with a clock-seeded token, no request cap and a blocking write |
@@ -843,10 +844,39 @@ end of the stream, and to stop the line walk there.
   the publish ambiguity check now asserts the paths the message names rather
   than just the words "is ambiguous", which is the read that was unrooted. With
   those, reverting any one of the four fails the suite.
-- **B14 — `report()` uses `strftime("%l")`** ([cli.c:1078](../src/cli.c#L1078))
-  while `stamp_now`, twenty lines later, avoids `%l` precisely because
-  emscripten and msvcrt lack it. The `--watch` status line is the one place it
-  still appears.
+- **~~B14 — `report()` uses `strftime("%l")`~~ FIXED, and it is worse than
+  "lacks it".** `%l` is a GNU extension — space-padded rather than zero-padded
+  — and `stamp_now` twenty lines away already used `%I` with a comment saying
+  why. Measured under emscripten rather than assumed:
+
+  ```
+  native (macOS libc)   %l -> " 9:05:07 PM" (n=11)     %I -> "09:05:07 PM" (n=11)
+  emscripten            %l -> ""            (n=0)      %I -> "09:05:07 PM" (n=11)
+  ```
+
+  It returns **0 and writes nothing**, so the `--watch` status line loses its
+  timestamp entirely rather than losing a space. And a `strftime` returning 0
+  leaves the buffer UNSPECIFIED — `report()` then ran
+  `while (*s == ' ') s++` over it, which on any libc that does not happen to
+  write a terminator is a walk through uninitialised stack.
+
+  Both callers are one function now
+  ([cli.c:1109](../src/cli.c#L1109)); the duplicate formatting is gone and
+  `stamp_now` terminates `out` itself when `strftime` writes nothing. Output is
+  unchanged where `%l` worked: the two spellings were compared for **all 24
+  hours** and are byte-identical, since `%l`-then-strip-spaces and
+  `%I`-then-strip-zero differ only in what they pad with.
+
+  `test/dev.test.js` pins the shape. Two assertions, and the pair matters: one
+  catches an empty stamp and a space-padded one, the other catches a
+  zero-padded one — between them `""`, `" 9:"`, `"09:"` and `"9:"` are told
+  apart. Half of it is hour-dependent and the test says so: `%I` and a
+  stripped `%I` agree for 10, 11 and 12 o'clock, so the padding assertion only
+  bites between 1 and 9. The emptiness assertion bites at any hour, and
+  emptiness is the bug — confirmed by making `stamp_now` write nothing and
+  watching the suite fail.
+
+  `strftime` now appears once in this codebase, with a format every libc has.
 - **B15 — Dev server leaks a refused publish's response**: the
   `r.status < 200 || r.status >= 300` branch never calls
   `http_response_free` ([cli.c:1431–1434](../src/cli.c#L1431-L1434)).
