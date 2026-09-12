@@ -28,22 +28,6 @@ wchar_t *win_widen(const char *utf8);
 /* UTF-16 -> UTF-8, allocated. Caller frees with free(). NULL on failure. */
 char *win_narrow(const wchar_t *w);
 
-/*
- * Positioned read/write. Windows has no pread/pwrite: the offset rides in an
- * OVERLAPPED, which is how you get the same "does not disturb the file
- * pointer" guarantee rather than a seek that another thread could interleave.
- */
-int64_t win_pread(void *handle, uint64_t off, uint8_t *buf, uint32_t len);
-int32_t win_pwrite(void *handle, uint64_t off, const uint8_t *buf, uint32_t len);
-uint64_t win_fsize(void *handle);
-int32_t win_ftruncate(void *handle, uint64_t len);
-
-/* A temp file that deletes itself when the last handle closes — the same
- * lifetime POSIX gets from mkstemp+unlink, spelled with
- * FILE_FLAG_DELETE_ON_CLOSE. NULL on failure. */
-void *win_temp_file(void);
-void win_close(void *handle);
-
 /* mkdir -p on a file's parent, taking a UTF-8 path. 0 on success. */
 int win_ensure_parent(const char *utf8_path);
 

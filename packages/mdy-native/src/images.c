@@ -13,6 +13,18 @@
 
 #include "images.h"
 
+/*
+ * Vendored, and it compiles a handful of helpers this build never reaches —
+ * `-Wall -Wextra` says so twice, and they were the only warnings left in a
+ * clean build. Silenced HERE rather than in the Makefile, so the exemption is
+ * as narrow as the file it is for, and rather than in stb_image.h, which is
+ * somebody else's to update.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_NO_STDIO
@@ -24,6 +36,10 @@
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize2.h"
+
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic pop
+#endif
 
 /* ---- dimensions, from the header ------------------------------------------- */
 

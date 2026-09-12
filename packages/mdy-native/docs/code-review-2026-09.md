@@ -254,7 +254,7 @@ and `$.render` by document, by query and by index.
 
 **Fixed.** `close_set` closes the collection and puts the handle back to -1
 ([engine.c:2488](../src/engine.c#L2488)), so a set's data dies with the set.
-`nis_close` was finished first ([nis.c:234](../src/nis.c#L234)): it freed the
+`nis_close` was finished first ([nis.c:232](../src/nis.c#L232)): it freed the
 stores but never the B+trees over them, which is a tree's buffers per index
 plus one for the primary store. The two open paths that could leak a tree on
 failure were closed with it.
@@ -333,7 +333,7 @@ the type as a property of it, the way md4c holds its own front end to 128.
 Four places enforce it, which is every way a value gets deep:
 
 - the `<div>` chain for an indented line
-  ([block.c:1329](../src/parse/block.c#L1329)) — the only construct that nests
+  ([block.c:1327](../src/parse/block.c#L1327)) — the only construct that nests
   without the source growing with it, so the only one that could reach two
   hundred thousand from one short line. Past the limit the line is read where
   it stands, with a `nesting-depth` warning through the channel the sanitizer
@@ -466,13 +466,13 @@ process is gone: `curl` reports `http 000`, the connection closed with no
 response.
 
 **Fixed.** `dev_deliver` holds when there is no build
-([cli.c:1705](../src/cli.c#L1705)): 500 returns the messages to the broker,
+([cli.c:1704](../src/cli.c#L1704)): 500 returns the messages to the broker,
 which brings them back after a backoff, by which time a save may have fixed
 the build. Routing them with no engine would have found no page of that name,
 which is a different thing and settles them away — so the guard has to come
 before the routing, not be folded into it. `dev_drain`, the in-process path,
 does not take messages it cannot render either
-([cli.c:1501](../src/cli.c#L1501)); they stay queued for the drain after the
+([cli.c:1500](../src/cli.c#L1500)); they stay queued for the drain after the
 next good build. And `mdy_engine_page_index` and `mdy_engine_document_path`
 tolerate a NULL engine ([engine.c:5338](../src/engine.c#L5338)), which is the
 convention `mdy_engine_count` already sets in that file.
@@ -498,7 +498,7 @@ address four gigabytes out, reached from `open_dir_inner`.
 
 **Fixed.** The offset is the file's to choose and nothing has checked it when
 the sum is taken, so every sum it takes part in is done in 64 bits
-([images.c:153](../src/images.c#L153)) — the bounds check and the per-entry
+([images.c:169](../src/images.c#L169)) — the bounds check and the per-entry
 offset both. `uint64_t` rather than the `size_t` the finding suggested:
 `size_t` is 32 bits under emscripten, and `make wasm` is a real target, so the
 promotion would wrap in exactly the same place there.
@@ -677,38 +677,38 @@ end of the stream, and to stop the line walk there.
   still appears.
 - **B15 — Dev server leaks a refused publish's response**: the
   `r.status < 200 || r.status >= 300` branch never calls
-  `http_response_free` ([cli.c:1432–1435](../src/cli.c#L1432-L1435)).
+  `http_response_free` ([cli.c:1431–1434](../src/cli.c#L1431-L1434)).
 - **B16 — No socket timeouts** in `http.c` (connect, and a `recv` loop that
   runs until the peer closes, [152–159](../src/http.c#L152-L159)). A broker
   that accepts and never answers hangs `mdy build --publish`, `mdy dead` and
   the dev server's registration forever. `parse_url` also cannot take an IPv6
   literal (`http://[::1]:8080` → host `[`).
 - **B17 — Dev server exposure**: it binds `0.0.0.0`
-  ([cli.c:1947](../src/cli.c#L1947)) and the delivery bearer token is four
-  `rand()` calls seeded from the clock ([1954](../src/cli.c#L1954),
-  [2033](../src/cli.c#L2033)). The request buffer has no size cap
-  ([httpd.c:278–283](../src/httpd.c#L278-L283)) and responses are written with
-  a blocking `send` ([188](../src/httpd.c#L188)), so one slow LAN client stalls
+  ([cli.c:1946](../src/cli.c#L1946)) and the delivery bearer token is four
+  `rand()` calls seeded from the clock ([1953](../src/cli.c#L1953),
+  [2032](../src/cli.c#L2032)). The request buffer has no size cap
+  ([httpd.c:255–260](../src/httpd.c#L255-L260)) and responses are written with
+  a blocking `send` ([171](../src/httpd.c#L171)), so one slow LAN client stalls
   rebuilds. Binding `127.0.0.1` by default removes most of this.
 - **B18 — Watcher scan is O(n²)**: `snapshot_changes` looks each file up with a
   linear `find` ([watch.c:63–91](../src/watch.c#L63-L91)) every 120 ms. Both
   snapshots come from `fsx_list`, which sorts, so a merge would be linear.
 - **B19 — `mdy build`/`dev`/`dead` accept anything as the positional**: an
   unknown flag or a flag with its value missing falls into `else root = a`
-  ([cli.c:668](../src/cli.c#L668), [1915](../src/cli.c#L1915),
+  ([cli.c:668](../src/cli.c#L668), [1914](../src/cli.c#L1914),
   [440](../src/cli.c#L440)). `mdy build --draft` builds a site called
   `--draft`; `mdy build site --out` builds `--out`. Document mode (and the
   JavaScript CLI) reject unknown options.
 - **B20 — Silent truncation into fixed buffers, all parity divergences with no
   warning**: heading ids over 255 bytes (`unique[256]`,
-  [block.c:330](../src/parse/block.c#L330)) and heading text over 1 KB
-  ([1409](../src/parse/block.c#L1409)); class names over 127 bytes
-  ([551](../src/parse/block.c#L551)); attribute names over 255 (`lowered`,
-  [499](../src/parse/block.c#L499), which then skips the lowercasing
+  [block.c:329](../src/parse/block.c#L329)) and heading text over 1 KB
+  ([1407](../src/parse/block.c#L1407)); class names over 127 bytes
+  ([549](../src/parse/block.c#L549)); attribute names over 255 (`lowered`,
+  [497](../src/parse/block.c#L497), which then skips the lowercasing
   entirely); page hrefs over 1 KB, which skip normalisation *and* the
-  reference collection ([532–539](../src/parse/block.c#L532-L539),
+  reference collection ([530–537](../src/parse/block.c#L530-L537),
   [inline.c:707–714](../src/parse/inline.c#L707-L714)); tables with more than
-  64 columns ([1087](../src/parse/block.c#L1087)); more than 512 URLs in one
+  64 columns ([1085](../src/parse/block.c#L1085)); more than 512 URLs in one
   paragraph ([inline.c:160](../src/parse/inline.c#L160)); tag hrefs
   ([inline.c:458](../src/parse/inline.c#L458)), footnote ids
   ([footnote.c:33](../src/parse/footnote.c#L33)), TOC hrefs
@@ -737,9 +737,9 @@ end of the stream, and to stop the line walk there.
   cli.c; `add`/`snapshot_changes` in watch.c; the `recv` buffer in http.c
   ([155](../src/http.c#L155)); `broker_request` ([broker.c:104](../src/broker.c#L104));
   `mdy_engine_encode_json` ([engine.c:2798](../src/engine.c#L2798)); the fence
-  body, list and paragraph joins in block.c ([1436](../src/parse/block.c#L1436),
-  [1636](../src/parse/block.c#L1636), [1723](../src/parse/block.c#L1723),
-  [1850](../src/parse/block.c#L1850)); `cache_put` frees the *new* array on a
+  body, list and paragraph joins in block.c ([1434](../src/parse/block.c#L1434),
+  [1634](../src/parse/block.c#L1634), [1721](../src/parse/block.c#L1721),
+  [1848](../src/parse/block.c#L1848)); `cache_put` frees the *new* array on a
   partial failure and leaves `c->dirs` dangling ([engine.c:1625](../src/engine.c#L1625)).
   The parser's stated rule is that `mdy_alloc` can fail; sixteen call sites in
   block.c never look.
@@ -749,8 +749,8 @@ end of the stream, and to stop the line walk there.
 - **B26 — Local-bus and remote-bus disagree on an undeliverable subject**:
   `dev_drain` passes `target < 0` for *any* subject with no page into the
   "dead-letter channel with no page" branch, which marks every message done
-  ([cli.c:1553–1564](../src/cli.c#L1553-L1564)); `dev_deliver` returns 500 so
-  the broker dead-letters them ([1720–1727](../src/cli.c#L1720-L1727)).
+  ([cli.c:1552–1563](../src/cli.c#L1552-L1563)); `dev_deliver` returns 500 so
+  the broker dead-letters them ([1719–1726](../src/cli.c#L1719-L1726)).
 - **B27 — `wrap()` assembles the document's source with `snprintf("%s…")`**
   ([engine.c:4661–4664](../src/engine.c#L4661-L4664)); on a 3.6 GB input
   AddressSanitizer reports `negative-size-param` from the `int` return value
@@ -760,19 +760,25 @@ end of the stream, and to stop the line walk there.
 
 ## 2. Unused code
 
+**Done**, except where a row says otherwise: 240 lines gone against 70 added,
+and the default build is warning-free. What was NOT deleted is the four `fsx`
+helpers `test/engine.c` actually calls — the row said they were for a suite
+that is gone, and they are, but they have a caller now and the comment above
+them was the thing to fix.
+
 | Where | What | Notes |
 | --- | --- | --- |
-| [fsx.c:399–592](../src/fsx.c#L399-L592), [fsx.h:60–86](../src/fsx.h#L60-L86) | "What the ported test suite needs": `fsx_readdir`, `fsx_mkdirp`, `fsx_rm_rf`, `fsx_mkdtemp`, `fsx_tmpdir`, plus `is_dir_path`/`remove_dir` | The suite it served is gone (README, "that binary is gone"). `fsx_readdir` and `fsx_remove` have no callers at all; the other four are used only by `test/engine.c`, which could use `mkdtemp` directly. ~200 lines including the Win32 halves. The header still cites `../shims/fs.js` and `../shims/node/`, which do not exist. |
-| [oswin.c:32–85](../src/oswin.c#L32-L85), `oswin.h` | `win_pread`, `win_pwrite`, `win_fsize`, `win_ftruncate`, `win_temp_file`, `win_close` | Left from when nisaba's store was a temp file. No callers. |
-| ~~[nis.c:234–251](../src/nis.c#L234-L251)~~ | `nis_close` | ~~No callers~~ — it has one now (B5), and it frees the B+trees it used to leave. Its neighbour comment ([nis.c:43–55](../src/nis.c#L43-L55)) still describes a `host.c` finalizer and per-collection temp files, neither of which exists, and `nis.h:16` still calls the store "a fresh temp file". |
-| [httpd.c](../src/httpd.c) | `httpd_query`, `httpd_kept_count`, `httpd_close` | No callers (the dev loop never exits). |
-| [Makefile:128–134](../Makefile#L128-L134) | `build/libnisaba.a` | Nothing links it; every engine binary recompiles all 20 nisaba sources from scratch instead. The stale `build/libnisaba.a`, `build/mdy-build`, `build/mdy-build-asan` in the build tree are its fossils. |
-| [Makefile:245–246](../Makefile#L245-L246) and [249–250](../Makefile#L249-L250), `test/doccat.c`, `test/datacat.c` | Two drivers with build rules that no check target or script invokes | `md4cprobe` is in the same state but is at least mentioned in `docs/parser.md` as a manual baseline tool. |
-| [cli.c:1179–1204](../src/cli.c#L1179-L1204) | `is_help` | Set, then `(void)is_help`. |
-| [engine.c:3472](../src/engine.c#L3472) | `column_align`'s `e` parameter | Compiler warning in every build. |
-| [block.c:333](../src/parse/block.c#L333) | `(void)id_len` in `set_heading_id` | The variable is only computed to be discarded. |
-| [block.c:1636](../src/parse/block.c#L1636) | `mdy_alloc(doc ? &doc->arena : NULL, …)` | `doc` cannot be NULL there and `mdy_alloc(NULL)` would crash. |
-| [engine.h:22–30](../src/engine.h#L22-L30) | "WHAT THIS DOES NOT DO YET" | All three items are done; the list now misleads. Same for [block.c:2005](../src/parse/block.c#L2005) (`shims/parse.js`) and [docs/cli-plan.md:116–125](cli-plan.md) (`scripts-compare-cli.mjs`, "N/40 cases" — neither exists; `check-cli` runs `cli.test.js` directly, 34 cases). |
+| `fsx.c`, `fsx.h` | "What the ported test suite needs": `fsx_readdir`, `fsx_mkdirp`, `fsx_rm_rf`, `fsx_mkdtemp`, `fsx_tmpdir`, plus `is_dir_path`/`remove_dir` | `fsx_remove` **deleted** — no caller anywhere. `fsx_readdir` is **static** now: its only caller is `fsx_rm_rf`, in the same file. The other four stay — `test/engine.c` calls all of them, and calling `mkdtemp` directly instead would not be portable to the Windows job. The header comment saying they back `../shims/node/` is **corrected**: that directory does not exist, and what they serve is the native tests. |
+| ~~`oswin.c`, `oswin.h`~~ | `win_pread`, `win_pwrite`, `win_fsize`, `win_ftruncate`, `win_temp_file`, `win_close` | ~~Left from when nisaba's store was a temp file. No callers.~~ **Deleted** — 71 lines. |
+| ~~`nis.c`~~ | `nis_close` | ~~No callers~~ — it has one now (B5), and it frees the B+trees it used to leave. Its neighbour comment and `nis.h`'s "a fresh temp file" are **corrected**: the store has been a buffer for longer than either of them said. |
+| ~~`httpd.c`~~ | `httpd_query`, `httpd_kept_count`, `httpd_close` | ~~No callers (the dev loop never exits).~~ **Deleted** — 33 lines, counting the emscripten stubs that shadowed each of them. |
+| ~~`Makefile`~~ | `build/libnisaba.a` | ~~Nothing links it; every engine binary recompiles all 20 nisaba sources from scratch instead.~~ **Deleted.** The recompiling is untouched and is §3's to fix; what is gone is a rule that pretended otherwise. A comment further down referred to it and now says the thing directly. |
+| ~~`Makefile`, `test/doccat.c`, `test/datacat.c`~~ | Two drivers with build rules that no check target or script invokes | **Deleted**, rules and sources. `md4cprobe` is in the same state but **kept**: `docs/parser.md` names it as a manual baseline tool, which is the difference between a tool and a leftover. |
+| ~~`cli.c`~~ | `is_help` | ~~Set, then `(void)is_help`.~~ **Deleted** — `canonical` already carries it. |
+| ~~`engine.c`~~ | `column_align`'s `e` parameter | ~~Compiler warning in every build.~~ **Deleted**, with the argument at its one call site. |
+| ~~`block.c`~~ | `(void)id_len` in `set_heading_id` | ~~The variable is only computed to be discarded.~~ **Deleted**, which took making `mdy_resolve_slug` accept a NULL `out_len` — it wrote through the pointer unconditionally, so there was no way to decline the answer. |
+| ~~`block.c`~~ | `mdy_alloc(doc ? &doc->arena : NULL, …)` | ~~`doc` cannot be NULL there and `mdy_alloc(NULL)` would crash.~~ **Deleted** — the same function dereferences `doc` unconditionally three lines up. |
+| ~~`engine.h`~~ | "WHAT THIS DOES NOT DO YET" | **Rewritten** to say what the engine does, since all three items were done. Same for `block.c`'s `shims/parse.js` (the script layer runs before the parser and hands it lines), `docs/cli-plan.md`'s `scripts-compare-cli.mjs` and "N/40 cases" (`check-cli` runs `cli.test.js` through `MDY_CLI`, 34 cases, and `check-dev` is beside it now), and `nis.c`/`nis.h`'s temp files and `host.c` finalizer, none of which exist — the store has been a buffer since before this review. |
 
 **Duplicated rather than unused**, and worth folding:
 
@@ -792,7 +798,7 @@ end of the stream, and to stop the line walk there.
   `bjval.c`) and ad hoc with `realloc` in engine.c (`fill_tokens`,
   `collect_text_into`, `put_block_scalar`, `rewrite_imports`, `flatten`,
   `open_dir_inner`) and `broker.c`.
-- `is_void_element` ([block.c:836](../src/parse/block.c#L836)) and `is_void`
+- `is_void_element` ([block.c:834](../src/parse/block.c#L834)) and `is_void`
   ([html.c:202](../src/parse/html.c#L202)): the same twenty names twice.
 - `in_ranges` in `unicode.c` and `linkify.c`; UTF-8 encoding in `markdown.c`,
   `yaml.c`, `unicode.c` and `engine.c`.
@@ -821,7 +827,7 @@ and a `FAIL` macro that jumps to `done:`. It had three early returns that
 enclosing render's `taint` — and it has one exit now. Length is what let three
 of them accumulate unnoticed, and the length is still there. `open_dir_inner`
 ([1676–1987](../src/engine.c#L1676-L1987)) builds the synthetic source that
-caused B1 and B2; what is left of it is B8. `mdy_parse_block` ([block.c:1280–1792](../src/parse/block.c#L1280-L1792),
+caused B1 and B2; what is left of it is B8. `mdy_parse_block` ([block.c:1278–1790](../src/parse/block.c#L1278-L1790),
 480 lines) inlines the entire list grammar. `resize_in` defines a
 `RESIZE_FAIL` macro and then uses it for two of its eight failures.
 
@@ -845,9 +851,9 @@ and then there would be nothing to escape.
 **The `Dev` struct and the bus code in cli.c** carry fixed-size scratch
 (`done_ix[64]`, `done_list[4096]`, `char cand[3][4200]`), fake growable
 arrays by passing a compound literal as the capacity
-([1473](../src/cli.c#L1473), [1884](../src/cli.c#L1884)), and reuse the drain
+([1472](../src/cli.c#L1472), [1883](../src/cli.c#L1883)), and reuse the drain
 loop for document mode by constructing a fake `Dev`
-([1647–1680](../src/cli.c#L1647-L1680)). Five functions return pointers to
+([1646–1679](../src/cli.c#L1646-L1679)). Five functions return pointers to
 `static char msg[4096]`.
 
 **The Makefile** repeats the twelve-file engine source list four times
@@ -890,6 +896,15 @@ with `ERR_INVALID_FILE_URL_HOST` because the scripts build a `file://` URL
 from a relative path; they work only with an absolute one. (All four are
 currently in sync.) A `check-generated` target that diffs generator output
 against the checked-in headers would catch a `property-information` upgrade.
+
+**~~Warnings in a clean build.~~ Fixed, with §2.** `-Wall -Wextra` on a
+`make clean` build is silent now. The unused parameter went with `column_align`;
+the three `const mdy_node *` casts were added, which is what the same file
+already does in six other places — the wart underneath is that `mdy_root`
+returns const to callers who own the tree, and that is still there; and
+`stb_image.h`'s two unused helpers are silenced by a `#pragma` around its
+include in `images.c`, as narrowly as the file it is for and without editing
+somebody else's header. What follows is what the warnings were.
 
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`

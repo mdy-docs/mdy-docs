@@ -319,8 +319,7 @@ static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t l
      * and `king-s-list` under the other, and only the first is a link that
      * works.
      */
-    size_t id_len = 0;
-    const char *id = mdy_resolve_slug(doc, text, len, &id_len);
+    const char *id = mdy_resolve_slug(doc, text, len, NULL);
     if (!id || !*id) return;
 
     size_t taken = 0;
@@ -330,7 +329,6 @@ static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t l
     char unique[256];
     if (taken) snprintf(unique, sizeof unique, "%s-%zu", id, taken);
     else snprintf(unique, sizeof unique, "%s", id);
-    (void)id_len;
 
     if (doc->heading_count == doc->heading_cap) {
         size_t grown = doc->heading_cap ? doc->heading_cap * 2 : 32;
@@ -1633,7 +1631,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
 
                 size_t total = body_len;
                 for (size_t k = i + 1; k < plain_end; k++) total += lines[k].len + 1;
-                char *joined = mdy_alloc(doc ? &doc->arena : NULL, total + 1);
+                char *joined = mdy_alloc(&doc->arena, total + 1);
                 size_t o = 0;
                 memcpy(joined, body, body_len);
                 o = body_len;
@@ -2002,7 +2000,8 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
      *
      * This is src/parse/block.js's sequence: extractMatter, then the code,
      * then stripComments, then the lines are measured. The code is the one
-     * step this parser does not have — see shims/parse.js.
+     * step this parser does not take: the script layer runs before it and
+     * hands it lines (mdyscript.h).
      */
     /*
      * Only for a SINGLE document. A stream splits first and each document

@@ -53,9 +53,6 @@ int fsx_stat(const char *root, const char *rel, double *size, double *mtime_ms);
 /* Write, creating parent directories as needed. 0 on success. */
 int fsx_write(const char *root, const char *rel, const uint8_t *bytes, size_t len);
 
-/* Remove. A missing path is NOT an error — the contract says so. */
-int fsx_remove(const char *root, const char *rel);
-
 /* The working directory. A site root reaches the host as an argv string and
  * may be relative, but mdy-docs' import graph keys modules by absolute path —
  * so something has to make it absolute, and only the host knows where it is. */
@@ -67,19 +64,13 @@ char *fsx_cwd(void);
 int fsx_is_absolute(const char *p);
 
 /*
- * ---- what the ported test suite needs -----------------------------------
+ * ---- what the tests need -------------------------------------------------
  *
- * mdy-docs' own tests do real filesystem work — they write a site into a temp
- * directory and build it — so running them natively needs more than the
- * provider contract does. These back the `node:fs` shims in ../shims/node/,
- * and nothing in the backend proper calls them.
+ * Real filesystem work: test/engine.c writes a site into a temp directory and
+ * builds it, and takes it away again. Nothing in the backend proper calls
+ * any of this. It was written for a ported run of mdy-docs' own tests, over
+ * `node:fs` shims that no longer exist.
  */
-
-/* One directory level, one entry per line, NUL terminated; a directory's name
- * carries a trailing `/` so a caller can tell them apart without a second
- * call. Missing directory → NULL (distinct from an empty one, which is ""),
- * because `readdir` on a missing path IS an error where `list` is not. */
-char *fsx_readdir(const char *path);
 
 /* mkdir -p. 0 on success, and an existing directory is success. */
 int fsx_mkdirp(const char *path);

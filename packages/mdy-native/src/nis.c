@@ -46,12 +46,10 @@ typedef struct {
  * own test suite ran here: it opens a set per test, hundreds of them, and the
  * ninth failed with "could not open a collection".
  *
- * Growing alone would only move the failure to the file-descriptor limit,
- * since every collection holds an open temp file (and one more per index). The
- * other half of the fix is in host.c: the handle is wrapped in a JS object
- * whose finalizer closes it, so a collection is reclaimed when the JavaScript
- * that owned it becomes unreachable. That is the lifetime the WASM binding
- * gets from its own GC, and this is how a native host earns the same.
+ * Growing alone would have moved the failure to the file-descriptor limit
+ * when a collection was a temp file and an index another; it is a buffer now
+ * (see Store below), so the only thing a slot costs is the memory in it. What
+ * gives it back is nis_close, which the engine calls when it closes a set.
  */
 static Slot *g_slots;
 static int g_slot_count;

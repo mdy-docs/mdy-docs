@@ -29,61 +29,6 @@ char *win_narrow(const wchar_t *w) {
     return s;
 }
 
-int64_t win_pread(void *handle, uint64_t off, uint8_t *buf, uint32_t len) {
-    OVERLAPPED ov = { 0 };
-    ov.Offset = (DWORD)(off & 0xFFFFFFFFu);
-    ov.OffsetHigh = (DWORD)(off >> 32);
-    DWORD got = 0;
-    if (!ReadFile((HANDLE)handle, buf, len, &got, &ov)) {
-        /* Reading at or past EOF is not an error to the caller — a B+tree
-         * asks for a node-sized block and gets a short read at the end. */
-        return GetLastError() == ERROR_HANDLE_EOF ? 0 : -1;
-    }
-    return (int64_t)got;
-}
-
-int32_t win_pwrite(void *handle, uint64_t off, const uint8_t *buf, uint32_t len) {
-    OVERLAPPED ov = { 0 };
-    ov.Offset = (DWORD)(off & 0xFFFFFFFFu);
-    ov.OffsetHigh = (DWORD)(off >> 32);
-    DWORD wrote = 0;
-    if (!WriteFile((HANDLE)handle, buf, len, &wrote, &ov)) return -1;
-    return wrote == len ? 0 : -1;
-}
-
-uint64_t win_fsize(void *handle) {
-    LARGE_INTEGER size;
-    return GetFileSizeEx((HANDLE)handle, &size) ? (uint64_t)size.QuadPart : 0;
-}
-
-int32_t win_ftruncate(void *handle, uint64_t len) {
-    LARGE_INTEGER pos;
-    pos.QuadPart = (LONGLONG)len;
-    if (!SetFilePointerEx((HANDLE)handle, pos, NULL, FILE_BEGIN)) return -1;
-    return SetEndOfFile((HANDLE)handle) ? 0 : -1;
-}
-
-void *win_temp_file(void) {
-    wchar_t dir[MAX_PATH + 1];
-    DWORD n = GetTempPathW(MAX_PATH, dir);
-    if (n == 0 || n > MAX_PATH) return NULL;
-    wchar_t path[MAX_PATH + 1];
-    if (GetTempFileNameW(dir, L"mdy", 0, path) == 0) return NULL;
-
-    /* DELETE_ON_CLOSE is the equivalent of mkstemp followed by unlink: the
-     * collection lives exactly as long as its handle and leaves nothing
-     * behind if the process dies. */
-    HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
-                           FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
-                           CREATE_ALWAYS,
-                           FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
-    return h == INVALID_HANDLE_VALUE ? NULL : (void *)h;
-}
-
-void win_close(void *handle) {
-    if (handle) CloseHandle((HANDLE)handle);
-}
-
 int win_ensure_parent(const char *utf8_path) {
     char *copy = strdup(utf8_path);
     if (!copy) return -1;

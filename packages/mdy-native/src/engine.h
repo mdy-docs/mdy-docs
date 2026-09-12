@@ -18,15 +18,13 @@
  * No second JavaScript engine is involved. lamassu runs the DOCUMENT's code,
  * which is what it has always been for; everything around it is C.
  *
- * WHAT THIS DOES NOT DO YET, and each is a step of its own:
- *   - `$` is present but every native refuses, loudly. A document that calls
- *     `$.render` gets an error naming it rather than a wrong page.
- *   - `transform` needs the tree to reach the guest and come back.
- *   - Positions point at the source lines: the script layer's `[line, text]`
- *     pairs carry which line of the body each produced line came from, the
- *     data-fence extractor says where each body line was in the file, and
- *     the parser is handed the map — so a warning, and a task's form, name
- *     the line a person could go and edit.
+ * All of `$` is here — find, render, emit, publish, resize, the composition
+ * tokens — and so is `transform`, which carries the tree into the guest and
+ * takes it back. Positions point at the source lines: the script layer's
+ * `[line, text]` pairs carry which line of the body each produced line came
+ * from, the data-fence extractor says where each body line was in the file,
+ * and the parser is handed the map, so a warning and a task's form name the
+ * line a person could go and edit.
  */
 #ifndef MDY_ENGINE_H
 #define MDY_ENGINE_H

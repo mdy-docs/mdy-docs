@@ -556,12 +556,14 @@ void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t l
  * than not, and treating one as punctuation would mangle every non-English
  * label in the corpus.
  */
+/* `out_len` may be NULL for a caller that only wants the string — the heading
+ * ids want the length, the wiki links do not. */
 const char *mdy_resolve_slug(mdy_doc *doc, const char *s, size_t len, size_t *out_len) {
     /* Lowercasing can grow a character (ẞ is one byte wider lowered), so the
      * buffer allows for it rather than assuming the output is no longer than
      * the input. */
     char *out = mdy_alloc(&doc->arena, len * 2 + 2);
-    if (!out) { *out_len = 0; return NULL; }
+    if (!out) { if (out_len) *out_len = 0; return NULL; }
 
     size_t o = 0;
     int was_space = 0;
@@ -596,7 +598,7 @@ const char *mdy_resolve_slug(mdy_doc *doc, const char *s, size_t len, size_t *ou
          * rather than walking bytes is what guarantees. */
     }
     out[o] = '\0';
-    *out_len = o;
+    if (out_len) *out_len = o;
     return out;
 }
 

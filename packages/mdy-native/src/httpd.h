@@ -31,12 +31,9 @@ Httpd *httpd_listen(const char *host, int port, HttpdHandler handler, void *ud);
 int httpd_port(const Httpd *s);
 /* Accept, read, and dispatch what is ready, waiting up to `timeout_ms`. */
 void httpd_poll(Httpd *s, int timeout_ms);
-void httpd_close(Httpd *s);
 
 /* A header of the request, or NULL. `out` receives the value. */
 const char *httpd_header(const HttpdRequest *req, const char *name, char *out, size_t cap);
-/* A query parameter of the request, percent-decoded, or NULL. */
-const char *httpd_query(const HttpdRequest *req, const char *name, char *out, size_t cap);
 
 /* A whole response, and the connection closes after it. `extra_headers`
  * is zero or more "Name: value\r\n" lines, or NULL. */
@@ -48,6 +45,5 @@ void httpd_respond(Httpd *s, HttpdRequest *req, int status, const char *content_
 void httpd_keep_open(Httpd *s, HttpdRequest *req, const char *head);
 /* Write to every kept connection; the ones that have gone are dropped. */
 void httpd_broadcast(Httpd *s, const void *data, size_t len);
-size_t httpd_kept_count(const Httpd *s);
 
 #endif

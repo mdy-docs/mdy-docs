@@ -9,13 +9,10 @@
 Httpd *httpd_listen(const char *host, int port, HttpdHandler handler, void *ud) { (void)host; (void)port; (void)handler; (void)ud; return NULL; }
 int httpd_port(const Httpd *s) { (void)s; return 0; }
 void httpd_poll(Httpd *s, int timeout_ms) { (void)s; (void)timeout_ms; }
-void httpd_close(Httpd *s) { (void)s; }
 const char *httpd_header(const HttpdRequest *req, const char *name, char *out, size_t cap) { (void)req; (void)name; (void)out; (void)cap; return NULL; }
-const char *httpd_query(const HttpdRequest *req, const char *name, char *out, size_t cap) { (void)req; (void)name; (void)out; (void)cap; return NULL; }
 void httpd_respond(Httpd *s, HttpdRequest *req, int status, const char *content_type, const char *extra_headers, const void *body, size_t len) { (void)s; (void)req; (void)status; (void)content_type; (void)extra_headers; (void)body; (void)len; }
 void httpd_keep_open(Httpd *s, HttpdRequest *req, const char *head) { (void)s; (void)req; (void)head; }
 void httpd_broadcast(Httpd *s, const void *data, size_t len) { (void)s; (void)data; (void)len; }
-size_t httpd_kept_count(const Httpd *s) { (void)s; return 0; }
 #else
 
 #ifdef _WIN32
@@ -156,20 +153,6 @@ const char *httpd_header(const HttpdRequest *req, const char *name, char *out, s
     return NULL;
 }
 
-const char *httpd_query(const HttpdRequest *req, const char *name, char *out, size_t cap) {
-    size_t nlen = strlen(name);
-    for (const char *p = req->query; p && *p; ) {
-        const char *amp = strchr(p, '&');
-        size_t len = amp ? (size_t)(amp - p) : strlen(p);
-        if (len > nlen && strncmp(p, name, nlen) == 0 && p[nlen] == '=') {
-            percent_decode(p + nlen + 1, len - nlen - 1, out, cap);
-            return out;
-        }
-        p = amp ? amp + 1 : NULL;
-    }
-    return NULL;
-}
-
 static const char *reason(int status) {
     switch (status) {
         case 200: return "OK"; case 400: return "Bad Request"; case 401: return "Unauthorized";
@@ -202,12 +185,6 @@ void httpd_broadcast(Httpd *s, const void *data, size_t len) {
         if (c->fd == BAD_SOCKET || !c->kept) continue;
         if (send_all(c->fd, data, len) != 0) conn_free(c);
     }
-}
-
-size_t httpd_kept_count(const Httpd *s) {
-    size_t n = 0;
-    for (int i = 0; i < MAX_CONNS; i++) if (s->conns[i].fd != BAD_SOCKET && s->conns[i].kept) n++;
-    return n;
 }
 
 /* A complete request in the buffer, or not yet. */
@@ -286,10 +263,4 @@ void httpd_poll(Httpd *s, int timeout_ms) {
     }
 }
 
-void httpd_close(Httpd *s) {
-    if (!s) return;
-    for (int i = 0; i < MAX_CONNS; i++) conn_free(&s->conns[i]);
-    close_socket(s->listener);
-    free(s);
-}
 #endif

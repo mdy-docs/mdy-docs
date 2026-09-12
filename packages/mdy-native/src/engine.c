@@ -2369,7 +2369,7 @@ static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
         return false;
     }
 
-    char *token = hold_tree_as(e, doc, mdy_root(doc),
+    char *token = hold_tree_as(e, doc, (mdy_node *)mdy_root(doc),
                                e->last_render_key[0] ? e->last_render_key : NULL);
     if (!token) { *result = js_undefined(); return false; }
     *result = str(e->vm, token, strlen(token));
@@ -3080,7 +3080,7 @@ static bool compose_native(JsContext *ctx, JsValue this_val, const JsValue *args
     }
     /* Composed before the transforms see it: a transform works on the
      * document's FINISHED tree, renders and all. */
-    splice_tree(e, tree, mdy_root(tree));
+    splice_tree(e, tree, (mdy_node *)mdy_root(tree));
     note_references(e, tree);
     /* The document owns the tree until the render finishes with it. */
     mdy_free(e->tree_owner);
@@ -3469,7 +3469,7 @@ static bool html_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  * text it was, which is what stops a cell holding a list from breaking the
  * row apart.
  */
-static const char *column_align(mdy_engine *e, JsValue align, uint32_t i) {
+static const char *column_align(JsValue align, uint32_t i) {
     if (!js_is_array(align) || i >= js_array_length(align)) return NULL;
     char *s = js_string_utf8(js_array_get(align, i));
     if (!s) return NULL;
@@ -3488,7 +3488,7 @@ static void table_cell(mdy_engine *e, mdy_doc *doc, mdy_node *row,
     const char *body = text ? text : "";
 
     mdy_node *cell = mdy_new_element(doc, header ? "th" : "td", 2);
-    const char *at = column_align(e, align, i);
+    const char *at = column_align(align, i);
     if (at) {
         char style[32];
         int n = snprintf(style, sizeof style, "text-align: %s", at);
@@ -5251,7 +5251,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         mdy_doc *tree = parse_lines(lines, e);
         if (!tree) FAIL("the produced lines did not parse");
         /* The held trees go back where their tokens are. */
-        splice_tree(e, tree, mdy_root(tree));
+        splice_tree(e, tree, (mdy_node *)mdy_root(tree));
         note_references(e, tree);
         out = tree;
     }

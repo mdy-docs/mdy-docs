@@ -13,9 +13,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Open a collection backed by a fresh temp file. Returns a handle >= 0, or -1.
- * `MemoryStorageProvider` on the JS side becomes this: nisaba's on-disk
- * B+tree is its format, and a native host has a filesystem. */
+/* Open a collection, backed by a growable buffer — nisaba's on-disk B+tree
+ * format over four callbacks that are memory, which is what
+ * `MemoryStorageProvider` is on the JS side. Returns a handle >= 0, or -1.
+ * Closed with nis_close; a set's collection dies with the set. */
 int nis_open(void);
 
 /* Insert one binjson-encoded document. 0 on success. */

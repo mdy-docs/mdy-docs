@@ -125,13 +125,6 @@ NIS_RENAME := -Dcompile_into=nis_re_compile_into -Dparse_alt=nis_re_parse_alt \
               -Dvm_execute_internal=nis_re_vm_execute_internal \
               -Dvm_get_indices=nis_re_vm_get_indices
 
-build/libnisaba.a: $(NIS_SRCS)
-	@mkdir -p build/nis
-	@for f in $(NIS_SRCS); do \
-	  $(CC) -std=gnu11 -O2 $(NIS_INC) $(NIS_RENAME) -c $$f -o build/nis/`basename $$f .c`.o || exit 1; \
-	done
-	$(AR) rcs $@ build/nis/*.o
-
 # ---- sukkal, in this process ----------------------------------------------
 #
 # `mdy dev` with no --broker runs the broker itself: sukkal's store and
@@ -242,11 +235,7 @@ build/mdyast$(EXE): test/mdyast.c $(PARSE_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
 build/mdcat$(EXE): test/mdcat.c $(PARSE_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/doccat$(EXE): test/doccat.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
 build/yamlcat$(EXE): test/yamlcat.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/datacat$(EXE): test/datacat.c $(PARSE_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
 build/linkify$(EXE): test/linkify.c $(PARSE_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
@@ -523,10 +512,11 @@ check-sites: build/mdy$(EXE)
 # that wrapper, wasm/check-golden.mjs runs it under node against golden/, and
 # wasm/index.html is the same thing with a directory picker.
 #
-# lamassu compiles to its own archive first, for the reason libnisaba.a
-# exists above: NIS_RENAME must reach nisaba's regex engine and NOT baru-re,
-# or both engines' copies of the four names would be renamed to the same
-# thing and collide again.
+# lamassu compiles to its own archive first, and it has to: NIS_RENAME must
+# reach nisaba's regex engine and NOT baru-re, or both engines' copies of the
+# four names would be renamed to the same thing and collide again. (A
+# `build/libnisaba.a` rule used to stand above for the same reason; nothing
+# ever linked it, since every binary compiles NIS_SRCS directly.)
 EMCC ?= emcc
 EMAR ?= emar
 LAM_SRCS := $(wildcard $(LAMASSU)/src/runtime/*.c) $(wildcard $(LAMASSU)/src/frontend/*.c) \

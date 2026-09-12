@@ -1176,7 +1176,7 @@ static int cmd_document(int argc, char **argv) {
         const char *eq = strchr(body, '=');
         if (eq) { snprintf(name, sizeof name, "%.*s", (int)(eq - body), body); value = eq + 1; }
         else snprintf(name, sizeof name, "%s", body);
-        int takes_value = 0, is_help = 0;
+        int takes_value = 0;
         const char *canonical = NULL;
         if (strcmp(name, "out") == 0 || strcmp(name, "o") == 0) { canonical = "out"; takes_value = 1; }
         else if (strcmp(name, "html") == 0) canonical = "html";
@@ -1191,7 +1191,7 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(name, "sanitize") == 0) canonical = "sanitize";
         else if (strcmp(name, "scope") == 0) { canonical = "scope"; takes_value = 1; }
         else if (strcmp(name, "response") == 0) { canonical = "response"; takes_value = 1; }
-        else if (strcmp(name, "help") == 0 || strcmp(name, "h") == 0) { canonical = "help"; is_help = 1; }
+        else if (strcmp(name, "help") == 0 || strcmp(name, "h") == 0) canonical = "help";
         if (!canonical) {
             char m[256];
             snprintf(m, sizeof m, "Unknown option '%s'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"%s\"", a, a);
@@ -1201,7 +1201,6 @@ static int cmd_document(int argc, char **argv) {
             if (i + 1 >= argc) { char m[256]; snprintf(m, sizeof m, "Option '%s' argument missing", a); fail(m); }
             value = argv[++i];
         }
-        (void)is_help;
         if (strcmp(canonical, "out") == 0) o.out = value;
         else if (strcmp(canonical, "html") == 0) o.html = 1;
         else if (strcmp(canonical, "entry") == 0) o.entry = value;

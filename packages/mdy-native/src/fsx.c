@@ -355,22 +355,6 @@ int fsx_write(const char *root, const char *rel, const uint8_t *bytes, size_t le
     return (fclose(f) != 0 || wrote != len) ? -1 : 0;
 }
 
-int fsx_remove(const char *root, const char *rel) {
-    char *path = at(root, rel);
-    if (!path) return -1;
-#ifdef _WIN32
-    wchar_t *w = win_widen(path);
-    free(path);
-    if (!w) return -1;
-    int rc = _wunlink(w);
-    free(w);
-#else
-    int rc = unlink(path);
-    free(path);
-#endif
-    return (rc == 0 || errno == ENOENT) ? 0 : -1;
-}
-
 /*
  * The working directory, `/`-separated even on Windows.
  *
@@ -403,7 +387,11 @@ char *fsx_cwd(void) {
  * against the native target rather than only against node.
  */
 
-char *fsx_readdir(const char *path) {
+/* One directory level, for fsx_rm_rf below — the only caller there has ever
+ * been. Each entry NUL terminated, a directory's name carrying a trailing `/`
+ * so the remover can tell them apart without a second call; a missing
+ * directory is NULL, distinct from an empty one. */
+static char *fsx_readdir(const char *path) {
     Buf out = { 0 };
 #ifdef _WIN32
     size_t need = strlen(path) + 3;

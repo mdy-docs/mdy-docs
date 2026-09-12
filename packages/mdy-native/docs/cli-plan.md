@@ -46,14 +46,15 @@ existing tests the harness, measure, and close what they report.**
 
 ## Phase 0 — the harness
 
-`scripts-compare-cli.mjs`: runs `test/cli.test.js`'s cases against both
-binaries — the node CLI and `build/mdy` — and reports which agree. Not a port
-of the tests; a runner that swaps the executable, so a test added upstream is
-a test here. The cases that need node-only machinery (none, on reading them)
-are listed rather than skipped silently.
+A runner that swaps the executable, so a test added upstream is a test here —
+not a port of the tests. It was planned as a `scripts-compare-cli.mjs`
+reporting which of the two binaries agree; what was built is simpler and does
+the same job: `test/cli.test.js` takes the executable from `MDY_CLI`, and
+`make check-cli` points it at `build/mdy` and runs it with `node --test`.
 
-`make check-cli` reports `N/40 cases agree`. Everything below moves that
-number, and the plan is done at 40/40.
+That is 34 cases, all passing. (The plan said `N/40`; the file has 34.)
+`make check-dev` is beside it, and is native-only: the dev server's
+in-process broker has no counterpart in `bin/mdy.js` to compare against.
 
 Exit: the harness runs, and the number it prints is the honest starting point
 (it will be low — most cases are document mode).
