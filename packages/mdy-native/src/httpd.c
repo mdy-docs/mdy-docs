@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "httpd.h"
 
@@ -13,11 +14,13 @@ const char *httpd_header(const HttpdRequest *req, const char *name, char *out, s
 void httpd_respond(Httpd *s, HttpdRequest *req, int status, const char *content_type, const char *extra_headers, const void *body, size_t len) { (void)s; (void)req; (void)status; (void)content_type; (void)extra_headers; (void)body; (void)len; }
 void httpd_keep_open(Httpd *s, HttpdRequest *req, const char *head) { (void)s; (void)req; (void)head; }
 void httpd_broadcast(Httpd *s, const void *data, size_t len) { (void)s; (void)data; (void)len; }
+int httpd_secret(char *out, size_t cap) { if (out && cap) out[0] = '\0'; return -1; }
 #else
 
 #ifdef _WIN32
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+#  include <bcrypt.h>
 #  define strncasecmp _strnicmp
 typedef SOCKET sock_t;
 #  define BAD_SOCKET INVALID_SOCKET
@@ -43,6 +46,26 @@ static int sockets_ready(void) { signal(SIGPIPE, SIG_IGN); return 1; }
 #endif
 
 #define MAX_CONNS 256
+
+/*
+ * The most a single request may grow to before the connection is dropped.
+ *
+ * There was no limit: `recv` appended and the buffer doubled, so any peer that
+ * kept writing made this process allocate until it died — and the largest
+ * legitimate request here is a delivered message batch, which is nothing like
+ * this. Generous on purpose, since the cost of being wrong in one direction is
+ * a refused message and in the other is the machine. (B17.)
+ */
+#define MAX_REQUEST (16u * 1024u * 1024u)
+
+/*
+ * How long a write may block before the peer is written off.
+ *
+ * One thread serves everything, so a `send` that blocks stops the watcher, the
+ * rebuilds and every other client with it. A dev server owes a slow reader
+ * nothing: five seconds, then the connection is dropped. (B17.)
+ */
+#define SEND_TIMEOUT_MS 5000
 
 typedef struct {
     sock_t fd;
@@ -107,12 +130,78 @@ Httpd *httpd_listen(const char *host, int port, HttpdHandler handler, void *ud) 
 
 int httpd_port(const Httpd *s) { return s->port; }
 
+/*
+ * The OS's own randomness, hex. See httpd.h for why there is no fallback.
+ *
+ * /dev/urandom rather than getrandom(2) or arc4random_buf: the first is Linux
+ * only and the second BSD and macOS, and this has to build on both plus mingw
+ * with nothing conditional beyond what is already here. It is the interface
+ * every POSIX target in this project actually has.
+ */
+int httpd_secret(char *out, size_t cap) {
+    if (!out || cap < 3) { if (out && cap) out[0] = '\0'; return -1; }
+    size_t want = (cap - 1) / 2;
+    unsigned char bytes[64];
+    if (want > sizeof bytes) want = sizeof bytes;
+#ifdef _WIN32
+    if (!BCRYPT_SUCCESS(BCryptGenRandom(NULL, bytes, (ULONG)want,
+                                        BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+        out[0] = '\0';
+        return -1;
+    }
+#else
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f) { out[0] = '\0'; return -1; }
+    size_t got = fread(bytes, 1, want, f);
+    fclose(f);
+    if (got != want) { out[0] = '\0'; return -1; }
+#endif
+    static const char hex_digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < want; i++) {
+        out[i * 2]     = hex_digits[bytes[i] >> 4];
+        out[i * 2 + 1] = hex_digits[bytes[i] & 15];
+    }
+    out[want * 2] = '\0';
+    return 0;
+}
+
+/* A socket that cannot block this thread for longer than SEND_TIMEOUT_MS. */
+static void set_write_timeout(sock_t fd) {
+#ifdef _WIN32
+    DWORD ms = SEND_TIMEOUT_MS;
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&ms, sizeof ms);
+#else
+    struct timeval tv;
+    tv.tv_sec = SEND_TIMEOUT_MS / 1000;
+    tv.tv_usec = (SEND_TIMEOUT_MS % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+#endif
+}
+
+/*
+ * A whole response, or the peer is written off.
+ *
+ * The deadline is on the WHOLE write and not on each send, which is the
+ * difference between a bound and a hope: SO_SNDTIMEO restarts every time a
+ * send manages even one byte, so a client reading a trickle — or a kernel
+ * that grows the buffer under it — holds this thread for as many multiples of
+ * the timeout as it likes. Measured before this loop had its own deadline: 5s
+ * per send became 13.7s of stall for one paused client. (B17.)
+ *
+ * time(NULL) rather than a millisecond clock because seconds are the units
+ * this is specified in and httpd.c has no clock of its own. The comparison is
+ * `>=` and not `>` for the same reason: at one-second resolution a `>` gives
+ * the peer a whole extra round of SO_SNDTIMEO, which measured as ~10s of
+ * stall for a 5s budget.
+ */
 static int send_all(sock_t fd, const void *data, size_t len) {
     const char *p = data;
+    time_t deadline = time(NULL) + (SEND_TIMEOUT_MS + 999) / 1000;
     while (len) {
         int n = (int)send(fd, p, (int)(len > 65536 ? 65536 : len), 0);
         if (n <= 0) return -1;
         p += n; len -= (size_t)n;
+        if (len && time(NULL) >= deadline) return -1;
     }
     return 0;
 }
@@ -239,7 +328,7 @@ void httpd_poll(Httpd *s, int timeout_ms) {
             int slot = -1;
             for (int i = 0; i < MAX_CONNS; i++) if (s->conns[i].fd == BAD_SOCKET) { slot = i; break; }
             if (slot < 0) close_socket(fd);
-            else { s->conns[slot].fd = fd; s->conns[slot].kept = 0; }
+            else { set_write_timeout(fd); s->conns[slot].fd = fd; s->conns[slot].kept = 0; }
         }
     }
     for (int i = 0; i < MAX_CONNS; i++) {
@@ -252,9 +341,26 @@ void httpd_poll(Httpd *s, int timeout_ms) {
             if (r <= 0) conn_free(c);
             continue;
         }
+        /*
+         * The cap, before the growth and not after: a peer that keeps writing
+         * used to double this buffer until the allocation failed, and `in` was
+         * assigned from realloc without checking, so the next recv wrote
+         * through NULL. Both halves are the same line. (B17.)
+         */
+        if (c->in_len >= MAX_REQUEST) {
+            static const char too_big[] =
+                "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n"
+                "Connection: close\r\n\r\n";
+            send_all(c->fd, too_big, sizeof too_big - 1);
+            conn_free(c);
+            continue;
+        }
         if (c->in_len + 65536 + 1 > c->in_cap) {
-            c->in_cap = c->in_cap ? c->in_cap * 2 : 131072;
-            c->in = realloc(c->in, c->in_cap);
+            size_t want = c->in_cap ? c->in_cap * 2 : 131072;
+            uint8_t *grown = realloc(c->in, want);
+            if (!grown) { conn_free(c); continue; }
+            c->in = grown;
+            c->in_cap = want;
         }
         int r = (int)recv(c->fd, (char *)c->in + c->in_len, 65536, 0);
         if (r <= 0) { conn_free(c); continue; }

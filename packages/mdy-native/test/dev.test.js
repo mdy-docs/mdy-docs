@@ -16,6 +16,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
+import { connect } from 'node:net';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -96,6 +97,128 @@ test('a delivery arriving before the first good build is held, not fatal', async
     assert.equal(await deliver(port), 200);
     await dev.until(/\[deliver\][^\n]*a\.b/);
     assert.equal(dev.child.exitCode, null);
+  } finally {
+    dev.child.kill();
+  }
+});
+
+/*
+ * B17's other half: the request buffer had no cap. `recv` appended and the
+ * buffer doubled, so a peer that kept writing made the server allocate until
+ * it died — and with the old 0.0.0.0 bind, that peer was anyone on the
+ * network. The cap is 16 MiB; this writes past it and expects the connection
+ * to be refused and, the part that matters, the SERVER to still be there.
+ */
+test('a request bigger than the cap is refused, and the server survives', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'), WORKING);
+
+  const dev = startDev(root);
+  try {
+    const [, port] = await dev.until(/http:\/\/localhost:(\d+)/);
+
+    const LIMIT = 16 * 1024 * 1024;
+    const written = await new Promise((resolve) => {
+      let sent = 0;
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(sent); } };
+      const sock = connect({ host: '127.0.0.1', port: Number(port) }, () => {
+        sock.write('POST /mdy/mdy-bus HTTP/1.1\r\nHost: x\r\n' +
+                   'Content-Length: 1073741824\r\n\r\n');
+        /* Keep writing until the server hangs up on us. 1 MiB a go. */
+        const chunk = Buffer.alloc(1024 * 1024, 0x61);
+        const pump = () => {
+          while (!done && sent < LIMIT * 4) {
+            sent += chunk.length;
+            if (!sock.write(chunk)) { sock.once('drain', pump); return; }
+          }
+          sock.end();
+        };
+        pump();
+      });
+      /* Either outcome is the server refusing: a 413 then close, or a reset. */
+      sock.on('close', finish);
+      sock.on('error', finish);
+      setTimeout(() => { sock.destroy(); finish(); }, 20000);
+    });
+
+    /*
+     * The assertion that makes this a test of the CAP and not of node's
+     * buffering: without one the server swallows everything and we get to
+     * write all 64 MiB. With one it stops listening near 16, so the write
+     * fails well before that.
+     */
+    assert.ok(written < LIMIT * 2,
+              `the server stopped reading near the cap (wrote ${written} bytes)`);
+    assert.equal(dev.child.exitCode, null, 'the server did not fall over');
+
+    /*
+     * And it still answers — the refusal freed that connection and no other.
+     * WORKING emits no page, so a 404 is the right answer to `/`; what is
+     * being checked is that an answer arrives at all, on a fresh connection,
+     * after a peer tried to make the server allocate a gigabyte.
+     */
+    const res = await new Promise((resolve, reject) => {
+      const req = request({ host: 'localhost', port, path: '/', method: 'GET' },
+                          (r) => { r.resume(); r.on('end', () => resolve(r.statusCode)); });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.ok(res >= 200 && res < 500, `the server still answers (got ${res})`);
+
+    /* And the endpoint still works, which is the one that was attacked. */
+    assert.equal(await deliver(port), 200, 'and deliveries still land');
+  } finally {
+    dev.child.kill();
+  }
+});
+
+/*
+ * The last of B17: one thread serves everything, and responses went out with
+ * a blocking send. A client that asks for a page and then stops reading fills
+ * the socket buffer, `send` blocks, and the watcher, the rebuilds and every
+ * other client stop with it — for as long as that client cares to hold on.
+ *
+ * So: emit a page far larger than any socket buffer, ask for it, never read a
+ * byte, and check the server is still answering. SEND_TIMEOUT_MS is 5s, so
+ * this waits longer than that and no longer than it has to.
+ */
+test('a client that stops reading does not stall the server', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'),
+    '% $.emit("big.html", "x".repeat(16 * 1024 * 1024))\n= big\n');
+
+  const dev = startDev(root);
+  try {
+    const [, port] = await dev.until(/http:\/\/localhost:(\d+)/);
+
+    /* Ask, then never read. The socket is paused before the response starts. */
+    const stuck = connect({ host: '127.0.0.1', port: Number(port) }, () => {
+      stuck.pause();
+      stuck.write('GET /big.html HTTP/1.1\r\nHost: x\r\n\r\n');
+    });
+    stuck.on('error', () => {});
+
+    /* Long enough for the kernel buffers to fill and the send to block. */
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const started = Date.now();
+    const code = await new Promise((resolve, reject) => {
+      const req = request({ host: 'localhost', port, path: '/', method: 'GET' },
+                          (r) => { r.resume(); r.on('end', () => resolve(r.statusCode)); });
+      req.on('error', reject);
+      req.setTimeout(20000, () => { req.destroy(new Error('the server stalled')); });
+      req.end();
+    });
+    const waited = Date.now() - started;
+
+    assert.ok(code >= 200 && code < 500, `the server answered (${code})`);
+    /* The budget is SEND_TIMEOUT_MS (5s) plus a second of clock granularity;
+     * 10 is that with room for a loaded CI box, and still well under the 13.7s
+     * this measured when the deadline was per-send instead of per-response. */
+    assert.ok(waited < 10000, `and did not wait on the stuck client (${waited}ms)`);
+    assert.equal(dev.child.exitCode, null);
+    stuck.destroy();
   } finally {
     dev.child.kill();
   }

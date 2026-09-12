@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "engine.h"
+#include "httpd.h"
 #include "mdyast.h"
 #include "fsx.h"
 #include "binjson.h"
@@ -796,6 +797,56 @@ static void count_checks(void) {
     free(html_small);
     free(html_big);
 }
+
+/* ---- the delivery token ------------------------------------------------------
+ *
+ * `mdy dev` puts a bearer token on the endpoint a broker delivers to. It used
+ * to be four rand() calls seeded with `time(NULL) ^ &argc`: thirty-two hex
+ * characters standing for at most the ~31 bits of an LCG's state, off a seed
+ * that is not a secret. Anyone who could reach the port could work it out.
+ * That was half of B17.
+ *
+ * There is no way to test that bytes are random. What can be tested is what
+ * the failure looked like: a fixed length of hex, and DIFFERENT every time,
+ * which four rand() calls from a one-second-resolution seed are not — two
+ * servers started in the same second shared a token.
+ */
+static void token_checks(void) {
+    printf("\n--- engine: the delivery token ---\n");
+
+    char a[40], b[40];
+    int rc_a = httpd_secret(a, sizeof a);
+    int rc_b = httpd_secret(b, sizeof b);
+    ok_("the OS supplies randomness", rc_a == 0 && rc_b == 0, rc_a ? "no source" : "ok");
+
+    size_t n = strlen(a);
+    ok_("...as hex filling the buffer it was given", n == 38, a);
+
+    int hexonly = 1;
+    for (size_t i = 0; i < n; i++)
+        if (!((a[i] >= '0' && a[i] <= '9') || (a[i] >= 'a' && a[i] <= 'f'))) hexonly = 0;
+    ok_("...lowercase hex and nothing else", hexonly && n > 0, a);
+
+    ok_("...and two of them differ", strcmp(a, b) != 0, a);
+
+    /* Not all one byte repeated — what a zeroed buffer or a failed read
+     * would look like if the return code were ignored. */
+    int varied = 0;
+    for (size_t i = 1; i < n; i++) if (a[i] != a[0]) varied = 1;
+    ok_("...and one is not a single byte repeated", varied, a);
+
+    /* A buffer too small to hold anything is refused, not half-filled. */
+    char tiny[2] = { 'x', 'x' };
+    ok_("a buffer with no room is refused and emptied",
+        httpd_secret(tiny, sizeof tiny) == -1 && tiny[0] == '\0', tiny);
+
+    /* An EVEN cap is not an error — char[40] is what the dev server has, and
+     * an API that refuses the buffer its only caller owns is an outage. */
+    char even[10];
+    ok_("an even-sized buffer is filled, not rejected",
+        httpd_secret(even, sizeof even) == 0 && strlen(even) == 8, even);
+}
+
 
 /* ---- a package, imported ----------------------------------------------------
  *
@@ -2063,6 +2114,7 @@ int main(void) {
     memo_key_checks();
     count_checks();
     import_checks();
+    token_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

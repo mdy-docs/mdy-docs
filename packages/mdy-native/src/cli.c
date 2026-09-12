@@ -98,11 +98,15 @@ static const char SITE_USAGE[] =
 "  mdy build [site-dir] [--out <dir>] [--drafts] [--future] [--entry <path>]\n"
 "            [--publish [--broker <url>]]\n"
 "      render the site (default dir: ., out: <site-dir>/dist)\n"
-"  mdy dev [site-dir] [--port <n>] [--drafts] [--future] [--entry <path>]\n"
-"          [--broker <url>] [--consumer <name>] [--group <name>]\n"
-"          [--max-attempts <n>] [--backoff <ms>] [--max-backoff <ms>]\n"
+"  mdy dev [site-dir] [--port <n>] [--host] [--drafts] [--future]\n"
+"          [--entry <path>] [--broker <url>] [--consumer <name>]\n"
+"          [--group <name>] [--max-attempts <n>] [--backoff <ms>]\n"
+"          [--max-backoff <ms>]\n"
 "      development server: watch, rebuild, live reload (default port: 4321)\n"
 "      — and, when a broker answers, publish and deliver messages too.\n"
+"      Answers on 127.0.0.1 only; --host answers on every interface, which\n"
+"      is for reaching it from another device and exposes the delivery\n"
+"      endpoint to whoever else is on that network.\n"
 "      For development only: it rebuilds the whole site on every save and\n"
 "      injects a live-reload script into every page. Deploy `mdy build`'s\n"
 "      output.\n"
@@ -1301,6 +1305,15 @@ static const char RELOAD_SNIPPET[] =
 typedef struct {
     const char *root_arg, *entry, *broker, *consumer, *group;
     int port, drafts, future, max_attempts, backoff, max_backoff;
+    /*
+     * Which interfaces to answer on. Loopback unless --host, which is the
+     * opposite of what this used to do: it bound 0.0.0.0 always, so every
+     * machine on the network could reach a server that rebuilds a directory
+     * on disk and, with a broker, renders whatever a POST tells it to. node's
+     * `server.listen(port)` binds everything too, and this is the one place
+     * worth diverging — node has no delivery endpoint to reach. (B17.)
+     */
+    int expose;
 } DevOptions;
 
 typedef struct {
@@ -1897,7 +1910,7 @@ static int dev_rebuild(Dev *d, const char *changed, int first) {
 }
 
 static int cmd_dev(int argc, char **argv) {
-    DevOptions o = { ".", NULL, NULL, "mdy-bus", "mdy", 4321, 0, 0, 5, 1000, 300000 };
+    DevOptions o = { ".", NULL, NULL, "mdy-bus", "mdy", 4321, 0, 0, 5, 1000, 300000, 0 };
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
         if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) { fputs(SITE_USAGE, stdout); return 0; }
@@ -1911,6 +1924,7 @@ static int cmd_dev(int argc, char **argv) {
         else if (strcmp(a, "--max-backoff") == 0 && i + 1 < argc) o.max_backoff = atoi(argv[++i]);
         else if (strcmp(a, "--drafts") == 0) o.drafts = 1;
         else if (strcmp(a, "--future") == 0) o.future = 1;
+        else if (strcmp(a, "--host") == 0) o.expose = 1;
         else o.root_arg = a;
     }
     /* One line at a time on stdout, whatever it is: the JavaScript writes
@@ -1943,19 +1957,40 @@ static int cmd_dev(int argc, char **argv) {
     if (!d.root_count) { d.roots = calloc(1, sizeof *d.roots); d.roots[0] = strdup(d.root); d.root_count = 1; }
     for (size_t i = 0; i < d.root_count; i++) snapshot_take(&d.snapshots[i], d.roots[i], NULL);
 
-    d.server = httpd_listen("0.0.0.0", o.port, dev_handle, &d);
+    d.server = httpd_listen(o.expose ? "0.0.0.0" : "127.0.0.1", o.port, dev_handle, &d);
     if (!d.server) { fprintf(stderr, "%slisten EADDRINUSE: address already in use :::%d%s\n", RED_OPEN(), o.port, RED_CLOSE()); return 1; }
     char url[128]; snprintf(url, sizeof url, "http://localhost:%d/", httpd_port(d.server));
 
     if (d.live && !d.local) {
         char host[128] = "127.0.0.1";
         http_local_address(o.broker, host, sizeof host);
-        snprintf(d.token, sizeof d.token, "%08x%08x%08x%08x", (unsigned)rand(), (unsigned)rand(), (unsigned)rand(), (unsigned)rand());
-        snprintf(d.callback, sizeof d.callback, "http://%s%s%s:%d/mdy/%s", strchr(host, ':') ? "[" : "", host, strchr(host, ':') ? "]" : "", httpd_port(d.server), o.consumer);
-        if (dev_register(&d) != 0) d.live = 0;
-        else { d.last_heartbeat = now_ms(); dev_send(&d, 1, 1); }
+        /*
+         * The bearer token on the delivery endpoint, from the OS. It was four
+         * rand() calls off a clock seed: 32 hex characters standing for at
+         * most the ~31 bits of an LCG's state, and `time(NULL)` is not a
+         * secret. Anyone who could reach the port could work it out and POST
+         * a message for this server to render. If the OS will not give us
+         * randomness we say so and drop to offline rather than register with
+         * a token we cannot vouch for. (B17.)
+         */
+        if (httpd_secret(d.token, sizeof d.token) != 0) {
+            fprintf(stderr, "%smdy: no source of randomness for the delivery token; "
+                            "serving without the bus%s\n", RED_OPEN(), RED_CLOSE());
+            d.live = 0;
+        } else {
+            snprintf(d.callback, sizeof d.callback, "http://%s%s%s:%d/mdy/%s",
+                     strchr(host, ':') ? "[" : "", host, strchr(host, ':') ? "]" : "",
+                     httpd_port(d.server), o.consumer);
+            if (dev_register(&d) != 0) d.live = 0;
+            else { d.last_heartbeat = now_ms(); dev_send(&d, 1, 1); }
+        }
     }
     if (d.local) { dev_send(&d, 1, 1); dev_drain(&d); }
+    /* Exposure is a choice, so it is stated rather than implied by a flag
+     * somebody typed once and forgot. */
+    if (o.expose)
+        fprintf(stderr, "%smdy: --host: answering on every interface, delivery endpoint included%s\n",
+                RED_OPEN(), RED_CLOSE());
 
     printf("\n  %s%sMDY%s%s  %sready in%s %s%d ms%s\n\n  %s➜%s  %sLocal:%s   %s%s%s\n",
            BOLD_OPEN(), MAGENTA_OPEN(), MAGENTA_CLOSE(), BOLD_CLOSE(), DIM_OPEN(), DIM_CLOSE(), BOLD_OPEN(), (int)(now_ms() - started), BOLD_CLOSE(),
@@ -2029,7 +2064,7 @@ int main(int argc, char **argv) {
                 RED_OPEN(), RED_CLOSE());
         return 1;
     }
-    if (argc > 1 && strcmp(argv[1], "dev") == 0) { srand((unsigned)time(NULL) ^ (unsigned)(size_t)&argc); return cmd_dev(argc - 2, argv + 2); }
+    if (argc > 1 && strcmp(argv[1], "dev") == 0) return cmd_dev(argc - 2, argv + 2);
     if (argc > 1 && strcmp(argv[1], "dead") == 0) return cmd_dead(argc - 2, argv + 2);
     return cmd_document(argc - 1, argv + 1);
 }

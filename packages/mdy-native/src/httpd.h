@@ -46,4 +46,23 @@ void httpd_keep_open(Httpd *s, HttpdRequest *req, const char *head);
 /* Write to every kept connection; the ones that have gone are dropped. */
 void httpd_broadcast(Httpd *s, const void *data, size_t len);
 
+/*
+ * A secret nobody can guess, as lowercase hex, NUL terminated. `cap` is the
+ * size of `out` including the terminator; it writes as many whole bytes as
+ * fit — (cap-1)/2 of them, so 19 bytes and 152 bits into a char[40] — and
+ * wants cap >= 3. An even cap simply leaves its last byte unused rather than
+ * being an error: the one caller has a char[40], and an API that refuses the
+ * buffer it is handed is an outage, not a safeguard.
+ *
+ * It lives here because this is where the platform already is — the same
+ * three-way split winsock/POSIX/emscripten — and because the only secret this
+ * program has is the bearer token on the delivery endpoint this file serves.
+ *
+ * Returns -1 if the OS will not supply randomness, and then `out` is empty.
+ * There is deliberately NO fallback to rand(): a token that looks random and
+ * is not is worse than a refusal, because the refusal is visible. That was
+ * B17 — four rand() calls seeded from the clock, dressed as 128 bits.
+ */
+int httpd_secret(char *out, size_t cap);
+
 #endif

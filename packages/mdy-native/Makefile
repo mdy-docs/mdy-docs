@@ -44,7 +44,8 @@ LDLIBS  += -lm
 # nothing here starts a thread.
 ifeq ($(OS),Windows_NT)
   EXE := .exe
-  LDLIBS += -lws2_32
+  # bcrypt for BCryptGenRandom: the delivery token's randomness (httpd.c).
+  LDLIBS += -lws2_32 -lbcrypt
 else
   LDLIBS += -lpthread
   EXE :=

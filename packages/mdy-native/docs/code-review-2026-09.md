@@ -35,7 +35,10 @@ what those checks do not reach.
 | B11 | ~~Medium~~ **fixed** | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
-| B14–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B14, B18–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B15 | Low | `cli.c` dev server | A refused publish's response is never freed |
+| B16 | Low | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
+| B17 | ~~Low~~ **fixed** | `cli.c` / `httpd.c` | Dev server bound every interface, with a clock-seeded token, no request cap and a blocking write |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
 | B29 | ~~Medium~~ **fixed** | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
 | B30 | Low | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
@@ -802,13 +805,51 @@ end of the stream, and to stop the line walk there.
   that accepts and never answers hangs `mdy build --publish`, `mdy dead` and
   the dev server's registration forever. `parse_url` also cannot take an IPv6
   literal (`http://[::1]:8080` → host `[`).
-- **B17 — Dev server exposure**: it binds `0.0.0.0`
-  ([cli.c:1946](../src/cli.c#L1946)) and the delivery bearer token is four
-  `rand()` calls seeded from the clock ([1953](../src/cli.c#L1953),
-  [2032](../src/cli.c#L2032)). The request buffer has no size cap
-  ([httpd.c:255–260](../src/httpd.c#L255-L260)) and responses are written with
-  a blocking `send` ([171](../src/httpd.c#L171)), so one slow LAN client stalls
-  rebuilds. Binding `127.0.0.1` by default removes most of this.
+- **~~B17 — Dev server exposure.~~ FIXED — four separate things, each with a
+  test that fails without it.**
+
+  **The bind.** It bound `0.0.0.0`, so every machine on the network could reach
+  a server that rebuilds a directory on disk and, with a broker, renders
+  whatever a POST tells it to. It binds `127.0.0.1` now, and `--host`
+  ([cli.c:1960](../src/cli.c#L1960)) opts back in and says so on stderr when it
+  does. This is a deliberate divergence: node's `server.listen(port)` binds
+  everything too, but node has no delivery endpoint to reach — the bus is
+  native-only. Verified with `lsof`: `127.0.0.1:45311 (LISTEN)` by default,
+  `*:45312 (LISTEN)` with `--host`.
+
+  **The token.** Four `rand()` calls seeded `time(NULL) ^ &argc`: thirty-two
+  hex characters standing for at most the ~31 bits of an LCG's state, from a
+  seed that is not a secret — two servers started in the same second shared a
+  token. It is now `httpd_secret`
+  ([httpd.c:141](../src/httpd.c#L141)), 19 bytes from `/dev/urandom` or
+  `BCryptGenRandom`, and **there is no fallback**: if the OS will not supply
+  randomness the server says so and serves without the bus
+  ([cli.c:1976](../src/cli.c#L1976)), because a token that looks random and is
+  not is worse than a refusal. `srand`/`rand` are gone from the program.
+
+  **The request cap.** There was none: `recv` appended and the buffer doubled,
+  so any peer that kept writing made this process allocate until it died — and
+  `realloc`'s result was assigned unchecked, so the failure arrived as a write
+  through NULL rather than as an error. Both halves are one line now, with the
+  cap at 16 MiB ([httpd.c:59](../src/httpd.c#L59)) and a 413 before the close.
+
+  **The blocking write.** One thread serves everything, so a client that asks
+  for a page and stops reading stopped the watcher, the rebuilds and every
+  other client with it. `SO_SNDTIMEO` alone is not the fix and this is the part
+  worth writing down: **it restarts every time a send manages one byte**, so a
+  paused client still held the thread for 13.7 seconds against a 5-second
+  timeout. The deadline is on the whole response
+  ([httpd.c:197](../src/httpd.c#L197)), and because the clock is
+  `time(NULL)` the comparison has to be `>=` — with `>` the peer gets a whole
+  extra round, measured at ~10s for a 5s budget. It is 3.6s now.
+
+  Tests: `token_checks` in `test/engine.c` (hex, length, two differ, a buffer
+  too small refused rather than half-filled, an even-sized buffer accepted —
+  the dev server's is `char[40]`, and an API that refuses its only caller's
+  buffer is an outage), and two in `test/dev.test.js` that each fail on the
+  unfixed code — a 64 MiB request, where the client gets to write all of it
+  without the cap, and a paused reader, where the answer takes 13.7s without
+  the response deadline.
 - **B18 — Watcher scan is O(n²)**: `snapshot_changes` looks each file up with a
   linear `find` ([watch.c:63–91](../src/watch.c#L63-L91)) every 120 ms. Both
   snapshots come from `fsx_list`, which sorts, so a merge would be linear.
