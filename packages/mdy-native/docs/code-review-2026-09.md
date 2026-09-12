@@ -27,7 +27,7 @@ what those checks do not reach.
 | B3 | ~~High~~ **fixed** | `engine.c` render memo | `$.render` of a `.md` document yielded an empty or *wrong* token |
 | B4 | ~~High~~ **fixed** | `engine.c` querying | `$.find` was cubic in the size of the set |
 | B5 | ~~Medium~~ **fixed** | `engine.c` / `nis.c` | The nisaba collection was never closed: memory grew on every rebuild |
-| B6 | Medium | `engine.c` render memo | The two-generation memo never hits across builds |
+| B6 | ~~Medium~~ **fixed** | `engine.c` render memo | The two-generation memo never hit across builds |
 | B7 | Medium | parser, writer, engine, YAML | Unbounded recursion: crafted input crashes the process |
 | B8 | Medium | `engine.c` directory walk | A file name containing `"` or `\` silently loses its identity |
 | B9 | Medium | `yaml.c` | Text after a closing quote is silently dropped |
@@ -43,9 +43,9 @@ what those checks do not reach.
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3), and
 the maintainability items in §4 — of which the most important is that the
 directory walk, the dev server and the HTTP layer have no tests that could
-have caught B1–B3, B5, B6 or B10. (B1's, B2's, B3's, B4's and B5's fixes come
-with the first five — `data_file_checks`, `blank_file_checks`,
-`markdown_render_checks`, `query_order_checks` and `reopen_checks` in
+have caught B1–B3, B5, B6 or B10. (B1's through B6's fixes come with the
+first six — `data_file_checks`, `blank_file_checks`, `markdown_render_checks`,
+`query_order_checks`, `reopen_checks` and `memo_key_checks` in
 `test/engine.c`.)
 
 ---
@@ -158,14 +158,14 @@ source, it is just no longer at risk of being re-split.
 #### B3 — `$.render` of a `.md` document returns an empty or wrong token (High) — FIXED
 
 **Fixed.** `render_tree_out` has one exit. The markdown branch sets `out` and
-jumps to `done:` ([engine.c:4921](../src/engine.c#L4921)) like every other
+jumps to `done:` ([engine.c:4961](../src/engine.c#L4961)) like every other
 path, so `e->last_render_key` is written for it too and `render_native` parks
 the tree under the key of the render that actually made it.
 
 The other two exits went with it, which is B12 below. The index check is a
-`FAIL` ([engine.c:4910](../src/engine.c#L4910)) and gives back the depth and
+`FAIL` ([engine.c:4950](../src/engine.c#L4950)) and gives back the depth and
 the `current` it had already taken; the cycle guard moved ABOVE everything
-`done:` restores ([engine.c:4875](../src/engine.c#L4875)), which is what
+`done:` restores ([engine.c:4915](../src/engine.c#L4915)), which is what
 earns it the right to skip the label — there is nothing yet to give back.
 Before the move it silently cleared the enclosing render's `taint` on its way
 out.
@@ -279,20 +279,46 @@ all: the second open reached a collection that still had the first set's
 `path` index and nisaba refused it with `-2`. It works now, and the second set
 is the whole set. On the old engine two of its three assertions fail.
 
-#### B6 — The memo never hits across builds (Medium)
+#### B6 — The memo never hits across builds (Medium) — FIXED
 
-The memo is documented as keeping two generations so "a rebuild may reuse the
-build before it" ([engine.h:193–200](../src/engine.h#L193-L200)). The key is
-`document_fingerprint`, which hashes the document's *record* as returned from
-nisaba ([engine.c:4814–4826](../src/engine.c#L4814-L4826)) — and the record
-includes `_id`, a fresh ObjectId minted at every open
-([2573](../src/engine.c#L2573)). Two builds of the same unchanged site never
-share a key.
+**Fixed.** `document_fingerprint` hashes the record without `_id`
+([engine.c:4862](../src/engine.c#L4862)). `canonical_hash` grew one parameter
+for it ([engine.c:4785](../src/engine.c#L4785)) — a single key left out, of
+the TOP object only, since a value nested inside may legitimately be called
+the same thing and is the document's own business. mdy-docs hashes
+`doc.data`, which is this record before nisaba puts an id on it.
 
-Measured with `MDY_MEMO_DEBUG=1` over three consecutive rotate+open+render
-cycles of `examples/blog`: every cycle reports the same `4 hits, 34 misses,
-30 kept`. Zero cross-generation hits. Skip `_id` (and only `_id`) when hashing
-the record, and the rebuild path gets what the design promised.
+Enabling cross-set hits needed one thing more. The memo is shared by every set
+in the process, and two documents with the same text and the same record still
+render differently under a different element allowlist, a different task form
+or different values in scope — so those go into the fingerprint beside the
+record ([engine.c:4849](../src/engine.c#L4849)). mdy-docs folds in its own
+equivalent, the native names a set offers, and gives the same reason. Nothing
+had needed it before because `_id` was keeping every set's keys apart by
+accident.
+
+`MDY_MEMO_DEBUG=1` over consecutive rotate+open+render cycles of
+`examples/blog`:
+
+```
+before              after
+cycle 1:  4 hits, 34 misses    cycle 1:   4 hits, 34 misses
+cycle 2:  4 hits, 34 misses    cycle 2:  34 hits,  4 misses
+cycle 3:  4 hits, 34 misses    cycle 3:  34 hits,  4 misses
+```
+
+100 rebuild cycles of the same site take 2.27 s and now take 0.95 s, and peak
+RSS over 400 of them is 12.9 MB where B5's fix alone left it at 15.8 — a hit
+is a parse that does not happen.
+
+Regression test: `memo_key_checks` ([test/engine.c:671](../test/engine.c#L671)).
+The key is not reachable from the API but its shadow is: a composed document's
+token carries the key of the render it stands for, and `$.text` hands the token
+back in the text. Two builds of one source name that render the same now and
+did not before; two builds under different knobs still do not, which is what
+pins the second half. End to end, `mdy --watch` over a site whose `.md` is
+edited and then reverted serves the edit, and then serves the original from
+the generation that still held it.
 
 #### B7 — Unbounded recursion on nested input (Medium)
 
@@ -603,7 +629,7 @@ in the file's own section comments: the walk (`open_dir_inner`,
 be a file with a small internal header.
 
 **Long functions with several exits.** `render_tree_out`
-([4843–5146](../src/engine.c#L4843-L5146), ~300 lines) manages seven GC roots
+([4883–5186](../src/engine.c#L4883-L5186), ~300 lines) manages seven GC roots
 and a `FAIL` macro that jumps to `done:`. It had three early returns that
 *bypassed* `done:` — one was B3, another B12, the third silently cleared the
 enclosing render's `taint` — and it has one exit now. Length is what let three
@@ -680,7 +706,7 @@ against the checked-in headers would catch a `property-information` upgrade.
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`
 ([engine.c:2279](../src/engine.c#L2279), [2989](../src/engine.c#L2989),
-[5095](../src/engine.c#L5095)), the unused parameter above, and two from stb
+[5135](../src/engine.c#L5135)), the unused parameter above, and two from stb
 under `STBI_ONLY_PNG`. A non-const `mdy_root_mut` in `mdybuild.h` (or
 `-Wno-unused-function` around the stb include) makes the build silent, which
 is the only state in which a *new* warning is noticed.
@@ -709,9 +735,8 @@ accumulating.
 
 ## 5. Suggested order
 
-1. ~~B3~~, ~~B12~~, B6 were one change: give `render_tree_out` a single exit
-   and hash the record without `_id`. The single exit is done; B6 is the
-   other half and is untouched — skip `_id` in `document_fingerprint`.
+1. ~~B3~~, ~~B12~~, ~~B6~~ were one change: give `render_tree_out` a single
+   exit and hash the record without `_id`. Both halves done.
 2. ~~B1~~, ~~B2~~, B8: stop building identity as text. Done as far as the
    document text goes — the files are separate sources and the counting logic
    is gone. B8 is what remains: identity is still YAML written by `snprintf`,

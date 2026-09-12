@@ -4769,7 +4769,20 @@ static mdy_doc *memo_copy(const mdy_doc *stored) {
 /* JSON of a value with every object's keys sorted — JSON.stringify's shape,
  * in an order that does not depend on the engine's — folded into `h`. */
 static int key_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
+/*
+ * `skip`, when it is not NULL, is one key left OUT — of the TOP object only.
+ * A value nested inside may legitimately be called the same thing and is the
+ * document's own business; what this is for is `_id`, which the record wears
+ * on the outside and which says nothing about the document. See
+ * document_fingerprint.
+ */
+static uint64_t canonical_hash_without(mdy_engine *e, JsValue v, uint64_t h, const char *skip);
 static uint64_t canonical_hash(mdy_engine *e, JsValue v, uint64_t h) {
+    return canonical_hash_without(e, v, h, NULL);
+}
+
+static uint64_t canonical_hash_without(mdy_engine *e, JsValue v, uint64_t h, const char *skip) {
     if (js_is_undefined(v)) return fnv64(h, "undefined", 9);
     if (js_is_null(v)) return fnv64(h, "null", 4);
     if (js_is_bool(v)) return js_get_bool(v) ? fnv64(h, "true", 4) : fnv64(h, "false", 5);
@@ -4795,7 +4808,8 @@ static uint64_t canonical_hash(mdy_engine *e, JsValue v, uint64_t h) {
         h = fnv64(h, "{", 1);
         for (size_t i = 0; i < m; i++) {
             JsValue val = js_object_get(e->vm, v, key(e->vm, names[i]));
-            if (!js_is_undefined(val) && !js_is_function(val)) {
+            int left_out = skip && strcmp(names[i], skip) == 0;
+            if (!left_out && !js_is_undefined(val) && !js_is_function(val)) {
                 h = fnv64(h, names[i], strlen(names[i]));
                 h = fnv64(h, ":", 1);
                 h = canonical_hash(e, val, h);
@@ -4809,17 +4823,43 @@ static uint64_t canonical_hash(mdy_engine *e, JsValue v, uint64_t h) {
     return fnv64(h, "?", 1);
 }
 
-/* What the document IS: its text and its record — path, identity, its own
- * data — hashed once, the first time it is rendered. */
+/*
+ * What the document IS: its text and its record — path, identity, its own
+ * data — hashed once, the first time it is rendered.
+ *
+ * Without `_id`, which is the one thing in a record that is not about the
+ * document: a fresh ObjectId minted every time a set is opened. Including it
+ * made the fingerprint say WHEN the set was opened, so two builds of an
+ * unchanged site never shared a key and the memo's second generation — which
+ * exists precisely so "a rebuild may reuse the build before it" — matched
+ * nothing, ever. mdy-docs hashes `doc.data`, which is the same record before
+ * nisaba puts an id on it.
+ *
+ * What the ENGINE brings goes in beside the document, because the memo is
+ * shared by every set in the process and this is what now lets two of them
+ * meet: the same text and the same record still render differently under a
+ * different element allowlist, a different task form, or different values in
+ * scope. mdy-docs folds in its own equivalent — the native names a set
+ * offers — and says the same thing about why.
+ */
 static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
     Document *d = &e->docs[index];
     if (d->fingerprint) return d->fingerprint;
     uint64_t h = 1469598103934665603u;
+    char knobs[8];
+    int klen = snprintf(knobs, sizeof knobs, "s%dt%d", e->sanitize ? 1 : 0, e->tasks ? 1 : 0);
+    h = fnv64(h, knobs, klen > 0 ? (size_t)klen : 0);
+    for (size_t i = 0; i < e->scope_count; i++) {
+        h = fnv64(h, e->scope_names[i], strlen(e->scope_names[i]));
+        h = fnv64(h, "=", 1);
+        h = fnv64(h, e->scope_json[i], strlen(e->scope_json[i]));
+        h = fnv64(h, "\0", 1);
+    }
     h = fnv64(h, d->chunk.text, d->chunk.len);
     h = fnv64(h, "\0", 1);
     JsValue record = document_record(e, index);
     js_gc_protect(e->vm, &record);
-    h = canonical_hash(e, record, h);
+    h = canonical_hash_without(e, record, h, "_id");
     js_gc_unprotect(e->vm, &record);
     d->fingerprint = h ? h : 1;
     return d->fingerprint;

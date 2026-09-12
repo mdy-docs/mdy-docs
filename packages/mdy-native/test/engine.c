@@ -635,6 +635,64 @@ static void reopen_checks(void) {
 }
 
 
+/* ---- what a document IS, across builds --------------------------------------
+ *
+ * The render memo keeps two generations so a rebuild may reuse the build
+ * before it, which is what `mdy dev` and `--watch` are for. The key is the
+ * document's fingerprint, and the fingerprint hashed the RECORD as nisaba
+ * hands it back — `_id` included, and `_id` is a fresh ObjectId minted every
+ * time a set is opened. So it said WHEN the set was opened rather than what
+ * the document is: over examples/blog every rebuild reported the same 4 hits
+ * and 34 misses, forever, and the second generation matched nothing.
+ *
+ * The key is not reachable from the API, but its shadow is. A composed
+ * document's token carries the key of the render it stands for, and `$.text`
+ * hands the token back in the text — so two builds of one source name the same
+ * render the same way, or they do not.
+ *
+ * And two builds under different engine knobs must NOT: the memo is shared by
+ * every set in the process, and the same text under a different element
+ * allowlist is a different render. That is why the knobs are in the
+ * fingerprint beside the record, and it is what mdy-docs folds its native
+ * names in for.
+ */
+static char *composed_text(int sanitize) {
+    const char *source = "before {{ $.render(1) }} after\n---\n= Card\n";
+    mdy_engine *e = mdy_engine_new();
+    char err[256];
+    mdy_engine_set_sanitize(e, sanitize);
+    char *text = NULL;
+    if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0)
+        text = mdy_engine_render_text(e, 0, err, sizeof err);
+    mdy_engine_free(e);
+    return text;
+}
+
+static void memo_key_checks(void) {
+    printf("\n--- engine: what a document is, across builds ---\n");
+
+    /* Three builds, each rotating the memo first, as the CLI does per save. */
+    mdy_engine_rotate_memo();
+    char *once = composed_text(0);
+    mdy_engine_rotate_memo();
+    char *again = composed_text(0);
+    mdy_engine_rotate_memo();
+    char *stricter = composed_text(1);
+
+    ok_("a composed document hands its token back in the text",
+        once && strstr(once, "\xee\x80\x80") != NULL && strstr(once, "\xee\x80\x81") != NULL,
+        once);
+    ok_("...and the next build of the same source names that render the same",
+        once && again && strcmp(once, again) == 0, again);
+    ok_("...while a set read under different rules is a different render",
+        once && stricter && strcmp(once, stricter) != 0, stricter);
+
+    free(once);
+    free(again);
+    free(stricter);
+}
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1537,6 +1595,7 @@ int main(void) {
     markdown_render_checks();
     query_order_checks();
     reopen_checks();
+    memo_key_checks();
     natives_checks();
     resize_checks();
     gc_checks();
