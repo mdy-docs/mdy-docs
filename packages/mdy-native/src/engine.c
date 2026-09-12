@@ -38,6 +38,10 @@
  */
 typedef struct { char id[24]; mdy_doc *doc; mdy_node *tree; int is_toc; } Held;
 
+/* One document's index, under the `_id` it was inserted with — see
+ * `oid_slots` on the engine. An empty `hex` is an empty slot. */
+typedef struct { char hex[25]; int index; } OidSlot;
+
 typedef struct Resized Resized;
 
 /* One document of an open set. Its TEXT is here; its DATA is in nisaba. */
@@ -150,6 +154,14 @@ struct mdy_engine {
     JsValue render_res;         /* the `res` of the render in progress, for its references */
     /* `_id` to index, in insertion order, so a hit maps back to its document. */
     uint8_t (*ids)[12];
+    /*
+     * The same thing the other way round, so putting an answer back into
+     * document order is a lookup rather than a scan. Open addressing on the
+     * 24 hex characters; built the first time a query asks for it and thrown
+     * away with the set, since it is exactly as valid as `ids` is.
+     */
+    OidSlot *oid_slots;
+    size_t oid_cap;
 
     /*
      * The import graph. `root` is this package's own directory; `imports` is
@@ -1964,7 +1976,7 @@ int mdy_engine_open_dir(mdy_engine *e, const char *root, char *error, size_t err
     return open_dir_inner(e, abs, cache, NULL, error, error_len);
 }
 
-static int index_of_id(mdy_engine *e, const char *hex);
+static int index_of_id(mdy_engine *e, const char *hex, size_t len);
 static JsValue run_query(mdy_engine *e, JsValue query, int one);
 
 /*
@@ -1980,7 +1992,7 @@ int mdy_engine_entry(mdy_engine *e, const char *entry) {
     js_gc_unprotect(e->vm, &query);
     if (!js_is_object(hit)) return -1;
     char *id = js_string_utf8(js_object_get(e->vm, hit, key(e->vm, "_id")));
-    int at = id ? index_of_id(e, id) : -1;
+    int at = id ? index_of_id(e, id, strlen(id)) : -1;
     free(id);
     return at;
 }
@@ -2218,7 +2230,7 @@ static int resolve_target(mdy_engine *e, JsValue target) {
     /* A document from `$.find` carries the id it was inserted with. */
     char *id = js_string_utf8(js_object_get(e->vm, target, key(e->vm, "_id")));
     if (id) {
-        int at = index_of_id(e, id);
+        int at = index_of_id(e, id, strlen(id));
         free(id);
         if (at >= 0) return at;
     }
@@ -2227,7 +2239,7 @@ static int resolve_target(mdy_engine *e, JsValue target) {
     if (!js_is_object(hit)) return -1;
     char *hit_id = js_string_utf8(js_object_get(e->vm, hit, key(e->vm, "_id")));
     if (!hit_id) return -1;
-    int at = index_of_id(e, hit_id);
+    int at = index_of_id(e, hit_id, strlen(hit_id));
     free(hit_id);
     return at;
 }
@@ -2363,9 +2375,12 @@ static void close_set(mdy_engine *e) {
     for (size_t i = 0; i < e->count; i++) mdy_data_free(e->docs[i].fences);
     free(e->docs);
     free(e->ids);
+    free(e->oid_slots);
     mdy_documents_free(e->source_docs);
     e->docs = NULL;
     e->ids = NULL;
+    e->oid_slots = NULL;
+    e->oid_cap = 0;
     e->source_docs = NULL;
     e->count = 0;
 }
@@ -2714,18 +2729,68 @@ static JsValue context_value(mdy_engine *e, const char *json, int strict) {
  * order the database walked its keys in. That is what makes a query's answer
  * the same on every build.
  */
-static int index_of_id(mdy_engine *e, const char *hex) {
-    static const char *H = "0123456789abcdef";
+static void id_hex(const uint8_t id[12], char out[25]) {
+    static const char H[] = "0123456789abcdef";
+    for (int k = 0; k < 12; k++) {
+        out[k * 2] = H[id[k] >> 4];
+        out[k * 2 + 1] = H[id[k] & 15];
+    }
+    out[24] = '\0';
+}
+
+static uint32_t oid_hash(const char *hex) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 24; i++) { h ^= (unsigned char)hex[i]; h *= 16777619u; }
+    return h;
+}
+
+/*
+ * The map, built once for the set.
+ *
+ * This used to be a linear search that re-formatted every `_id` in the set on
+ * every step — inside a loop over every document, itself inside a loop over
+ * every hit. A `$.find({})` over 600 documents took 1.8 seconds against
+ * node's 0.7, and 1,200 took 12.7: doubling the corpus cost seven times the
+ * work, because the work was cubic in the size of the set.
+ */
+static int oid_map_build(mdy_engine *e) {
+    size_t cap = 16;
+    while (cap < e->count * 2) cap *= 2;
+    OidSlot *slots = calloc(cap, sizeof *slots);
+    if (!slots) return -1;
     for (size_t i = 0; i < e->count; i++) {
-        char have[25];
-        for (int k = 0; k < 12; k++) {
-            have[k * 2] = H[e->ids[i][k] >> 4];
-            have[k * 2 + 1] = H[e->ids[i][k] & 15];
-        }
-        have[24] = '\0';
-        if (strcmp(have, hex) == 0) return (int)i;
+        char hex[25];
+        id_hex(e->ids[i], hex);
+        size_t at = oid_hash(hex) & (cap - 1);
+        while (slots[at].hex[0]) at = (at + 1) & (cap - 1);
+        memcpy(slots[at].hex, hex, sizeof hex);
+        slots[at].index = (int)i;
+    }
+    e->oid_slots = slots;
+    e->oid_cap = cap;
+    return 0;
+}
+
+/* `hex` is the 24 characters of an ObjectId; anything else belongs to no
+ * document in this set. */
+static int index_of_id(mdy_engine *e, const char *hex, size_t len) {
+    if (len != 24) return -1;
+    if (!e->oid_slots && oid_map_build(e) != 0) return -1;
+    size_t at = oid_hash(hex) & (e->oid_cap - 1);
+    for (size_t probe = 0; probe < e->oid_cap; probe++) {
+        if (!e->oid_slots[at].hex[0]) return -1;      /* a hole ends the run */
+        if (memcmp(e->oid_slots[at].hex, hex, 24) == 0) return e->oid_slots[at].index;
+        at = (at + 1) & (e->oid_cap - 1);
     }
     return -1;
+}
+
+/* A hit, and where in the set it belongs. */
+typedef struct { int at; uint32_t hit; } Placed;
+
+static int by_document_index(const void *a, const void *b) {
+    int x = ((const Placed *)a)->at, y = ((const Placed *)b)->at;
+    return x < y ? -1 : x > y ? 1 : 0;
 }
 
 /*
@@ -2763,16 +2828,36 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query, 
     uint32_t n = js_array_length(hits);
     JsValue ordered = js_array_new(e->ctx, n);
     js_gc_protect(e->vm, &ordered);
-    for (size_t want = 0; want < store->count; want++) {
-        for (uint32_t i = 0; i < n; i++) {
-            JsValue hit = js_array_get(hits, i);
-            char *id = js_string_utf8(js_object_get(e->vm, hit, key(e->vm, "_id")));
-            if (!id) continue;
-            int at = index_of_id(store, id);
-            free(id);
-            if (at == (int)want) push_item(e, ordered, hit);
-        }
+    /*
+     * Each hit's `_id` read ONCE, and the atom for it made once as well: both
+     * were being redone on every step of a nested loop. Reading the units in
+     * place allocates nothing, which also means there is no safe point in
+     * this loop and so nothing in it to root.
+     */
+    JsValue id_key = key(e->vm, "_id");
+    js_gc_protect(e->vm, &id_key);
+    Placed *order = n ? malloc((size_t)n * sizeof *order) : NULL;
+    uint32_t placed = 0;
+    for (uint32_t i = 0; order && i < n; i++) {
+        size_t ulen = 0;
+        const uint16_t *u = js_string_units(js_object_get(e->vm, js_array_get(hits, i), id_key), &ulen);
+        if (!u || ulen != 24) continue;
+        char hex[25];
+        for (size_t k = 0; k < 24; k++) hex[k] = u[k] < 128 ? (char)u[k] : '?';
+        hex[24] = '\0';
+        int at = index_of_id(store, hex, 24);
+        if (at < 0) continue;                    /* not a document of this set */
+        order[placed].at = at;
+        order[placed].hit = i;
+        placed++;
     }
+    /* No two documents share an `_id`, so there are no ties to break and the
+     * sort's instability is not reachable. */
+    if (order) qsort(order, placed, sizeof *order, by_document_index);
+    for (uint32_t k = 0; k < placed; k++)
+        push_item(e, ordered, js_array_get(hits, order[k].hit));
+    free(order);
+    js_gc_unprotect(e->vm, &id_key);
     js_gc_unprotect(e->vm, &ordered);
     js_gc_unprotect(e->vm, &hits);
 

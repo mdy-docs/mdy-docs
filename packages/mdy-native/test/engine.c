@@ -499,6 +499,92 @@ static void markdown_render_checks(void) {
 }
 
 
+/* ---- an answer in document order --------------------------------------------
+ *
+ * A hit carries the `_id` it was inserted with, and the answer is put back
+ * into the order the documents were written in — never the order the database
+ * happened to walk its keys in. Resolving a hit's id to its document used to
+ * be a scan that re-formatted every id in the set on every step, inside a loop
+ * over every document, inside a loop over every hit: cubic, and a $.find({})
+ * over 1,200 documents took twelve seconds. It is a map now, built once.
+ *
+ * That is a change of cost and not of answer, so what this pins is the answer,
+ * at a size where the map has real collisions and probe runs in it. Two
+ * hundred documents numbered BACKWARDS against their own positions, so an
+ * answer in id order, in `n` order, or in any order but the set's says so
+ * loudly. Every expected value is what `node bin/mdy.js` writes for the same
+ * source.
+ */
+static void query_order_checks(void) {
+    printf("\n--- engine: an answer in document order ---\n");
+
+    enum { N = 200 };
+    size_t cap = 64 * 1024;
+    char *source = malloc(cap);
+    char *want = malloc(4 * 1024);
+    if (!source || !want) {
+        printf("  FAIL  out of memory\n");
+        failures++;
+        free(source); free(want);
+        return;
+    }
+    size_t len = (size_t)snprintf(source, cap,
+        "%% $.emit('order.txt', $.find({ role: 'item' }).map((d) => d.n).join(','))\n"
+        "%% $.emit('first.txt', String($.findOne({ role: 'item' }).n))\n"
+        "%% $.emit('text.txt', JSON.stringify($.text($.findOne({ n: 7 }))))\n"
+        "%% $.emit('render.txt', $.html($.render($.findOne({ n: 7 }))))\n");
+    size_t wlen = 0;
+    for (int i = N; i >= 1; i--) {
+        len += (size_t)snprintf(source + len, cap - len,
+                                "---\n+++\nrole: item\nn: %d\n+++\nbody %d\n", i, i);
+        wlen += (size_t)snprintf(want + wlen, 4 * 1024 - wlen, i == N ? "%d" : ",%d", i);
+    }
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open(e, source, len, err, sizeof err) != 0) {
+        printf("  FAIL  open a set of %d documents\n      %s\n", N, err);
+        failures++;
+        mdy_engine_free(e);
+        free(source); free(want);
+        return;
+    }
+    ok_("a set of two hundred documents opens", mdy_engine_count(e) == N + 1, NULL);
+
+    char *html = mdy_engine_render(e, 0, err, sizeof err);
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(source); free(want);
+        return;
+    }
+    free(html);
+
+    ok_("...and every hit comes back in the order the documents were written",
+        emitted("order.txt") && strcmp(emitted("order.txt"), want) == 0,
+        emitted("order.txt"));
+    ok_("...so findOne is the FIRST of them, not the lowest id",
+        emitted("first.txt") && strcmp(emitted("first.txt"), "200") == 0,
+        emitted("first.txt"));
+    /* Both of these resolve a hit's own `_id` back to its document, which is
+     * the same lookup from the other direction. */
+    ok_("a hit resolves back to the document it came from",
+        emitted("text.txt") && strcmp(emitted("text.txt"), "\"body 7\"") == 0,
+        emitted("text.txt"));
+    ok_("...and renders as that one",
+        emitted("render.txt") && strcmp(emitted("render.txt"), "<p>body 7</p>") == 0,
+        emitted("render.txt"));
+
+    mdy_engine_free(e);
+    free(source);
+    free(want);
+}
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1399,6 +1485,7 @@ int main(void) {
     data_file_checks();
     blank_file_checks();
     markdown_render_checks();
+    query_order_checks();
     natives_checks();
     resize_checks();
     gc_checks();
