@@ -43,6 +43,18 @@
 extern "C" {
 #endif
 
+/*
+ * How deep a flow collection may nest.
+ *
+ * `a: ` followed by two hundred thousand `[` is one short line and two
+ * hundred thousand stack frames in the reader, and two hundred thousand more
+ * in everything that walks the value afterwards — the JSON writer here, the
+ * binjson encoder, the engine's canonical hash. Past this it is refused with
+ * a message naming the line, which is what this reader does with everything
+ * it will not guess at.
+ */
+#define MDY_YAML_MAX_DEPTH 256
+
 typedef enum {
     MDY_YAML_NULL = 0,
     MDY_YAML_BOOL,

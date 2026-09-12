@@ -214,6 +214,30 @@ int main(void) {
         mdy_yaml_free(doc);
     }
 
+    /*
+     * `a: ` and two hundred thousand `[` is one short line, two hundred
+     * thousand frames in the reader and as many again in everything that
+     * walks the value afterwards. It is refused, like everything else this
+     * reader will not guess at.
+     */
+    printf("--- how deep a flow collection gets ---\n");
+    {
+        size_t asked = 200000;
+        char *source = malloc(asked * 2 + 8);
+        if (!source) { printf("  FAIL  out of memory\n"); failures++; }
+        else {
+            memcpy(source, "a: ", 3);
+            memset(source + 3, '[', asked);
+            memset(source + 3 + asked, ']', asked);
+            source[3 + asked * 2] = '\0';
+            refuses("nested past what the reader will follow", source,
+                    "line 1: nested deeper than this reads");
+            free(source);
+        }
+        check("...and an ordinary flow collection still nests",
+              "a: [[[1]]]", "{\"a\":[[[1]]]}");
+    }
+
     if (failures) {
         printf("\n%d check%s failed\n", failures, failures == 1 ? "" : "s");
         return 1;

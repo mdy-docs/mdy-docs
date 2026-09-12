@@ -89,6 +89,23 @@ typedef struct mdy_prop {
     struct mdy_prop *next;   /* insertion order, which the emitter preserves */
 } mdy_prop;
 
+/*
+ * How deep a tree this library builds can be.
+ *
+ * Every pass over a tree recurses per level — the HTML writer, the cloner,
+ * the token splicer, the heading collector, the two that carry a tree into
+ * the JavaScript and back — so a tree deeper than the stack is a crash in
+ * whichever of them runs first, far from whatever made it. Rather than a
+ * check in each, the trees are built shallow enough that none of them needs
+ * one: `mdy_parse_block` will not nest past this, and neither will the
+ * engine's `$.node`. md4c's front end holds itself to 128 the same way.
+ *
+ * 256 is some five times deeper than any document in the corpus and some
+ * hundred times shallower than where the deepest pass measured runs out of
+ * stack, which is the margin the next pass to be written gets for free.
+ */
+#define MDY_MAX_DEPTH 256
+
 typedef struct mdy_node {
     mdy_node_type type;
     const char *tag;         /* MDY_ELEMENT: interned tag name */

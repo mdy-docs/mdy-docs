@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "engine.h"
+#include "mdyast.h"
 #include "fsx.h"
 #include "binjson.h"
 #include "bjval.h"
@@ -692,6 +693,65 @@ static void memo_key_checks(void) {
     free(stricter);
 }
 
+
+/* ---- values a document can make deeper than the walk ------------------------
+ *
+ * Everything that carries a tree or a value recurses per level, and a document
+ * can build sixty thousand levels in two lines of its own code — no crafted
+ * file needed, just a loop. `$.node` of such a tree was a segfault, and so was
+ * such an object handed to `$.render` as its request.
+ *
+ * Two thousand rather than sixty: what is checked here is the BOUND, which
+ * bites at two hundred and fifty-six either way, and sixty thousand nested
+ * objects built in the guest is a minute of this suite's time for nothing.
+ * Where the old engine used to die is in the review; what stops it is that the
+ * tree comes back the depth this says and not the depth it was given.
+ */
+static void deep_value_checks(void) {
+    printf("\n--- engine: values deeper than the walk ---\n");
+
+    const char *built =
+        "% let t = { type: 'text', value: 'x' }\n"
+        "% for (let i = 0; i < 2000; i++) t = { type: 'element', tagName: 'div', properties: {}, children: [t] }\n"
+        "{{ $.node(t) }}\n";
+    const char *requested =
+        "% let o = 1\n"
+        "% for (let i = 0; i < 2000; i++) o = { a: o }\n"
+        "{{ $.render(1, { q: o }) }} and {{ $.render(1, { q: o, n: 2 }) }}\n"
+        "---\n= Card\n";
+
+    {
+        mdy_engine *e = mdy_engine_new();
+        char err[256];
+        char *html = NULL;
+        if (mdy_engine_open(e, built, strlen(built), err, sizeof err) == 0)
+            html = mdy_engine_render(e, 0, err, sizeof err);
+        size_t divs = 0;
+        for (const char *p = html; p && (p = strstr(p, "<div>")); p += 5) divs++;
+        int ok = html && divs == MDY_MAX_DEPTH;
+        printf("  %s  a tree the document built two thousand deep comes back at the limit\n",
+               ok ? "ok  " : "FAIL");
+        if (!ok) { printf("      %zu divs, limit %d (%s)\n", divs, MDY_MAX_DEPTH,
+                          html ? "rendered" : err); failures++; }
+        free(html);
+        mdy_engine_free(e);
+    }
+    {
+        mdy_engine *e = mdy_engine_new();
+        char err[256];
+        char *html = NULL;
+        if (mdy_engine_open(e, requested, strlen(requested), err, sizeof err) == 0)
+            html = mdy_engine_render(e, 0, err, sizeof err);
+        /* Both renders happen and neither is remembered: a key that stopped
+         * short of what tells two requests apart would answer the wrong one.
+         * So they are named by count instead, and two of them are two. */
+        ok_("...and two requests nested that deep are two renders, not one twice",
+            html && strcmp(html, "<p><h1 id=\"card\">Card</h1> and <h1 id=\"card\">Card</h1></p>") == 0,
+            html ? html : err);
+        free(html);
+        mdy_engine_free(e);
+    }
+}
 
 /* ---- the collector, and values this engine has just built --------------------
  *
@@ -1596,6 +1656,7 @@ int main(void) {
     query_order_checks();
     reopen_checks();
     memo_key_checks();
+    deep_value_checks();
     natives_checks();
     resize_checks();
     gc_checks();

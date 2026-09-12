@@ -836,6 +836,68 @@ int main(void) {
         mdy_free(doc);
     }
 
+    /*
+     * How deep a tree this builds, which is not a matter of taste: every pass
+     * over a tree recurses per level, so one line of four hundred thousand
+     * spaces — two hundred thousand nested <div>s, and the only construct
+     * here that nests without the source growing with it — was a segfault in
+     * whichever pass ran first. The nesting stops at MDY_MAX_DEPTH and the
+     * rest of the line is read flat, with a warning that says so.
+     */
+    printf("--- how deep a tree gets ---\n");
+    {
+        size_t asked = 200000;
+        char *source = malloc(asked * 2 + 8);
+        if (!source) { printf("  FAIL  out of memory\n"); failures++; }
+        else {
+            memset(source, ' ', asked * 2);
+            source[asked * 2] = 'x';
+            source[asked * 2 + 1] = '\0';
+
+            mdy_doc *doc = mdy_parse(source, 0, NULL);
+            /* Down the chain of elements, iteratively — a recursive measure
+             * of a tree this test exists to bound would go over the same
+             * cliff it is checking for. */
+            size_t deepest = 0;
+            for (const mdy_node *n = mdy_root(doc); n; ) {
+                const mdy_node *into = NULL;
+                for (const mdy_node *c = n->first; c; c = c->next)
+                    if (c->type == MDY_ELEMENT) { into = c; break; }
+                if (!into) break;
+                deepest++;
+                n = into;
+            }
+            /* The chain the indentation asked for, plus the one element the
+             * line itself became — a paragraph at the bottom of it. */
+            int ok = deepest > 0 && deepest <= MDY_MAX_DEPTH + 1;
+            printf("  %s  a line indented past what any pass can walk is read flat\n",
+                   ok ? "ok  " : "FAIL");
+            if (!ok) { printf("      %zu elements deep, limit %d + the paragraph\n",
+                              deepest, MDY_MAX_DEPTH); failures++; }
+
+            int said = 0;
+            for (size_t i = 0; i < mdy_message_count(doc); i++)
+                if (strcmp(mdy_message_at(doc, i)->rule, "nesting-depth") == 0) said++;
+            printf("  %s  ...and says so, once\n", said == 1 ? "ok  " : "FAIL");
+            if (said != 1) { printf("      %d messages\n", said); failures++; }
+
+            mdy_free(doc);
+            free(source);
+        }
+
+        /* Right up to the limit it still nests, so the cap is a cap and not a
+         * rounding of everything deep down to nothing. */
+        char shallow[64];
+        snprintf(shallow, sizeof shallow, "%*sx", 8, "");
+        mdy_doc *doc = mdy_parse(shallow, 0, NULL);
+        char *json = mdy_to_json_bare(mdy_root(doc));
+        int ok = json && strstr(json, "\"tagName\":\"div\"") != NULL;
+        printf("  %s  an ordinary indent still nests\n", ok ? "ok  " : "FAIL");
+        if (!ok) { printf("      %s\n", json ? json : "(null)"); failures++; }
+        free(json);
+        mdy_free(doc);
+    }
+
     printf("\n%s\n", failures ? "FAILURES" : "all checks passed");
     return failures ? 1 : 0;
 }

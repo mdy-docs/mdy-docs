@@ -421,18 +421,36 @@ static char *js_string_utf8(JsValue v) {
     return u ? from_utf16(u, ulen) : NULL;
 }
 
-static mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v);
+/*
+ * A tree the guest built, as C nodes — `$.node`, and what a transform hands
+ * back. `depth` is counted for the reason MDY_MAX_DEPTH exists: a document
+ * can write a fifty-thousand-deep tree in three lines of its own code, and
+ * everything that walks the result afterwards recurses over it. Past the
+ * limit the branch is dropped, which is the answer the parser gives text
+ * nested that deep.
+ */
+static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth);
 
-static void js_children_to_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent, JsValue kids) {
+static mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v) {
+    return js_to_tree_at(e, doc, v, 0);
+}
+
+static void js_children_to_tree_at(mdy_engine *e, mdy_doc *doc, mdy_node *parent,
+                                   JsValue kids, size_t depth) {
     if (!js_is_array(kids)) return;
     uint32_t n = js_array_length(kids);
     for (uint32_t i = 0; i < n; i++) {
-        mdy_node *child = js_to_tree(e, doc, js_array_get(kids, i));
+        mdy_node *child = js_to_tree_at(e, doc, js_array_get(kids, i), depth);
         if (child) mdy_append(parent, child);
     }
 }
 
-static mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v) {
+static void js_children_to_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent, JsValue kids) {
+    js_children_to_tree_at(e, doc, parent, kids, 1);
+}
+
+static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth) {
+    if (depth >= MDY_MAX_DEPTH) return NULL;
     if (!js_is_object(v)) return NULL;
 
     char *type = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "type")));
@@ -453,7 +471,7 @@ static mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v) {
         if (out) {
             out->type = MDY_ROOT;
             out->text = NULL;
-            js_children_to_tree(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")));
+            js_children_to_tree_at(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")), depth + 1);
         }
     } else if (strcmp(type, "element") == 0) {
         char *tag = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "tagName")));
@@ -492,7 +510,7 @@ static mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v) {
                     free(pname);
                 }
             }
-            js_children_to_tree(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")));
+            js_children_to_tree_at(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")), depth + 1);
         }
     }
 
@@ -2276,7 +2294,8 @@ static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
         return false;
     }
 
-    char *token = hold_tree_as(e, doc, mdy_root(doc), e->last_render_key);
+    char *token = hold_tree_as(e, doc, mdy_root(doc),
+                               e->last_render_key[0] ? e->last_render_key : NULL);
     if (!token) { *result = js_undefined(); return false; }
     *result = str(e->vm, token, strlen(token));
     free(token);
@@ -4777,12 +4796,28 @@ static int key_cmp(const void *a, const void *b) { return strcmp(*(char *const *
  * on the outside and which says nothing about the document. See
  * document_fingerprint.
  */
-static uint64_t canonical_hash_without(mdy_engine *e, JsValue v, uint64_t h, const char *skip);
-static uint64_t canonical_hash(mdy_engine *e, JsValue v, uint64_t h) {
-    return canonical_hash_without(e, v, h, NULL);
-}
+static uint64_t canonical_hash_deep(mdy_engine *e, JsValue v, uint64_t h,
+                                    const char *skip, size_t depth, int *too_deep);
 
 static uint64_t canonical_hash_without(mdy_engine *e, JsValue v, uint64_t h, const char *skip) {
+    return canonical_hash_deep(e, v, h, skip, 0, NULL);
+}
+
+/*
+ * `depth` is here for the reason MDY_MAX_DEPTH is: a document can build an
+ * object sixty thousand deep in two lines of its own code and hand it to
+ * `$.render` as the request, and this walks it. Past the limit it stops and
+ * says so through `too_deep`, which is not the same as hashing a marker and
+ * carrying on: two different values nested that deep would then hash alike,
+ * and a memo key that cannot tell two requests apart is a render served to
+ * the wrong one.
+ */
+static uint64_t canonical_hash_deep(mdy_engine *e, JsValue v, uint64_t h,
+                                    const char *skip, size_t depth, int *too_deep) {
+    if (depth >= MDY_MAX_DEPTH) {
+        if (too_deep) *too_deep = 1;
+        return fnv64(h, "!", 1);
+    }
     if (js_is_undefined(v)) return fnv64(h, "undefined", 9);
     if (js_is_null(v)) return fnv64(h, "null", 4);
     if (js_is_bool(v)) return js_get_bool(v) ? fnv64(h, "true", 4) : fnv64(h, "false", 5);
@@ -4796,7 +4831,10 @@ static uint64_t canonical_hash_without(mdy_engine *e, JsValue v, uint64_t h, con
     if (js_is_array(v)) {
         h = fnv64(h, "[", 1);
         uint32_t n = js_array_length(v);
-        for (uint32_t i = 0; i < n; i++) { h = canonical_hash(e, js_array_get(v, i), h); h = fnv64(h, ",", 1); }
+        for (uint32_t i = 0; i < n; i++) {
+            h = canonical_hash_deep(e, js_array_get(v, i), h, NULL, depth + 1, too_deep);
+            h = fnv64(h, ",", 1);
+        }
         return fnv64(h, "]", 1);
     }
     if (js_is_object(v)) {
@@ -4812,7 +4850,7 @@ static uint64_t canonical_hash_without(mdy_engine *e, JsValue v, uint64_t h, con
             if (!left_out && !js_is_undefined(val) && !js_is_function(val)) {
                 h = fnv64(h, names[i], strlen(names[i]));
                 h = fnv64(h, ":", 1);
-                h = canonical_hash(e, val, h);
+                h = canonical_hash_deep(e, val, h, NULL, depth + 1, too_deep);
                 h = fnv64(h, ",", 1);
             }
             free(names[i]);
@@ -4876,7 +4914,13 @@ static void key_base36(uint64_t key, char out[24]) {
 static uint64_t memo_key(mdy_engine *e, size_t index, JsValue request) {
     uint64_t h = document_fingerprint(e, index);
     h = fnv64(h, "\0", 1);
-    h = canonical_hash(e, request, h);
+    int too_deep = 0;
+    h = canonical_hash_deep(e, request, h, NULL, 0, &too_deep);
+    /* No key at all rather than one that might belong to another request:
+     * zero is what the memo already reads as "do not remember this". The
+     * record cannot get here — it comes from YAML, which refuses to nest
+     * that deep in the first place. */
+    if (too_deep) return 0;
     return h ? h : 1;
 }
 
@@ -5168,8 +5212,14 @@ done:
     e->taint = outer_taint;
     e->render_res = outer_res;
     /* Recorded LAST, after any render inside this one recorded its own, so
-     * what $.render holds its result under is this render's key. */
-    key_base36(mkey, e->last_render_key);
+     * what $.render holds its result under is this render's key.
+     *
+     * A render with NO key — a request nested deeper than the hash will walk,
+     * see memo_key — leaves it empty, and $.render names that tree by count
+     * instead. Naming two of them after the same absent key would park both
+     * under one id, and the first would be spliced in for the second. */
+    if (mkey) key_base36(mkey, e->last_render_key);
+    else e->last_render_key[0] = '\0';
     if (rooted) {
         js_gc_unprotect(e->vm, &fn);
         js_gc_unprotect(e->vm, &promise);

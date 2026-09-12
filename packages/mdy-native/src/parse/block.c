@@ -853,7 +853,7 @@ static int is_raw_text(const char *tag) {
 }
 
 static size_t parse_element(mdy_doc *doc, mdy_node *parent,
-                            const mdy_line *lines, size_t count, size_t i) {
+                            const mdy_line *lines, size_t count, size_t i, size_t nesting) {
     const mdy_line *l = &lines[i];
 
     /*
@@ -1036,7 +1036,7 @@ static size_t parse_element(mdy_doc *doc, mdy_node *parent,
             if (lines[k].blank) continue;
             if (!seen || lines[k].indent < inner) { inner = lines[k].indent; seen = 1; }
         }
-        mdy_parse_block(doc, el, lines + i + 1, end - (i + 1), inner);
+        mdy_parse_block(doc, el, lines + i + 1, end - (i + 1), inner, nesting + 1);
     }
     separate(doc, parent);
     mdy_append(parent, el);
@@ -1277,7 +1277,8 @@ static int add_paragraph(mdy_doc *doc, mdy_node *parent, const char *joined, siz
     return 1;
 }
 
-void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size_t count, size_t base) {
+void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size_t count,
+                     size_t base, size_t nesting) {
     size_t i = 0;
     int produced = 0;
 
@@ -1316,6 +1317,34 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
              */
             size_t levels = (inner - base) / 2;
             if (levels == 0) levels = 1;
+            /*
+             * One line of four hundred thousand spaces is two hundred
+             * thousand levels, and this is the only construct that nests
+             * without the source growing with it — everything else costs an
+             * indentation step per level, which is quadratic. So it is the
+             * one that has to be held, and it is held against the depth
+             * ALREADY under `parent`: two chains one inside the other would
+             * each pass a check of their own and together be twice as deep.
+             */
+            size_t room = nesting < MDY_MAX_DEPTH ? MDY_MAX_DEPTH - nesting : 0;
+            if (levels > room) levels = room;
+            /*
+             * Nothing left to nest into. The line falls through and is read
+             * where it stands, its indentation meaning nothing — said once,
+             * here, because this is where something is actually lost: a
+             * clamp with room still left keeps nesting and comes back round
+             * to this same test one level down.
+             *
+             * Parsing the run into `parent` instead of falling through would
+             * come straight back here with the same line and the same `base`,
+             * which is not a flatter tree but a shorter road to the same
+             * crash.
+             */
+            if (levels == 0) {
+                mdy_warn(doc, lines, i, "nesting-depth",
+                         "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+                goto not_indented;
+            }
 
             mdy_node *outer = NULL, *innermost = NULL;
             for (size_t d = 0; d < levels; d++) {
@@ -1330,7 +1359,8 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                 }
                 innermost = div;
             }
-            mdy_parse_block(doc, innermost, lines + i, j - i, base + levels * 2);
+            mdy_parse_block(doc, innermost, lines + i, j - i, base + levels * 2,
+                            nesting + levels);
 
             separate(doc, parent);
             mdy_append(parent, outer);
@@ -1338,6 +1368,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
             i = j;
             continue;
         }
+    not_indented:
 
         /* --- thematic break: three or more of - * _ alone --- */
         if (thematic_break(l)) {
@@ -1446,7 +1477,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
 
         /* --- an element opener --- */
         if (l->text[0] == '<') {
-            i = parse_element(doc, parent, lines, count, i);
+            i = parse_element(doc, parent, lines, count, i, nesting);
             produced = 1;
             continue;
         }
@@ -1637,7 +1668,8 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                     size_t inner = lines[plain_end].indent;
                     for (size_t k = plain_end; k < item_end; k++)
                         if (!lines[k].blank && lines[k].indent < inner) inner = lines[k].indent;
-                    mdy_parse_block(doc, item, lines + plain_end, item_end - plain_end, inner);
+                    mdy_parse_block(doc, item, lines + plain_end, item_end - plain_end, inner,
+                                    nesting + 1);
                 }
 
                 mdy_set_position(item, lines, i, item_end > i ? item_end - 1 : i);
@@ -1989,7 +2021,7 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
         size_t body = count - start;
         strip_comments(lines + start, &body);
         collect_definitions(doc, lines + start, body);
-        mdy_parse_block(doc, doc->root, lines + start, body, 0);
+        mdy_parse_block(doc, doc->root, lines + start, body, 0, 0);
         mdy_footnote_section(doc, doc->root);
         return doc;
     }
@@ -2058,11 +2090,11 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
         if (wrapper_len == 0) {
             /* `documents: {wrapper: false}` — they run together, with no
              * element between them and the root. */
-            mdy_parse_block(doc, doc->root, lines + section_start, body, 0);
+            mdy_parse_block(doc, doc->root, lines + section_start, body, 0, 0);
             mdy_footnote_section(doc, doc->root);
         } else {
             mdy_node *article = mdy_new_element(doc, wrapper, wrapper_len);
-            mdy_parse_block(doc, article, lines + section_start, body, 0);
+            mdy_parse_block(doc, article, lines + section_start, body, 0, 1);
             mdy_footnote_section(doc, article);
             mdy_append(doc->root, article);
         }

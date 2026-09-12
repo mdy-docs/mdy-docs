@@ -582,13 +582,25 @@ static mdy_yaml_node *flow_scalar(Cur *c) {
     return flow_plain(c);
 }
 
-static mdy_yaml_node *parse_flow(Cur *c) {
+/* `depth` is how many flow collections are open around this point — see
+ * MDY_YAML_MAX_DEPTH. Carried as an argument rather than on the cursor
+ * because this branch has four ways out and a counter would have to be given
+ * back on each of them. */
+static mdy_yaml_node *parse_flow_at(Cur *c, size_t depth);
+
+static mdy_yaml_node *parse_flow(Cur *c) { return parse_flow_at(c, 0); }
+
+static mdy_yaml_node *parse_flow_at(Cur *c, size_t depth) {
     cur_skip(c);
     if (c->p->failed) return NULL;
 
     if (cur_at(c, '[') || cur_at(c, '{')) {
         int is_map = cur_at(c, '{');
         char close = is_map ? '}' : ']';
+        if (depth >= MDY_YAML_MAX_DEPTH) {
+            fail(c->p, c->line, "nested deeper than this reads");
+            return NULL;
+        }
         c->col++;
 
         mdy_yaml_node *node = new_node(c->p, is_map ? MDY_YAML_MAPPING : MDY_YAML_SEQUENCE);
@@ -629,7 +641,7 @@ static mdy_yaml_node *parse_flow(Cur *c) {
                 cur_skip(c);
                 mdy_yaml_node *v;
                 if (cur_at(c, ',') || cur_at(c, close)) v = new_node(c->p, MDY_YAML_NULL);
-                else v = parse_flow(c);
+                else v = parse_flow_at(c, depth + 1);
                 if (!v) goto flow_fail;
                 size_t klen = 0;
                 const char *ks = mdy_yaml_string(k, &klen);
@@ -650,7 +662,7 @@ static mdy_yaml_node *parse_flow(Cur *c) {
                 pairs[count].key_len = klen;
                 pairs[count].value = v;
             } else {
-                mdy_yaml_node *v = parse_flow(c);
+                mdy_yaml_node *v = parse_flow_at(c, depth + 1);
                 if (!v) goto flow_fail;
                 items[count] = v;
             }

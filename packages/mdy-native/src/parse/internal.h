@@ -247,7 +247,10 @@ void mdy_set_position(mdy_node *node, const mdy_line *lines, size_t from, size_t
  * line gets the root case wrong; inferring it from the parent gets the element
  * case wrong.
  */
-void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size_t count, size_t base);
+/* `nesting` is how many levels of tree `parent` already sits under — see
+ * MDY_MAX_DEPTH in mdyast.h. Zero at the root, one more per level added. */
+void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size_t count,
+                     size_t base, size_t nesting);
 
 /* Parse inline content into `parent`. The one entry point the block parser
  * uses, so everything textual goes through the same rules. */
