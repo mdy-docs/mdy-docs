@@ -1,0 +1,337 @@
+/*
+ * Composition: the trees a render parks, and the tokens that stand for them.
+ *
+ * `$.render` gives a document's code a few private-use characters rather than
+ * HTML, so the token travels through that code like any other string and the
+ * tree goes back in once the text around it has been parsed. Everything about
+ * that — the table a tree waits in, reading a token out of text, splicing one
+ * back, and the contents list that cannot exist until the tree does — is
+ * here. The natives that MINT tokens are not; they are where the rest of `$`
+ * is.
+ */
+#include "engine_internal.h"
+
+/* ---- composition -------------------------------------------------------------
+ *
+ * `$.render` does not return HTML, or a tree, or text. It returns a TOKEN — a
+ * few private-use characters standing for a tree the host has parked — and the
+ * token travels through the document's own code like any other string, into a
+ * variable, a template literal, an attribute. The tree goes back in once the
+ * text around it has been parsed.
+ *
+ * That is what makes `$.render` need no indentation argument: the parser
+ * already knows which element is open where the token landed, so there is no
+ * column for the caller to compute.
+ *
+ *   U+E000 <id> U+E001
+ *
+ * The id is base36 so a counter and a content-derived identity are both
+ * covered by one pattern — three regexes in compose.js have to agree about
+ * what an id looks like, and once they did not.
+ */
+#define TOKEN_OPEN  "\xee\x80\x80"      /* U+E000 as UTF-8 */
+#define TOKEN_CLOSE "\xee\x80\x81"      /* U+E001 */
+
+/* A token's id at `s`, or 0. Writes the id and how many bytes it spanned. */
+size_t token_at(const char *s, size_t len, char *id, size_t id_cap) {
+    if (len < 5 || memcmp(s, TOKEN_OPEN, 3) != 0) return 0;
+    size_t i = 3;
+    size_t n = 0;
+    while (i < len && n + 1 < id_cap) {
+        char c = s[i];
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')) { id[n++] = c; i++; continue; }
+        break;
+    }
+    id[n] = '\0';
+    if (n == 0) return 0;
+    if (i + 3 > len || memcmp(s + i, TOKEN_CLOSE, 3) != 0) return 0;
+    return i + 3;
+}
+
+/* Whoever owns the token table this engine writes into. */
+mdy_engine *token_table(mdy_engine *e) { return e->tokens ? e->tokens : e; }
+
+Held *held_find(mdy_engine *e, const char *id) {
+    mdy_engine *t = token_table(e);
+    for (size_t i = 0; i < t->held_count; i++)
+        if (strcmp(t->held[i].id, id) == 0) return &t->held[i];
+    return NULL;
+}
+
+/*
+ * Park a tree and hand back the token that stands for it.
+ *
+ * Nothing is reclaimed within a render: a token can be written into a string,
+ * kept in a variable, dropped, or used twice, and nothing here gets to decide
+ * when the last of those happened.
+ */
+char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id);
+char *hold_tree(mdy_engine *e, mdy_doc *doc, mdy_node *tree) {
+    return hold_tree_as(e, doc, tree, NULL);
+}
+
+/*
+ * `id` names the tree by what it IS rather than by when it was parked — the
+ * key of the render that made it — and a caller that can say so should: a
+ * token travels in the text a document hands back and reaches its parent
+ * inside `req`, so it is part of the parent's memo key, and sequential
+ * numbering would make two builds either side of an edit look alike. That is
+ * compose.js's `hold(tree, id)`, and it is also why the counter here counts
+ * only what mdy-docs' counts — trees a document built itself — and the ids
+ * a site's own text ends up holding match.
+ */
+char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id) {
+    mdy_engine *t = token_table(e);
+    if (t->held_count == t->held_cap) {
+        size_t want = t->held_cap ? t->held_cap * 2 : 8;
+        Held *grown = realloc(t->held, want * sizeof *grown);
+        if (!grown) return NULL;
+        t->held = grown;
+        t->held_cap = want;
+    }
+    Held *h = &t->held[t->held_count++];
+    if (id) snprintf(h->id, sizeof h->id, "%s", id);
+    else snprintf(h->id, sizeof h->id, "%zu", t->next_token++);
+    h->doc = doc;
+    h->tree = tree;
+    h->is_toc = 0;
+
+    size_t n = strlen(TOKEN_OPEN) + strlen(h->id) + strlen(TOKEN_CLOSE) + 1;
+    char *token = malloc(n);
+    if (token) snprintf(token, n, "%s%s%s", TOKEN_OPEN, h->id, TOKEN_CLOSE);
+    return token;
+}
+
+/*
+ * Keep a document alive for the rest of the render WITHOUT naming it.
+ *
+ * `$.text` and `$.parse` both produce a tree that has to outlive the call —
+ * `$.text` because a token spliced into it points at held nodes, `$.parse`
+ * because the value handed back does — but neither hands out a token for it.
+ * Minting one anyway advances the token counter, and that counter is
+ * OBSERVABLE: a token's id is in the text `$.text` returns, so a site that
+ * indexes its own output indexes the number. Two extra holds moved every id
+ * after them and a search index disagreed with mdy-docs' by one word.
+ */
+void keep_alive(mdy_engine *e, mdy_doc *doc) {
+    mdy_engine *t = token_table(e);
+    if (t->kept_count == t->kept_cap) {
+        size_t want = t->kept_cap ? t->kept_cap * 2 : 8;
+        mdy_doc **grown = realloc(t->kept, want * sizeof *grown);
+        if (!grown) return;
+        t->kept = grown;
+        t->kept_cap = want;
+    }
+    t->kept[t->kept_count++] = doc;
+}
+
+void release_held(mdy_engine *e) {
+    mdy_engine *t = token_table(e);
+    for (size_t i = 0; i < t->held_count; i++) mdy_free(t->held[i].doc);
+    free(t->held);
+    t->held = NULL;
+    t->held_count = t->held_cap = 0;
+    for (size_t i = 0; i < t->kept_count; i++) mdy_free(t->kept[i]);
+    free(t->kept);
+    t->kept = NULL;
+    t->kept_count = t->kept_cap = 0;
+}
+
+/* Whitespace, and nothing else. */
+int only_space(const char *s, size_t len) {
+    for (size_t i = 0; i < len; i++)
+        if (s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r') return 0;
+    return 1;
+}
+
+/* `^(?:\s*TOKEN)+\s*$` — a run that is nothing but tokens and space. */
+int only_tokens(const char *s, size_t len) {
+    size_t i = 0;
+    int found = 0;
+    for (;;) {
+        while (i < len && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+        if (i >= len) return found;
+        char id[24];
+        size_t used = token_at(s + i, len - i, id, sizeof id);
+        if (!used) return 0;
+        i += used;
+        found = 1;
+    }
+}
+
+/* Elements that hold a line of their own, and so cannot hold one of somebody
+ * else's — the ones a nested render is likely to produce at its top level. */
+int is_block_tag(const char *tag) {
+    static const char *const BLOCK[] = { "p", "div", "section", "article", "main", "header", "footer" };
+    for (size_t i = 0; i < sizeof BLOCK / sizeof BLOCK[0]; i++)
+        if (strcmp(BLOCK[i], tag) == 0) return 1;
+    return 0;
+}
+
+/*
+ * Block wrappers off, phrasing content out. A block cannot sit inside a
+ * sentence, so it gives up its wrapper and lends its content instead — as far
+ * down as the blocks go, since unwrapping a <div> only to find a <p> under it
+ * has solved nothing.
+ */
+static void unwrap_into(mdy_node *dest, mdy_node *source) {
+    for (mdy_node *c = source->first; c;) {
+        mdy_node *next = c->next;
+        c->next = NULL;
+        if (c->type == MDY_ELEMENT && is_block_tag(c->tag)) unwrap_into(dest, c);
+        else if (c->type == MDY_TEXT && only_space(c->text ? c->text : "", c->text ? strlen(c->text) : 0)) ;
+        else mdy_append(dest, c);
+        c = next;
+    }
+}
+
+/* What a held tree contributes where a BLOCK was expected: a root lends its
+ * children, anything else stands for itself. */
+static void block_content(mdy_node *dest, mdy_node *tree) {
+    if (tree->type == MDY_ROOT) {
+        for (mdy_node *c = tree->first; c;) {
+            mdy_node *next = c->next;
+            c->next = NULL;
+            mdy_append(dest, c);
+            c = next;
+        }
+    } else {
+        mdy_append(dest, tree);
+    }
+}
+
+/*
+ * Tokens in a run of TEXT, as the inline content they become. Anything that is
+ * not a token stays the text it was.
+ */
+static void inline_content(mdy_engine *e, mdy_doc *doc, mdy_node *dest,
+                           const char *s, size_t len) {
+    size_t i = 0, last = 0;
+    while (i < len) {
+        char id[24];
+        size_t used = token_at(s + i, len - i, id, sizeof id);
+        if (!used) { i++; continue; }
+        if (i > last) mdy_append(dest, mdy_new_text(doc, s + last, i - last));
+        Held *h = held_find(e, id);
+        if (h && h->tree) {
+            mdy_node *holder = mdy_new_element(doc, "span", 4);
+            /*
+             * A COPY, because a token can be used more than once — a site
+             * renders its colophon once and passes the same token to every
+             * page. Splicing moves nodes, so the second use would find the
+             * tree already emptied and contribute only its whitespace: a
+             * growing run of blank lines, one per page that reused it.
+             */
+            block_content(holder, mdy_clone(doc, h->tree));
+            unwrap_into(dest, holder);
+        } else {
+            mdy_append(dest, mdy_new_text(doc, s + i, used));
+        }
+        i += used;
+        last = i;
+    }
+    if (last < len) mdy_append(dest, mdy_new_text(doc, s + last, len - last));
+}
+
+/* The text of a node that is a `<p>` holding one text child, or a text node —
+ * which is what `onlyTokens` asks about. */
+const char *sole_text(const mdy_node *n, size_t *len) {
+    if (n->type == MDY_TEXT) { *len = n->text ? strlen(n->text) : 0; return n->text; }
+    if (n->type == MDY_ELEMENT && strcmp(n->tag, "p") == 0 && n->first &&
+        n->first == n->last && n->first->type == MDY_TEXT) {
+        *len = n->first->text ? strlen(n->first->text) : 0;
+        return n->first->text;
+    }
+    return NULL;
+}
+
+/*
+ * Put the held trees back where their tokens are.
+ *
+ * A paragraph holding nothing but tokens is REPLACED by what they hold — a
+ * render on a line of its own is that document, not a paragraph wrapping it.
+ * A token inside a sentence gives up its blocks instead.
+ */
+void splice_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent) {
+    mdy_node *child = parent->first;
+    parent->first = parent->last = NULL;
+
+    while (child) {
+        mdy_node *next = child->next;
+        child->next = NULL;
+
+        size_t len = 0;
+        const char *text = sole_text(child, &len);
+
+        if (text && only_tokens(text, len)) {
+            size_t i = 0;
+            int filled = 0;
+            while (i < len) {
+                char id[24];
+                size_t used = token_at(text + i, len - i, id, sizeof id);
+                if (!used) { i++; continue; }
+                Held *h = held_find(e, id);
+                if (h && h->tree) { block_content(parent, mdy_clone(doc, h->tree)); filled = 1; }
+                i += used;
+            }
+            if (filled) { child = next; continue; }
+        }
+
+        if (child->type == MDY_TEXT && child->text && strstr(child->text, TOKEN_OPEN)) {
+            inline_content(e, doc, parent, child->text, strlen(child->text));
+            child = next;
+            continue;
+        }
+
+        if (child->first) splice_tree(e, doc, child);
+        mdy_append(parent, child);
+        child = next;
+    }
+}
+
+/*
+ * A string holding tokens, as HTML — the string-shaped half of composition.
+ * `$.emit(url, $.render(page))` writes a page because a file is a string and
+ * that is the shape it can hold.
+ */
+char *fill_tokens(mdy_engine *e, const char *s, size_t len) {
+    size_t cap = len + 256, out = 0;
+    char *result = malloc(cap);
+    if (!result) return NULL;
+    result[0] = '\0';
+
+    size_t i = 0, last = 0;
+    while (i < len) {
+        char id[24];
+        size_t used = token_at(s + i, len - i, id, sizeof id);
+        if (!used) { i++; continue; }
+
+        Held *h = held_find(e, id);
+        char *html = h && h->tree ? mdy_to_html(h->tree, NULL) : NULL;
+        size_t plain = i - last;
+        size_t add = plain + (html ? strlen(html) : 0);
+        if (out + add + 1 > cap) {
+            while (out + add + 1 > cap) cap *= 2;
+            char *grown = realloc(result, cap);
+            if (!grown) { free(html); free(result); return NULL; }
+            result = grown;
+        }
+        memcpy(result + out, s + last, plain);
+        out += plain;
+        if (html) { memcpy(result + out, html, strlen(html)); out += strlen(html); free(html); }
+        result[out] = '\0';
+        i += used;
+        last = i;
+    }
+
+    size_t tail = len - last;
+    if (out + tail + 1 > cap) {
+        char *grown = realloc(result, out + tail + 1);
+        if (!grown) { free(result); return NULL; }
+        result = grown;
+    }
+    memcpy(result + out, s + last, tail);
+    out += tail;
+    result[out] = '\0';
+    return result;
+}

@@ -1,0 +1,464 @@
+/*
+ * The VM boundary: values in and out of lamassu.
+ *
+ * Strings (UTF-8 here, UTF-16 there), trees (hast as objects and back), and a
+ * query filter or its answer as binjson. Nothing in this file knows what a
+ * document is or what a render does — it is called by every other part of the
+ * engine and calls none of them, which is why it was the first piece to take
+ * out of a five-thousand-line file.
+ */
+#include "engine_internal.h"
+
+/* ---- strings across the boundary ------------------------------------------- */
+
+/*
+ * The UTF-16 boundary, which is what lamassu's strings are.
+ *
+ * The conversion is the PARSER's — mdy_to_utf16 and mdy_from_utf16, over
+ * mdy_utf8_decode — so the same bytes mean the same thing whichever way they
+ * entered the process. This file had a second pair of its own, and they were
+ * not the same function: they took any byte that was not an ASCII one or a
+ * 2- or 3-byte lead as the start of a FOUR-byte character and consumed four
+ * bytes without checking that the three after it were continuations. So
+ * `\xc0\xaf` — an overlong `/`, the encoding a path check is meant to refuse —
+ * came out as a real `/`; a surrogate spelled in UTF-8 came out unchanged;
+ * and a single stray `\x80` in a paragraph ate the three bytes after it, which
+ * is how `and \x80 end` came back as `and <mojibake>d`. node replaces each
+ * ill-formed byte with U+FFFD and leaves the rest of the line alone, and so
+ * does mdy_utf8_decode.
+ *
+ * Both wrappers still allocate, which is what every caller here wants; the
+ * parser's take a buffer because its callers have one.
+ */
+uint16_t *to_utf16(const char *in, size_t len, size_t *out_len) {
+    /* Never more than one unit per byte: a character that is two units is at
+     * least four bytes, and an ill-formed one is one byte and one U+FFFD. */
+    uint16_t *out = malloc((len + 1) * sizeof *out);
+    if (!out) { *out_len = 0; return NULL; }
+    *out_len = mdy_to_utf16(in, len, out, len + 1);
+    return out;
+}
+
+char *from_utf16(const uint16_t *u, size_t len) {
+    /* Never more than three bytes per unit: a surrogate pair is two units and
+     * four bytes, and a lone surrogate is one unit and a three-byte U+FFFD. */
+    char *out = malloc(len * 3 + 1);
+    if (!out) return NULL;
+    size_t n = mdy_from_utf16(u, len, out, len * 3);
+    out[n] = '\0';
+    return out;
+}
+
+JsValue str(JsVm *vm, const char *s, size_t len) {
+    size_t n = 0;
+    uint16_t *u = to_utf16(s, len, &n);
+    JsValue v = u ? js_string_new(vm, u, n) : js_undefined();
+    free(u);
+    return v;
+}
+
+JsValue key(JsVm *vm, const char *s) {
+    size_t n = 0;
+    uint16_t *u = to_utf16(s, strlen(s), &n);
+    JsValue v = u ? js_atom(vm, u, n) : js_undefined();
+    free(u);
+    return v;
+}
+
+/*
+ * A property set and an array push that ROOT what they are handed.
+ *
+ * js_object_set takes a garbage-collection safe point before it writes, and
+ * its contract is that the caller has rooted the object, the key and the
+ * value. A value this file has just built is reachable only from the C stack,
+ * which the collector does not scan — so a collection at that safe point frees
+ * it, the map keeps a dangling pointer, and the cell is handed to the next
+ * string that asks for one. The property then silently becomes a DIFFERENT
+ * one, with no crash and no error.
+ *
+ * That is not hypothetical: `link-titles` in a 642-key record came back with
+ * `guraeans` gone and `hajj` present twice, so one link in a 93-page site
+ * pointed at the wrong place. It reproduced only in a build long enough to
+ * collect part-way through decoding a record.
+ *
+ * The key is built INSIDE, after the value is rooted, because building it
+ * allocates too — a key made first, in the caller's argument list, can be
+ * collected while the value beside it is still being built.
+ */
+void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v) {
+    js_gc_protect(e->vm, &obj);
+    js_gc_protect(e->vm, &v);
+    JsValue k = key(e->vm, name);
+    js_gc_protect(e->vm, &k);
+    js_object_set(e->vm, obj, k, v);
+    js_gc_unprotect(e->vm, &k);
+    js_gc_unprotect(e->vm, &v);
+    js_gc_unprotect(e->vm, &obj);
+}
+
+void push_item(mdy_engine *e, JsValue array, JsValue v) {
+    js_gc_protect(e->vm, &array);
+    js_gc_protect(e->vm, &v);
+    js_array_push(e->vm, array, v);
+    js_gc_unprotect(e->vm, &v);
+    js_gc_unprotect(e->vm, &array);
+}
+
+
+/* ---- a tree, across the boundary --------------------------------------------
+ *
+ * `transform((tree) => …)` is the one place a document's own code sees the
+ * tree, so the tree has to reach the guest and come back. mdy-docs sends it as
+ * JSON in both directions; here it is built as VALUES, which is what
+ * js_array_new and js_object_new made possible.
+ *
+ * The shape is hast's, exactly as the JSON was: every node has a `type`, an
+ * element has `tagName`, `properties` and `children`, and a text node has a
+ * `value`. A transform written against one works against the other.
+ */
+
+JsValue tree_to_js(mdy_engine *e, const mdy_node *n);
+
+static JsValue children_to_js(mdy_engine *e, const mdy_node *n) {
+    JsValue array = js_array_new(e->ctx, 0);
+    js_gc_protect(e->vm, &array);
+    for (const mdy_node *c = n->first; c; c = c->next) {
+        JsValue child = tree_to_js(e, c);
+        js_gc_protect(e->vm, &child);
+        push_item(e, array, child);
+        js_gc_unprotect(e->vm, &child);
+    }
+    js_gc_unprotect(e->vm, &array);
+    return array;
+}
+
+JsValue tree_to_js(mdy_engine *e, const mdy_node *n) {
+    JsValue o = js_object_new(e->ctx);
+    js_gc_protect(e->vm, &o);
+
+    switch (n->type) {
+        case MDY_TEXT:
+        case MDY_RAW:
+        case MDY_COMMENT: {
+            const char *type = n->type == MDY_TEXT ? "text"
+                             : n->type == MDY_RAW ? "raw" : "comment";
+            set_val(e, o, "type", str(e->vm, type, strlen(type)));
+            const char *v = n->text ? n->text : "";
+            set_val(e, o, "value", str(e->vm, v, strlen(v)));
+            break;
+        }
+        case MDY_DOCTYPE:
+            set_val(e, o, "type", str(e->vm, "doctype", 7));
+            break;
+        case MDY_ROOT:
+            set_val(e, o, "type", str(e->vm, "root", 4));
+            set_val(e, o, "children", children_to_js(e, n));
+            break;
+        case MDY_ELEMENT: {
+            set_val(e, o, "type", str(e->vm, "element", 7));
+            set_val(e, o, "tagName", str(e->vm, n->tag, strlen(n->tag)));
+            JsValue props = js_object_new(e->ctx);
+            js_gc_protect(e->vm, &props);
+            for (const mdy_prop *p = n->props; p; p = p->next) {
+                JsValue v;
+                switch (p->type) {
+                    case MDY_PROP_STRING: v = str(e->vm, p->as.string, strlen(p->as.string)); break;
+                    case MDY_PROP_NUMBER: v = js_number(p->as.number); break;
+                    case MDY_PROP_BOOL:   v = js_bool(p->as.boolean != 0); break;
+                    case MDY_PROP_LIST: {
+                        v = js_array_new(e->ctx, (uint32_t)p->list_len);
+                        js_gc_protect(e->vm, &v);
+                        for (size_t i = 0; i < p->list_len; i++)
+                            push_item(e, v, str(e->vm, p->list[i], strlen(p->list[i])));
+                        js_gc_unprotect(e->vm, &v);
+                        break;
+                    }
+                    default: v = js_undefined();
+                }
+                set_val(e, props, p->name, v);
+            }
+            set_val(e, o, "properties", props);
+            js_gc_unprotect(e->vm, &props);
+            set_val(e, o, "children", children_to_js(e, n));
+            break;
+        }
+    }
+
+    js_gc_unprotect(e->vm, &o);
+    return o;
+}
+
+/* The string a JS value holds, as UTF-8. Caller frees. NULL when it is not a
+ * string — which for a `type` or a `tagName` means the guest handed back
+ * something that is not a node. */
+char *js_string_utf8(JsValue v) {
+    size_t ulen = 0;
+    const uint16_t *u = js_string_units(v, &ulen);
+    return u ? from_utf16(u, ulen) : NULL;
+}
+
+/*
+ * A tree the guest built, as C nodes — `$.node`, and what a transform hands
+ * back. `depth` is counted for the reason MDY_MAX_DEPTH exists: a document
+ * can write a fifty-thousand-deep tree in three lines of its own code, and
+ * everything that walks the result afterwards recurses over it. Past the
+ * limit the branch is dropped, which is the answer the parser gives text
+ * nested that deep.
+ */
+static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth);
+
+mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v) {
+    return js_to_tree_at(e, doc, v, 0);
+}
+
+static void js_children_to_tree_at(mdy_engine *e, mdy_doc *doc, mdy_node *parent,
+                                   JsValue kids, size_t depth) {
+    if (!js_is_array(kids)) return;
+    uint32_t n = js_array_length(kids);
+    for (uint32_t i = 0; i < n; i++) {
+        mdy_node *child = js_to_tree_at(e, doc, js_array_get(kids, i), depth);
+        if (child) mdy_append(parent, child);
+    }
+}
+
+void js_children_to_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent, JsValue kids) {
+    js_children_to_tree_at(e, doc, parent, kids, 1);
+}
+
+static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth) {
+    if (depth >= MDY_MAX_DEPTH) return NULL;
+    if (!js_is_object(v)) return NULL;
+
+    char *type = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "type")));
+    if (!type) return NULL;
+
+    mdy_node *out = NULL;
+    if (strcmp(type, "text") == 0 || strcmp(type, "raw") == 0 || strcmp(type, "comment") == 0) {
+        char *value = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "value")));
+        out = mdy_new_text(doc, value ? value : "", value ? strlen(value) : 0);
+        if (out) out->type = strcmp(type, "raw") == 0 ? MDY_RAW
+                           : strcmp(type, "comment") == 0 ? MDY_COMMENT : MDY_TEXT;
+        free(value);
+    } else if (strcmp(type, "doctype") == 0) {
+        out = mdy_new_text(doc, "", 0);
+        if (out) out->type = MDY_DOCTYPE;
+    } else if (strcmp(type, "root") == 0) {
+        out = mdy_new_text(doc, "", 0);
+        if (out) {
+            out->type = MDY_ROOT;
+            out->text = NULL;
+            js_children_to_tree_at(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")), depth + 1);
+        }
+    } else if (strcmp(type, "element") == 0) {
+        char *tag = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "tagName")));
+        out = mdy_new_element(doc, tag ? tag : "div", tag ? strlen(tag) : 3);
+        free(tag);
+        if (out) {
+            /*
+             * Properties come back by NAME, and the names a guest may have
+             * added are not known in advance — so this walks whatever is
+             * there rather than a fixed list. `className` is the one that is
+             * an array; everything else is a string, a number or a boolean.
+             */
+            JsValue props = js_object_get(e->vm, v, key(e->vm, "properties"));
+            if (js_is_object(props)) {
+                for (size_t i = 0; i < js_object_size(props); i++) {
+                    JsValue name = js_object_key_at(props, i);
+                    char *pname = js_string_utf8(name);
+                    if (!pname) continue;
+                    JsValue pv = js_object_get(e->vm, props, name);
+                    if (js_is_array(pv)) {
+                        uint32_t n = js_array_length(pv);
+                        for (uint32_t k = 0; k < n; k++) {
+                            char *item = js_string_utf8(js_array_get(pv, k));
+                            if (item && strcmp(pname, "className") == 0) mdy_add_class(doc, out, item);
+                            free(item);
+                        }
+                    } else if (js_is_number(pv)) {
+                        mdy_set_number(doc, out, pname, js_get_number(pv));
+                    } else if (js_is_bool(pv)) {
+                        mdy_set_bool(doc, out, pname, js_get_bool(pv));
+                    } else {
+                        char *sv = js_string_utf8(pv);
+                        if (sv) mdy_set_string(doc, out, pname, sv, strlen(sv));
+                        free(sv);
+                    }
+                    free(pname);
+                }
+            }
+            js_children_to_tree_at(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")), depth + 1);
+        }
+    }
+
+    free(type);
+    return out;
+}
+
+
+/* ---- a JS value as binjson, for a query filter ------------------------------ */
+
+int js_to_binjson(mdy_engine *e, bj_builder *b, JsValue v) {
+    if (js_is_null(v) || js_is_undefined(v)) return bj_put_null(b);
+    if (js_is_bool(v)) return bj_put_bool(b, js_get_bool(v));
+    if (js_is_number(v)) {
+        double d = js_get_number(v);
+        if (d == (double)(int64_t)d && d >= -9.2e18 && d <= 9.2e18)
+            return bj_put_int(b, (int64_t)d);
+        return bj_put_float(b, d);
+    }
+    if (js_is_string(v)) {
+        char *s = js_string_utf8(v);
+        if (!s) return -1;
+        int rc = bj_put_string(b, (const uint8_t *)s, (uint32_t)strlen(s));
+        free(s);
+        return rc;
+    }
+    if (js_is_array(v)) {
+        if (bj_begin_array(b) != 0) return -1;
+        uint32_t n = js_array_length(v);
+        for (uint32_t i = 0; i < n; i++)
+            if (js_to_binjson(e, b, js_array_get(v, i)) != 0) return -1;
+        return bj_end_array(b);
+    }
+    if (js_is_object(v)) {
+        if (bj_begin_object(b) != 0) return -1;
+        size_t n = js_object_size(v);
+        for (size_t i = 0; i < n; i++) {
+            JsValue k = js_object_key_at(v, i);
+            char *name = js_string_utf8(k);
+            if (!name) continue;
+            int rc = bj_put_key(b, (const uint8_t *)name, (uint32_t)strlen(name));
+            free(name);
+            if (rc != 0) return -1;
+            if (js_to_binjson(e, b, js_object_get(e->vm, v, k)) != 0) return -1;
+        }
+        return bj_end_object(b);
+    }
+    return bj_put_null(b);
+}
+
+/* ---- binjson back as JS values ----------------------------------------------
+ *
+ * The decoder is a visitor, so this keeps a stack of the containers it is
+ * inside and hangs each finished value on whichever is on top.
+ */
+enum { BJ_STACK_MAX = 64 };
+
+typedef struct {
+    mdy_engine *e;
+    JsValue stack[BJ_STACK_MAX];
+    char *keys[BJ_STACK_MAX];
+    int depth;
+    JsValue result;
+    int have_result;
+} Decode;
+
+static void decode_put(Decode *d, JsValue v) {
+    if (d->depth == 0) { d->result = v; d->have_result = 1; return; }
+    JsValue parent = d->stack[d->depth - 1];
+    if (js_is_array(parent)) {
+        push_item(d->e, parent, v);
+    } else {
+        char *k = d->keys[d->depth - 1];
+        if (k) {
+            set_val(d->e, parent, k, v);
+            free(k);
+            d->keys[d->depth - 1] = NULL;
+        }
+    }
+}
+
+static void d_null(void *ctx) { decode_put(ctx, js_null()); }
+static void d_bool(void *ctx, int t) { decode_put(ctx, js_bool(t != 0)); }
+static void d_int(void *ctx, double v) { decode_put(ctx, js_number(v)); }
+static void d_float(void *ctx, double v) { decode_put(ctx, js_number(v)); }
+static void d_date(void *ctx, double v) { decode_put(ctx, js_number(v)); }
+static void d_pointer(void *ctx, double v) { decode_put(ctx, js_number(v)); }
+static void d_string(void *ctx, const uint8_t *s, uint32_t n) {
+    Decode *d = ctx;
+    decode_put(d, str(d->e->vm, (const char *)s, n));
+}
+static void d_binary(void *ctx, const uint8_t *s, uint32_t n) {
+    (void)s; (void)n;
+    decode_put(ctx, js_null());
+}
+/* `_id` is an OID, and a document set's own key: guest code has no use for
+ * the bytes, and a string of them is the shape mdy-docs hands over. */
+static void d_oid(void *ctx, const uint8_t *b) {
+    Decode *d = ctx;
+    char hex[25];
+    static const char *H = "0123456789abcdef";
+    for (int i = 0; i < 12; i++) { hex[i * 2] = H[b[i] >> 4]; hex[i * 2 + 1] = H[b[i] & 15]; }
+    hex[24] = '\0';
+    decode_put(d, str(d->e->vm, hex, 24));
+}
+/*
+ * A container under construction is rooted through ITS SLOT ON THE STACK, not
+ * through a local.
+ *
+ * js_gc_protect records an ADDRESS and the collector dereferences it later; a
+ * local's address is dead the moment the callback returns, so protecting `&a`
+ * here left the root table pointing into a reused stack frame. Nothing went
+ * wrong until a collection happened to land mid-decode, and then the GC read
+ * whatever was in that slot and tried to mark it — a crash whose cause is
+ * nowhere near where it lands. `Decode` lives for the whole decode, so its
+ * slots are the addresses that are actually valid to hand out.
+ */
+static void d_array_begin(void *ctx, uint32_t count) {
+    Decode *d = ctx;
+    if (d->depth >= BJ_STACK_MAX) return;
+    d->stack[d->depth] = js_array_new(d->e->ctx, count);
+    js_gc_protect(d->e->vm, &d->stack[d->depth]);
+    d->keys[d->depth] = NULL;
+    d->depth++;
+}
+static void d_object_begin(void *ctx, uint32_t count) {
+    Decode *d = ctx;
+    (void)count;
+    if (d->depth >= BJ_STACK_MAX) return;
+    d->stack[d->depth] = js_object_new(d->e->ctx);
+    js_gc_protect(d->e->vm, &d->stack[d->depth]);
+    d->keys[d->depth] = NULL;
+    d->depth++;
+}
+static void d_key(void *ctx, const uint8_t *s, uint32_t n) {
+    Decode *d = ctx;
+    if (d->depth == 0) return;
+    free(d->keys[d->depth - 1]);
+    d->keys[d->depth - 1] = malloc(n + 1);
+    if (d->keys[d->depth - 1]) {
+        memcpy(d->keys[d->depth - 1], s, n);
+        d->keys[d->depth - 1][n] = '\0';
+    }
+}
+static void d_end(void *ctx) {
+    Decode *d = ctx;
+    if (d->depth == 0) return;
+    int at = --d->depth;
+    free(d->keys[at]);
+    d->keys[at] = NULL;
+    /* Still rooted through its slot while decode_put allocates into the
+     * parent: unprotecting first would let the finished value be collected by
+     * the very push meant to keep it. */
+    decode_put(d, d->stack[at]);
+    js_gc_unprotect(d->e->vm, &d->stack[at]);
+}
+
+JsValue binjson_to_js(mdy_engine *e, const uint8_t *bytes, size_t len, size_t *consumed) {
+    Decode d = {0};
+    d.e = e;
+    d.result = js_undefined();
+    bj_visitor v = {
+        .on_null = d_null, .on_bool = d_bool, .on_int = d_int, .on_float = d_float,
+        .on_string = d_string, .on_binary = d_binary, .on_oid = d_oid, .on_date = d_date,
+        .on_pointer = d_pointer, .on_array_begin = d_array_begin, .on_array_end = d_end,
+        .on_object_begin = d_object_begin, .on_key = d_key, .on_object_end = d_end,
+        .ctx = &d,
+    };
+    /* The finished value is a root too — a container completing puts it here
+     * while the decode is still allocating. */
+    js_gc_protect(e->vm, &d.result);
+    int rc = bj_decode(bytes, len, &v, consumed);
+    js_gc_unprotect(e->vm, &d.result);
+    return rc == 0 ? d.result : js_undefined();
+}
