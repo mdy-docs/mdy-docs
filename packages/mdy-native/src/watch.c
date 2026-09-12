@@ -45,11 +45,8 @@ void snapshot_take(Snapshot *out, const char *root, const char *only) {
     /* fsx_list is the walk the engine uses: dotfiles are already out. */
     char *listing = fsx_list(root, ".", NULL);
     if (!listing) return;
-    for (char *rel = listing, *next; rel && *rel; rel = next) {
-        char *nl = strchr(rel, '\n');
-        next = nl ? nl + 1 : NULL;
-        if (nl) *nl = '\0';
-        if (!*rel || ignored(rel)) continue;
+    for (const char *rel = listing; *rel; rel += strlen(rel) + 1) {
+        if (ignored(rel)) continue;
         double size = 0, mtime = 0;
         if (fsx_stat(root, rel, &size, &mtime) == 0) add(out, rel, size, mtime);
     }

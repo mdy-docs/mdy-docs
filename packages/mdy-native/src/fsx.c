@@ -169,7 +169,9 @@ static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             rc = walk(base, child, exts, out);
         } else if (matches(name, exts)) {
-            if (buf_put(out, child, strlen(child)) < 0 || buf_put(out, "\n", 1) < 0) rc = -1;
+            /* The name WITH its terminator; buf_put leaves another after it,
+             * so the last one ends the list. */
+            if (buf_put(out, child, strlen(child) + 1) < 0) rc = -1;
         }
         free(child);
         free(name);
@@ -217,7 +219,9 @@ static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
         if (is_dir) {
             if (walk(base, child, exts, out) < 0) { free(child); closedir(d); return -1; }
         } else if (matches(e->d_name, exts)) {
-            if (buf_put(out, child, strlen(child)) < 0 || buf_put(out, "\n", 1) < 0) {
+            /* The name WITH its terminator; buf_put leaves another after it,
+             * so the last one ends the list. */
+            if (buf_put(out, child, strlen(child) + 1) < 0) {
                 free(child); closedir(d); return -1;
             }
         }
@@ -246,19 +250,19 @@ char *fsx_list(const char *root, const char *subdir, const char *exts) {
     /* The contract says sorted, and readdir order is the filesystem's. Sorting
      * here rather than in JS keeps the listing one string across the boundary
      * instead of an array of thousands. */
-    size_t lines = 0;
-    for (size_t i = 0; i < out.len; i++) if (out.s[i] == '\n') lines++;
-    if (lines < 2) return out.s;
+    size_t entries = 0;
+    for (size_t i = 0; i < out.len; i++) if (out.s[i] == '\0') entries++;
+    if (entries < 2) return out.s;
 
-    char **v = malloc(lines * sizeof *v);
+    char **v = malloc(entries * sizeof *v);
     if (!v) return out.s; /* unsorted beats nothing */
     size_t n = 0;
-    for (char *p = out.s, *nl; (nl = strchr(p, '\n')); p = nl + 1) { *nl = '\0'; v[n++] = p; }
+    for (char *p = out.s; p < out.s + out.len; p += strlen(p) + 1) v[n++] = p;
     qsort(v, n, sizeof *v, by_name);
 
     Buf sorted = { 0 };
     for (size_t i = 0; i < n; i++) {
-        if (buf_put(&sorted, v[i], strlen(v[i])) < 0 || buf_put(&sorted, "\n", 1) < 0) break;
+        if (buf_put(&sorted, v[i], strlen(v[i]) + 1) < 0) break;
     }
     free(v);
     free(out.s);
@@ -423,7 +427,7 @@ char *fsx_readdir(const char *path) {
         if (strcmp(name, ".") && strcmp(name, "..")) {
             buf_put(&out, name, strlen(name));
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) buf_put(&out, "/", 1);
-            buf_put(&out, "\n", 1);
+            buf_put(&out, "", 1);        /* NUL separated, as fsx_list is */
         }
         free(name);
     } while (FindNextFileW(h, &fd));
@@ -446,7 +450,7 @@ char *fsx_readdir(const char *path) {
             free(full);
         }
         if (is_dir) buf_put(&out, "/", 1);
-        buf_put(&out, "\n", 1);
+        buf_put(&out, "", 1);            /* NUL separated, as fsx_list is */
     }
     closedir(d);
 #endif
@@ -524,8 +528,7 @@ int fsx_rm_rf(const char *path) {
     char *listing = fsx_readdir(path);
     if (!listing) return 0;
     int rc = 0;
-    for (char *p = listing, *nl; (nl = strchr(p, '\n')); p = nl + 1) {
-        *nl = '\0';
+    for (char *p = listing; *p; p += strlen(p) + 1) {
         size_t len = strlen(p);
         if (len && p[len - 1] == '/') p[len - 1] = '\0'; /* the dir marker */
         char *child = at(path, p);

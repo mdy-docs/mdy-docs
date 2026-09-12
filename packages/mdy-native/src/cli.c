@@ -633,11 +633,7 @@ static int copy_static(const char *root, BuildSink *s) {
     char *listing = fsx_list(dir, ".", NULL);
     if (!listing) return 0;
     int n = 0;
-    for (char *rel = listing, *next; rel && *rel; rel = next) {
-        char *nl = strchr(rel, '\n');
-        next = nl ? nl + 1 : NULL;
-        if (nl) *nl = '\0';
-        if (!*rel) continue;
+    for (const char *rel = listing; *rel; rel += strlen(rel) + 1) {
         /*
          * A `.mdy` under static/ is a metadata SIDECAR — static/logo.png.mdy
          * describes static/logo.png. It belongs in the document set, findable

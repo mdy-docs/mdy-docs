@@ -21,8 +21,18 @@
 #include <stdint.h>
 
 /*
- * Every file under `root/subdir`, recursively, sorted, one per line, NUL
- * terminated. `exts` is a comma-separated suffix list (".mdy,.md") or NULL for
+ * Every file under `root/subdir`, recursively, sorted, each path NUL
+ * terminated, the list ended by an empty one:
+ *
+ *     "a.mdy\0sub/b.mdy\0"   and   ""   for nothing at all
+ *
+ * so `for (const char *p = list; *p; p += strlen(p) + 1)` walks it. It was one
+ * per LINE, which is a file name a POSIX filesystem allows: `new\nline.mdy`
+ * came back as two entries, `new` and `line.mdy`, neither of which exists, and
+ * the file was silently not part of the site. A NUL is the one byte a name
+ * cannot hold.
+ *
+ * `exts` is a comma-separated suffix list (".mdy,.md") or NULL for
  * every file whatever its extension — the same distinction
  * `options.extensions: null` makes on the JS side.
  *

@@ -760,6 +760,12 @@ static void deep_value_checks(void) {
  * which the reader took as `it`: the document's name, ext and path all
  * truncated at the quote, and nothing said so. A backslash began an escape.
  *
+ * A newline is the same story one layer earlier: the walk came back from
+ * fsx_list one file per LINE, so `new\nline.mdy` was two entries, `new` and
+ * `line.mdy`, neither of which exists, and the file was silently not part of
+ * the site at all. The listing separates on NUL now, which is the one byte a
+ * file name cannot hold.
+ *
  * Not on Windows, where none of these characters is legal in a file name, so
  * there is nothing there to carry. The expected line is what
  * `node bin/mdy.js` writes for the same directory.
@@ -778,6 +784,7 @@ static void odd_name_checks(void) {
     write_file(root, "it\"s.mdy", "+++\nk: quote\n+++\nbody\n");
     write_file(root, "a\\b.mdy", "+++\nk: slash\n+++\nbody\n");
     write_file(root, "bell\a.mdy", "+++\nk: bell\n+++\nbody\n");
+    write_file(root, "new\nline.mdy", "+++\nk: newline\n+++\nbody\n");
     write_file(root, "main.mdy",
         "% $.emit('roll.txt', $.find({ k: { $exists: true } })"
         ".map((x) => x.k + '=' + x.name + '|' + x.path).join(','))\n");
@@ -805,12 +812,13 @@ static void odd_name_checks(void) {
     }
     free(html);
 
-    ok_("a quote, a backslash and a control character all reach the record",
+    ok_("a quote, a backslash, a control character and a NEWLINE all reach the record",
         emitted("roll.txt") &&
             strcmp(emitted("roll.txt"),
                    "slash=a\\b.mdy|a\\b.mdy,"
                    "bell=bell\a.mdy|bell\a.mdy,"
-                   "quote=it\"s.mdy|it\"s.mdy") == 0,
+                   "quote=it\"s.mdy|it\"s.mdy,"
+                   "newline=new\nline.mdy|new\nline.mdy") == 0,
         emitted("roll.txt"));
 
     mdy_engine_free(e);

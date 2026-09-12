@@ -1706,11 +1706,8 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
     WalkedFile *files = NULL;
     size_t file_count = 0, file_cap = 0;
 
-    for (char *rel = listing, *next; rel && *rel; rel = next) {
-        char *nl = strchr(rel, '\n');
-        next = nl ? nl + 1 : NULL;
-        if (nl) *nl = '\0';
-        if (!*rel || !is_source(rel)) continue;
+    for (const char *rel = listing; *rel; rel += strlen(rel) + 1) {
+        if (!is_source(rel)) continue;
         if (e->on_source) e->on_source(e->on_source_ud, rel);
 
         const char *name = basename_of(rel);
