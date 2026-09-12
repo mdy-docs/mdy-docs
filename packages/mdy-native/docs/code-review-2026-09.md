@@ -50,7 +50,7 @@ what those checks do not reach.
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
 | B35 | Low | `cli.c` dev server | The publish dedupe list grows for the life of the process and is never freed |
 | B36 | ~~Medium~~ **fixed** | `engine_value.c` | `.inf`/`.nan` crossed into a document as numbers; node sends `null` |
-| B37 | High | `ingest.c` / nisaba | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
+| B37 | ~~High~~ **fixed** | `ingest.c` / nisaba | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -860,10 +860,10 @@ the integer/float distinction a query depends on. Every expectation in it was
 read off `node bin/mdy.js` on the same input; three were wrong the first time,
 in the slug and the escaping rather than the number.
 
-#### B37 — a YAML integer at or above 2^53 drops the whole front matter (High)
+#### B37 — a YAML integer at or above 2^53 drops the whole front matter (High) — FIXED
 
-Found while regression-testing B36's change, and **not** from it: the worktree
-at the previous commit does the same thing.
+Found while regression-testing B36's change, and confirmed pre-existing against
+a worktree at the commit before it.
 
 ```
 +++
@@ -873,34 +873,61 @@ also: Fine too
 +++
 = {{ res.data.title }}|{{ res.data.big }}|{{ res.data.also }}
 
-C:    undefined|undefined|undefined
-node: Fine|9007199254740992|Fine too
+before  undefined|undefined|undefined        node  Fine|9007199254740992|Fine too
+after   Fine|9007199254740992|Fine too
 ```
 
-Not the one field — **the entire record**. `title` and `also` are ordinary
-strings and they are gone too, which says the insert fails whole rather than
-the value being dropped. Nothing is reported: no warning, no non-zero exit, a
-page that renders with every front-matter value missing.
+Not the one field — **the whole document**. `$.find({})` answered `0`, no query
+by any field found it, and `title` and `also` are ordinary strings that went
+with it. The insert returned *success* and nothing was reported.
 
-The threshold is exactly 2^53:
+**Where it is, which took three wrong guesses.** Not the YAML reader: fed on
+stdin as it expects, `yamlcat` reads every magnitude correctly and agrees with
+node — an earlier probe that said otherwise was passing a filename to a program
+that reads stdin, so it was parsing an empty document. Not the ingest returning
+an error either: `open_documents` checks that and says "document N could not be
+inserted", which never appeared. The insert *succeeds* and the document is then
+invisible, so it is the index built from the value. The boundary is exact:
 
-| `a:` | C | node |
+| `big:` | before | after |
 | --- | --- | --- |
-| `999999999999999` | same as node | |
-| `1000000000000000` | same as node | |
-| `9007199254740992` | `undefined` | `9007199254740992` |
-| `99999999999999999` | `undefined` | `100000000000000000` |
+| `9007199254740991` | found, number | unchanged |
+| `9007199254740992` (2^53) | **document gone** | found, string |
+| `1e17`, `0x20000000000000`, `-9007199254740992` | **document gone** | found, string |
+| `1e308` | found, number | unchanged |
 
-2^53 is where a double stops being able to count integers one at a time, so
-`v == (double)(int64_t)v` still holds and the value goes to `bj_put_int` —
-which means the loss is below that, in binjson or in the insert, not in the
-cast B21 was about. It wants tracing from `mdy_bj_put_yaml`'s return value
-through `dc_insert_one`; the return is very likely already saying so and
-nobody is reading it.
+A **float** of any magnitude was always fine — `1e308` round-trips — so it is
+the binjson INT path specifically, at |v| >= 2^53, which is exactly where a
+double stops being able to count integers one at a time.
 
-Severity High rather than Medium for the reason B1 and B2 were: it is silent,
-it is reachable from a plausible document (an id, a timestamp in nanoseconds,
-a file size), and what it produces is a page that looks fine.
+**The fix, on instruction: such a value is ingested as a string**
+([ingest.c:64](../src/ingest.c#L64)). The document survives and the digits are
+readable. Three things it is worth being straight about:
+
+- **It diverges from mdy-docs, deliberately.** node stores the rounded
+  *number*, so `{big: 9007199254740992}` as a query matches there and not here,
+  and a document reading the field gets a string. The digits render the same;
+  only `typeof` differs. A vanished document was not a trade-off.
+- **The exact value the file said is already gone before ingest sees it.** The
+  number reaches `mdy_bj_put_yaml` as a `double` — `mdy_yaml_node` keeps no raw
+  text for a number — so `9007199254740993` was `...992` before this function
+  had a say. Carrying the source text this far means a raw-text field on every
+  YAML number node, which is the parser's public shape and a different change.
+- The string is printed with `%lld`, the double's **exact** value. node prints
+  the same double the way JS does, shortest-round-trip: `99999999999999999`
+  becomes `"100000000000000016"` here and `100000000000000000` there. Both are
+  the same double; one says what is stored and the other says the shortest
+  thing that reads back as it.
+
+The alternative considered was storing it as a float — stays numeric, stays
+queryable, and rounds silently. A string says what happened where a float
+would hide it.
+
+`big_integer_checks` in `test/engine.c` covers the boundary either side, the
+negative, exponent and hex spellings, and the float that was never broken. The
+two number cases and the float were checked against `node bin/mdy.js` and are
+parity; the string cases are the divergence. Removing the string path makes
+four of them fail with `undefined`, which is the original symptom.
 
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 

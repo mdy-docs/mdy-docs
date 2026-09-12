@@ -912,6 +912,71 @@ static void nonfinite_checks(void) {
 }
 
 
+/* ---- an integer too big to be one -------------------------------------------
+ *
+ * At 2^53 a double stops being able to count integers one at a time, and a
+ * binjson INT of that magnitude made the document it was in DISAPPEAR — not
+ * the field, the whole document, with the insert returning success and
+ * nothing reported. `big: 9007199254740992` in front matter and `$.find({})`
+ * answered 0; `title` and every other key went with it. That was B37, and it
+ * was found while regression-testing B36 rather than by looking for it.
+ *
+ * A FLOAT of any magnitude was always fine — 1e308 round-trips — so it is the
+ * INT path and the index built from it. Such a value is ingested as a STRING
+ * now: the document survives and the digits are readable.
+ *
+ * This DIVERGES from mdy-docs, deliberately: node stores the rounded number.
+ * A query written `{big: 9007199254740992}` matches there and not here, and a
+ * document that reads the field gets a string. The divergence is the decision;
+ * a vanished document was not one.
+ */
+static void big_integer_checks(void) {
+    printf("\n--- engine: an integer too big to be one ---\n");
+
+    /* The bug itself: the neighbours have to survive. */
+    check("a record with an over-large integer still has its other keys",
+          "+++\ntitle: Fine\nbig: 9007199254740992\nalso: Fine too\n+++\n"
+          "= {{ res.data.title }}|{{ res.data.also }}\n",
+          "<h1 id=\"finefine-too\">Fine|Fine too</h1>");
+    check("...and the document is still findable",
+          "= {{ $.find({}).length }}\n---\n+++\nbig: 9007199254740992\n+++\n= x\n",
+          "<h1 id=\"2\">2</h1>");
+    check("...and the number itself is there, as text",
+          "+++\nbig: 9007199254740992\n+++\n= {{ res.data.big }}/{{ typeof res.data.big }}\n",
+          "<h1 id=\"9007199254740992/string\">9007199254740992/string</h1>");
+
+    /*
+     * One below the boundary is untouched — still a number, still queryable
+     * as one. The boundary is 2^53 exactly, not "large".
+     *
+     * These two and the float below were checked against `node bin/mdy.js`
+     * and are PARITY: node renders them identically. The three string cases
+     * above and below are the deliberate divergence — node says `number`
+     * where this says `string`, with the same digits either way.
+     */
+    check("one below 2^53 is still a number",
+          "+++\nbig: 9007199254740991\n+++\n= {{ res.data.big }}/{{ typeof res.data.big }}\n",
+          "<h1 id=\"9007199254740991/number\">9007199254740991/number</h1>");
+    check("...and still matches a query written as a number",
+          "= {{ $.find({ big: 9007199254740991 }).length }}\n"
+          "---\n+++\nbig: 9007199254740991\n+++\n= x\n",
+          "<h1 id=\"1\">1</h1>");
+
+    /* Negative, exponent form and hex reach the same place. */
+    check("a negative one below -2^53 is text too",
+          "+++\nbig: -9007199254740992\n+++\n= {{ res.data.big }}/{{ typeof res.data.big }}\n",
+          "<h1 id=\"-9007199254740992/string\">-9007199254740992/string</h1>");
+    check("...and so is exponent form that lands above it",
+          "+++\nbig: 1e17\n+++\n= {{ res.data.big }}/{{ typeof res.data.big }}\n",
+          "<h1 id=\"100000000000000000/string\">100000000000000000/string</h1>");
+
+    /* A float is untouched at any magnitude — it was never the broken path. */
+    check("a float stays a float, however large",
+          "+++\nbig: 1e308\n+++\n= {{ res.data.big }}/{{ typeof res.data.big }}\n",
+          "<h1 id=\"1e308/number\">1e+308/number</h1>");
+}
+
+
 /* ---- the URL a broker is named by ---------------------------------------------
  *
  * `parse_url` split host from port on the first colon, so an IPv6 literal —
@@ -2229,6 +2294,7 @@ int main(void) {
     token_checks();
     url_checks();
     nonfinite_checks();
+    big_integer_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

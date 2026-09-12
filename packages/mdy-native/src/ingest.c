@@ -1,4 +1,5 @@
 /* The contract is in ingest.h. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -31,9 +32,42 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
              * this is where the two engines agree. Where they differ is what
              * the guest sees — see finite_or_null in engine_value.c.
              */
-            if (v == v && v >= -9.2e18 && v <= 9.2e18 && v == (double)(int64_t)v)
-                return bj_put_int(b, (int64_t)v);
-            return bj_put_float(b, v);
+            if (v != v || v < -9.2e18 || v > 9.2e18 || v != (double)(int64_t)v)
+                return bj_put_float(b, v);
+
+            /*
+             * An integer too big to be one: a STRING, not an int. (B37.)
+             *
+             * At 2^53 a double stops being able to count integers one at a
+             * time, and a binjson INT of that magnitude makes the document it
+             * is in disappear — not the field, the whole document. Measured:
+             * `big: 9007199254740992` in front matter and `$.find({})` answers
+             * 0, every other key of that record included, with the insert
+             * returning success and nothing reported. 9007199254740991 is
+             * fine. A FLOAT of any magnitude is fine — `1e308` round-trips —
+             * so it is the INT path specifically, and the index built from it.
+             *
+             * Storing the digits as text keeps the document. What it does NOT
+             * keep is the exact value the file said: the number reached this
+             * function as a double, so `9007199254740993` was already
+             * `9007199254740992` before ingest had a say. Carrying the source
+             * text this far would mean a raw-text field on every YAML number
+             * node, which is the parser's public shape, and is not this.
+             *
+             * It diverges from mdy-docs, deliberately and on instruction:
+             * node stores the rounded NUMBER, so a query written
+             * `{big: 9007199254740992}` matches there and not here. The
+             * alternative was to store it as a float, which stays numeric and
+             * stays queryable but rounds silently; a string says what
+             * happened where a float would hide it.
+             */
+            if (v >= 9007199254740992.0 || v <= -9007199254740992.0) {
+                char digits[32];
+                int n = snprintf(digits, sizeof digits, "%lld", (long long)v);
+                if (n <= 0) return -1;
+                return bj_put_string(b, (const uint8_t *)digits, (uint32_t)n);
+            }
+            return bj_put_int(b, (int64_t)v);
         }
         case MDY_YAML_STRING: {
             size_t len = 0;
