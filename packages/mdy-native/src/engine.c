@@ -4765,6 +4765,18 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         if (wrote) *wrote = strdup(hit->text);
         return memo_copy(hit->doc);
     }
+    /*
+     * A render inside a render inside a render is a cycle somebody wrote.
+     * Checked HERE, before a thing has been put aside to be restored at
+     * `done`: it is the one exit that does not go through the label, and it
+     * can only be that if there is nothing yet to give back.
+     */
+    if (e->depth > 32) {
+        if (error && error_len)
+            snprintf(error, error_len, "mdy-engine: render depth exceeded (cyclic $.render?)");
+        return NULL;
+    }
+
     int outer_taint = e->taint;
     e->taint = 0;
     JsValue transformed = js_undefined();
@@ -4785,12 +4797,6 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     /* the enclosing render's `res`, put back at `done` whatever happened */
     JsValue outer_res = e->render_res;
 
-    /* A render inside a render inside a render is a cycle somebody wrote. */
-    if (e->depth > 32) {
-        if (error && error_len)
-            snprintf(error, error_len, "mdy-engine: render depth exceeded (cyclic $.render?)");
-        return NULL;
-    }
     e->depth++;
     /* Which file is asking — an `$.__import*` native resolves its spec
      * against the document that wrote it, and the same spec in two files can
@@ -4800,10 +4806,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
 
 #define FAIL(...) do { if (error && error_len) snprintf(error, error_len, __VA_ARGS__); goto done; } while (0)
 
-    if (index >= e->count) {
-        if (error && error_len) snprintf(error, error_len, "no document at index %zu", index);
-        return NULL;
-    }
+    if (index >= e->count) FAIL("no document at index %zu", index);
     Document *d = &e->docs[index];
 
     /*
@@ -4819,24 +4822,20 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         js_gc_protect(e->vm, &record);
         char *text = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "body")));
         js_gc_unprotect(e->vm, &record);
-        mdy_doc *md = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
-        if (!md) {
-            free(text);
-            if (error && error_len)
-                snprintf(error, error_len, "the markdown document could not be read");
-            e->current = outer_current;
-            e->depth--;
-            e->taint = outer_taint;
-            return NULL;
-        }
+        out = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
+        if (!out) { free(text); FAIL("the markdown document could not be read"); }
         /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
-        if (mkey) memo_put(memo_now, mkey, memo_copy(md), strdup(text ? text : ""));
+        if (mkey) memo_put(memo_now, mkey, memo_copy(out), strdup(text ? text : ""));
         if (getenv("MDY_MEMO_DEBUG")) fprintf(stderr, "memo kept #%zu\n", index);
         if (wrote) *wrote = text; else free(text);
-        e->current = outer_current;
-        e->depth--;
-        e->taint = outer_taint;
-        return md;
+        /*
+         * `done`, not a return of its own. The key this render is held under
+         * is written there, and a .md tree parked under a key nobody set was
+         * either LOST — no render had happened, so the id was empty and the
+         * token unreadable — or parked under the previous render's id, where
+         * the page showed that render twice.
+         */
+        goto done;
     }
 
     /* 1. the body, which `mdy_engine_open` already took the data out of */

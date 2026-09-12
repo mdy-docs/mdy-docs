@@ -24,7 +24,7 @@ what those checks do not reach.
 | --- | --- | --- | --- |
 | B1 | ~~High~~ **fixed** | `engine.c` directory walk | A `.yaml` file beginning with `---` desynchronised every document's identity |
 | B2 | ~~High~~ **fixed** | `engine.c` directory walk | An empty or whitespace-only `.mdy` file shifted every later document's identity |
-| B3 | High | `engine.c` render memo | `$.render` of a `.md` document yields an empty or *wrong* token |
+| B3 | ~~High~~ **fixed** | `engine.c` render memo | `$.render` of a `.md` document yielded an empty or *wrong* token |
 | B4 | High | `engine.c` querying | `$.find` is cubic in the size of the set |
 | B5 | Medium | `engine.c` / `nis.c` | The nisaba collection is never closed: memory grows on every rebuild |
 | B6 | Medium | `engine.c` render memo | The two-generation memo never hits across builds |
@@ -33,7 +33,7 @@ what those checks do not reach.
 | B9 | Medium | `yaml.c` | Text after a closing quote is silently dropped |
 | B10 | Medium | `cli.c` dev server | NULL engine dereference on delivery after a failed first build |
 | B11 | Medium | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
-| B12 | Medium | `engine.c` | Render-depth counter leaks on an out-of-range index |
+| B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13–B27 | Low | various | Rooting fragility, portability, leaks on error paths, truncation, UB casts |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
 | B29 | Medium | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
@@ -43,8 +43,9 @@ what those checks do not reach.
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3), and
 the maintainability items in §4 — of which the most important is that the
 directory walk, the dev server and the HTTP layer have no tests that could
-have caught B1–B3, B5, B6 or B10. (B1's and B2's fixes come with the first
-two of those — `data_file_checks` and `blank_file_checks` in `test/engine.c`.)
+have caught B1–B3, B5, B6 or B10. (B1's, B2's and B3's fixes come with the
+first three — `data_file_checks`, `blank_file_checks` and
+`markdown_render_checks` in `test/engine.c`.)
 
 ---
 
@@ -153,13 +154,37 @@ data. B1's fix took a data file's bytes out of that text; B2's took the text
 apart. What is left of the class is B8 — identity is still written as YAML
 source, it is just no longer at risk of being re-split.
 
-#### B3 — `$.render` of a `.md` document returns an empty or wrong token (High)
+#### B3 — `$.render` of a `.md` document returns an empty or wrong token (High) — FIXED
+
+**Fixed.** `render_tree_out` has one exit. The markdown branch sets `out` and
+jumps to `done:` ([engine.c:4820](../src/engine.c#L4820)) like every other
+path, so `e->last_render_key` is written for it too and `render_native` parks
+the tree under the key of the render that actually made it.
+
+The other two exits went with it, which is B12 below. The index check is a
+`FAIL` ([engine.c:4809](../src/engine.c#L4809)) and gives back the depth and
+the `current` it had already taken; the cycle guard moved ABOVE everything
+`done:` restores ([engine.c:4774](../src/engine.c#L4774)), which is what
+earns it the right to skip the label — there is nothing yet to give back.
+Before the move it silently cleared the enclosing render's `taint` on its way
+out.
+
+Regression test: `markdown_render_checks`
+([test/engine.c:430](../test/engine.c#L430)). It reproduces both shapes on a
+`.md` nothing has rendered yet, which matters: a SECOND render is answered
+from the memo, and the memo's exit was always correct, so a test that reuses
+one proves nothing. On the old engine the first assertion gives `|` and the
+second `<p>layout text</p>|<p>layout text</p>`. Byte-identical to node on
+direct renders, a render carrying a request, a `.md` nested inside a rendered
+`.mdy`, `$.toc` over a `.md` token, inline composition and `$.text`.
+
+The original finding follows. Its line numbers are the file as it stood at
+`766c503`, before the fix.
 
 `render_tree_out` returns early for a markdown document
-([engine.c:4817–4840](../src/engine.c#L4817-L4840)) without reaching the
-`done:` label, which is where `e->last_render_key` is written
-([5032](../src/engine.c#L5032)). `render_native` then parks the tree under
-that stale key ([2267](../src/engine.c#L2267)):
+(`engine.c:4820–4839`) without reaching the `done:` label, which is where
+`e->last_render_key` is written (`engine.c:5031`). `render_native` then parks
+the tree under that stale key (`engine.c:2267`):
 
 - if nothing rendered before, the key is `""`, `token_at` refuses an empty id,
   and the token is never spliced — the content silently disappears;
@@ -293,15 +318,25 @@ The same wrap is in `e = off + 2 + i * 12`. A corrupt or crafted `.tif`
 anywhere in a walked directory crashes the build. Promote to `size_t` before
 adding.
 
-#### B12 — Render depth leaks on an out-of-range index (Medium)
+#### B12 — Render depth leaks on an out-of-range index (Medium) — FIXED
+
+**Fixed** with B3, as one change: the index check is a `FAIL` now and leaves
+through `done:`, which gives back the depth, the `current` and the `taint` it
+had taken. Pinned in the block that already asked for an index that is not
+there ([test/engine.c:1392](../test/engine.c#L1392)) — forty times over, and
+then the document that IS there still renders. On the old engine the
+thirty-third of those exhausted the cycle guard and nothing rendered again.
+
+The original finding follows. Its line numbers are the file as it stood at
+`766c503`, before the fix.
 
 `render_tree_out` increments `e->depth`, replaces `e->current` and zeroes
-`e->taint` ([engine.c:4768–4799](../src/engine.c#L4768-L4799)) *before* the
-index check at [4803–4806](../src/engine.c#L4803-L4806), which returns without
-restoring any of them. Demonstrated: 40 calls to `mdy_engine_render(e, 99, …)`
-followed by `mdy_engine_render(e, 0, …)` fails with "render depth exceeded
-(cyclic $.render?)". `test/engine.c:1114` exercises exactly this path and
-cannot notice. Move the check above the state changes.
+`e->taint` (`engine.c:4780–4805`) *before* the index check at
+`engine.c:4809`, which returns without restoring any of them. Demonstrated:
+40 calls to `mdy_engine_render(e, 99, …)` followed by
+`mdy_engine_render(e, 0, …)` fails with "render depth exceeded (cyclic
+$.render?)". `test/engine.c:1114` exercises exactly this path and cannot
+notice. Move the check above the state changes.
 
 #### B29 — `$.count` is missing from `$` (Medium)
 
@@ -534,9 +569,11 @@ in the file's own section comments: the walk (`open_dir_inner`,
 be a file with a small internal header.
 
 **Long functions with several exits.** `render_tree_out`
-([4742–5046](../src/engine.c#L4742-L5046), ~300 lines) manages seven GC roots,
-a `FAIL` macro that jumps to `done:`, and three early returns that *bypass*
-`done:` — one of which is B3 and another B12. `open_dir_inner`
+([4742–5045](../src/engine.c#L4742-L5045), ~300 lines) manages seven GC roots
+and a `FAIL` macro that jumps to `done:`. It had three early returns that
+*bypassed* `done:` — one was B3, another B12, the third silently cleared the
+enclosing render's `taint` — and it has one exit now. Length is what let three
+of them accumulate unnoticed, and the length is still there. `open_dir_inner`
 ([1572–1882](../src/engine.c#L1572-L1882)) builds the synthetic source that
 caused B1 and B2; what is left of it is B8. `mdy_parse_block` ([block.c:1280–1760](../src/parse/block.c#L1280-L1760),
 480 lines) inlines the entire list grammar. `resize_in` defines a
@@ -609,7 +646,7 @@ against the checked-in headers would catch a `property-information` upgrade.
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`
 ([engine.c:2267](../src/engine.c#L2267), [2888](../src/engine.c#L2888),
-[4995](../src/engine.c#L4995)), the unused parameter above, and two from stb
+[4994](../src/engine.c#L4994)), the unused parameter above, and two from stb
 under `STBI_ONLY_PNG`. A non-const `mdy_root_mut` in `mdybuild.h` (or
 `-Wno-unused-function` around the stb include) makes the build silent, which
 is the only state in which a *new* warning is noticed.
@@ -638,8 +675,9 @@ accumulating.
 
 ## 5. Suggested order
 
-1. B3, B12 and B6 are one change: give `render_tree_out` a single exit and
-   hash the record without `_id`. Small, high value, easy to test.
+1. ~~B3~~, ~~B12~~, B6 were one change: give `render_tree_out` a single exit
+   and hash the record without `_id`. The single exit is done; B6 is the
+   other half and is untouched — skip `_id` in `document_fingerprint`.
 2. ~~B1~~, ~~B2~~, B8: stop building identity as text. Done as far as the
    document text goes — the files are separate sources and the counting logic
    is gone. B8 is what remains: identity is still YAML written by `snprintf`,
@@ -672,7 +710,8 @@ mkdir -p /tmp/em && : > /tmp/em/a.mdy && cp /tmp/yd/main.mdy /tmp/em/
 printf '+++\ntitle: Zed\n+++\nhello\n' > /tmp/em/zed.mdy
 ./build/mdy /tmp/em; node ../../bin/mdy.js /tmp/em
 
-# B3 — .md through $.render
+# B3 (fixed — the two now agree; before the fix C printed `<p>A:  B: </p>`)
+# .md through $.render
 mkdir -p /tmp/mr && printf '# Alpha\n\nfirst body\n' > /tmp/mr/a.md && printf '# Beta\n\nsecond body\n' > /tmp/mr/b.md
 printf 'A: {{ $.render({ path: "a.md" }) }}\nB: {{ $.render({ path: "b.md" }) }}\n' > /tmp/mr/main.mdy
 ./build/mdy /tmp/mr --html; node ../../bin/mdy.js /tmp/mr --html

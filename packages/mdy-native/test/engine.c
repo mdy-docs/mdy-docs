@@ -411,6 +411,94 @@ static void blank_file_checks(void) {
 }
 
 
+/* ---- a .md document through $.render ----------------------------------------
+ *
+ * The other front end has no code to run, so it parses and hands the tree
+ * back — and it used to hand it back from the middle of render_tree_out
+ * rather than through `done`, which is where the key a render is HELD under
+ * gets written. The tree was parked under whatever the last render had left
+ * there: nothing at all on the first render, so the token carried no id, could
+ * not be read back, and the content silently disappeared — or the PREVIOUS
+ * render's key, and the page showed that render twice.
+ *
+ * Both shapes are here, and each uses a .md nothing has rendered yet —
+ * a SECOND render of one is answered from the memo, which took the same exit
+ * as everything else and was always named correctly. Plus that memo case, so
+ * it stays that way. Every expected string is what `node bin/mdy.js` writes
+ * for this directory.
+ */
+static void markdown_render_checks(void) {
+    printf("\n--- engine: a .md document through $.render ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-md", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "a.md", "# Alpha\n\nfirst body\n");
+    write_file(root, "b.md", "# Beta\n\nsecond body\n");
+    write_file(root, "c.md", "# Gamma\n\nthird body\n");
+    write_file(root, "lay.mdy", "layout text\n");
+    write_file(root, "main.mdy",
+        "% $.emit('two.html', $.html($.render({ path: 'a.md' })) + '|' + $.html($.render({ path: 'b.md' })))\n"
+        "% $.emit('after.html', $.html($.render({ path: 'lay.mdy' })) + '|' + $.html($.render({ path: 'c.md' })))\n"
+        "% $.emit('twice.html', $.html($.render({ path: 'a.md' })) + '|' + $.html($.render({ path: 'a.md' })))\n"
+        "% $.emit('text.txt', JSON.stringify($.text({ path: 'a.md' })))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of markdown\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    ok_("a .md rendered first is there at all",
+        emitted("two.html") &&
+            strcmp(emitted("two.html"),
+                   "<h1 id=\"alpha\">Alpha</h1>\n<p>first body</p>|"
+                   "<h1 id=\"beta\">Beta</h1>\n<p>second body</p>") == 0,
+        emitted("two.html"));
+    ok_("...and a .md rendered AFTER another document is itself, not that one",
+        emitted("after.html") &&
+            strcmp(emitted("after.html"),
+                   "<p>layout text</p>|<h1 id=\"gamma\">Gamma</h1>\n<p>third body</p>") == 0,
+        emitted("after.html"));
+    ok_("...and the same one twice is it twice",
+        emitted("twice.html") &&
+            strcmp(emitted("twice.html"),
+                   "<h1 id=\"alpha\">Alpha</h1>\n<p>first body</p>|"
+                   "<h1 id=\"alpha\">Alpha</h1>\n<p>first body</p>") == 0,
+        emitted("twice.html"));
+    ok_("$.text on a .md is the file, since no code wrote anything else",
+        emitted("text.txt") &&
+            strcmp(emitted("text.txt"), "\"# Alpha\\n\\nfirst body\\n\"") == 0,
+        emitted("text.txt"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1293,12 +1381,24 @@ int main(void) {
         printf("  %s  a document index that is not there\n", ok ? "ok  " : "FAIL");
         if (!ok) { printf("      actual %s\n", html ? html : err); failures++; }
         free(html);
+
+        /* …and it gives back the render depth it took on the way in. It did
+         * not, so the thirty-third of these exhausted the cycle guard and
+         * every render after it failed, in an engine nothing had gone wrong
+         * in. */
+        for (int i = 0; i < 40; i++) free(mdy_engine_render(e, 5, err, sizeof err));
+        char *after = mdy_engine_render(e, 0, err, sizeof err);
+        ok = after && strcmp(after, "<h1 id=\"one\">One</h1>") == 0;
+        printf("  %s  ...forty times over, and the document that IS there renders\n", ok ? "ok  " : "FAIL");
+        if (!ok) { printf("      actual %s\n", after ? after : err); failures++; }
+        free(after);
         mdy_engine_free(e);
     }
 
     site_checks();
     data_file_checks();
     blank_file_checks();
+    markdown_render_checks();
     natives_checks();
     resize_checks();
     gc_checks();
