@@ -2370,6 +2370,7 @@ extern int nis_find(int handle, const uint8_t *filter, uint32_t filter_len,
                     uint8_t **out, size_t *out_len);
 extern int nis_create_index(int handle, const char *name, const uint8_t *fields,
                             uint32_t fields_len, int unique, int sparse);
+extern void nis_close(int handle);
 
 static void close_set(mdy_engine *e) {
     for (size_t i = 0; i < e->count; i++) mdy_data_free(e->docs[i].fences);
@@ -2377,6 +2378,21 @@ static void close_set(mdy_engine *e) {
     free(e->ids);
     free(e->oid_slots);
     mdy_documents_free(e->source_docs);
+    /*
+     * The collection goes with the documents that are in it. Nothing closed
+     * it, so every engine left behind a primary store, an index store, two
+     * B+trees and a slot in nisaba's table — a build is one engine and does
+     * not care, but `mdy dev` and `--watch` are a new engine per save, and
+     * the process grew by a third of a megabyte on every keystroke that
+     * landed.
+     *
+     * The handle goes back to -1 rather than being reused, which is also what
+     * makes opening a set TWICE on one engine mean what it says: the second
+     * open used to insert into the collection the first one filled, so the
+     * old documents were still there to be found.
+     */
+    if (e->handle >= 0) nis_close(e->handle);
+    e->handle = -1;
     e->docs = NULL;
     e->ids = NULL;
     e->oid_slots = NULL;

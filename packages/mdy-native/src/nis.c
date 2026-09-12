@@ -160,9 +160,15 @@ int nis_open(void) {
     bj_io io = { .ctx = store, .size = io_size, .read = io_read,
                  .write = io_write, .truncate = io_truncate };
     g_slots[slot].tree = bpt_create(&io, 64);
-    if (!g_slots[slot].tree) { store_free(store); return -1; }
+    if (!g_slots[slot].tree) { store_free(store); g_slots[slot].store = NULL; return -1; }
     g_slots[slot].coll = dc_collection_open(g_slots[slot].tree);
-    if (!g_slots[slot].coll) { store_free(store); return -1; }
+    if (!g_slots[slot].coll) {
+        bpt_free(g_slots[slot].tree);
+        store_free(store);
+        g_slots[slot].tree = NULL;
+        g_slots[slot].store = NULL;
+        return -1;
+    }
     g_slots[slot].used = 1;
     return slot;
 }
@@ -204,20 +210,40 @@ int nis_create_index(int handle, const char *name, const uint8_t *fields, uint32
      * reopening a collection whose index file already holds the postings. */
     int rc = dc_collection_add_index(s->coll, name, (int)strlen(name), s->index_trees[n],
                                      fields, fields_len, unique, sparse, NULL, 0);
-    if (rc != 0) { store_free(s->index_stores[n]); s->index_stores[n] = NULL;
-                   s->index_trees[n] = NULL; return rc; }
+    if (rc != 0) {
+        bpt_free(s->index_trees[n]);
+        store_free(s->index_stores[n]);
+        s->index_trees[n] = NULL;
+        s->index_stores[n] = NULL;
+        return rc;
+    }
     s->indexes++;
     return 0;
 }
 
+/*
+ * Everything the collection is, in the order it was built.
+ *
+ * The collection first, since its index descriptors name the trees. Then the
+ * TREES, which nisaba never owned: bpt_create made each one over a bj_io of
+ * ours and dc_collection_add_index only borrowed it, so dc_collection_free
+ * leaves them — that is a B+tree's buffers per index plus one for the primary
+ * store, and they used to be left here too. Then the stores the trees read and
+ * wrote through, and the slot goes back in the pool.
+ */
 void nis_close(int handle) {
     Slot *s = slot_of(handle);
     if (!s) return;
     dc_collection_free(s->coll);
+    s->coll = NULL;
     for (int i = 0; i < s->indexes; i++) {
+        bpt_free(s->index_trees[i]);
         store_free(s->index_stores[i]);
+        s->index_trees[i] = NULL;
         s->index_stores[i] = NULL;
     }
+    bpt_free(s->tree);
+    s->tree = NULL;
     store_free(s->store);
     s->store = NULL;
     s->indexes = 0;

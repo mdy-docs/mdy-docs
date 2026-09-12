@@ -26,7 +26,7 @@ what those checks do not reach.
 | B2 | ~~High~~ **fixed** | `engine.c` directory walk | An empty or whitespace-only `.mdy` file shifted every later document's identity |
 | B3 | ~~High~~ **fixed** | `engine.c` render memo | `$.render` of a `.md` document yielded an empty or *wrong* token |
 | B4 | ~~High~~ **fixed** | `engine.c` querying | `$.find` was cubic in the size of the set |
-| B5 | Medium | `engine.c` / `nis.c` | The nisaba collection is never closed: memory grows on every rebuild |
+| B5 | ~~Medium~~ **fixed** | `engine.c` / `nis.c` | The nisaba collection was never closed: memory grew on every rebuild |
 | B6 | Medium | `engine.c` render memo | The two-generation memo never hits across builds |
 | B7 | Medium | parser, writer, engine, YAML | Unbounded recursion: crafted input crashes the process |
 | B8 | Medium | `engine.c` directory walk | A file name containing `"` or `\` silently loses its identity |
@@ -43,9 +43,10 @@ what those checks do not reach.
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3), and
 the maintainability items in §4 — of which the most important is that the
 directory walk, the dev server and the HTTP layer have no tests that could
-have caught B1–B3, B5, B6 or B10. (B1's, B2's, B3's and B4's fixes come with
-the first four — `data_file_checks`, `blank_file_checks`,
-`markdown_render_checks` and `query_order_checks` in `test/engine.c`.)
+have caught B1–B3, B5, B6 or B10. (B1's, B2's, B3's, B4's and B5's fixes come
+with the first five — `data_file_checks`, `blank_file_checks`,
+`markdown_render_checks`, `query_order_checks` and `reopen_checks` in
+`test/engine.c`.)
 
 ---
 
@@ -60,7 +61,7 @@ the first four — `data_file_checks`, `blank_file_checks`,
 and the mapping travels beside the document in a new `ident_data`
 ([engine.c:216](../src/engine.c#L216)), merged in `mdy_engine_open` after the
 document's own fields and before `path`
-([engine.c:2547](../src/engine.c#L2547)) — which is where mdy-docs puts a
+([engine.c:2563](../src/engine.c#L2563)) — which is where mdy-docs puts a
 source's `meta` (`parseDocuments`, `src/mdy.js`). The file's document is now
 the same placeholder every other non-MDY file gets, so a `---` or a `+++` line
 among its bytes can no longer be read as document structure, and the identity
@@ -127,7 +128,7 @@ text needed a `\n` folded into each separator to keep it, which is gone — and
 a directory with no source files in it is a set of zero documents rather than
 one empty one, which is also what node reports. `mdy_engine_open` splits and
 then hands the documents to a shared `open_documents`
-([engine.c:2402](../src/engine.c#L2402)), so both ways in run the same code.
+([engine.c:2418](../src/engine.c#L2418)), so both ways in run the same code.
 
 Regression test: `blank_file_checks`
 ([test/engine.c:343](../test/engine.c#L343)), which fails on the old code in
@@ -157,14 +158,14 @@ source, it is just no longer at risk of being re-split.
 #### B3 — `$.render` of a `.md` document returns an empty or wrong token (High) — FIXED
 
 **Fixed.** `render_tree_out` has one exit. The markdown branch sets `out` and
-jumps to `done:` ([engine.c:4905](../src/engine.c#L4905)) like every other
+jumps to `done:` ([engine.c:4921](../src/engine.c#L4921)) like every other
 path, so `e->last_render_key` is written for it too and `render_native` parks
 the tree under the key of the render that actually made it.
 
 The other two exits went with it, which is B12 below. The index check is a
-`FAIL` ([engine.c:4894](../src/engine.c#L4894)) and gives back the depth and
+`FAIL` ([engine.c:4910](../src/engine.c#L4910)) and gives back the depth and
 the `current` it had already taken; the cycle guard moved ABOVE everything
-`done:` restores ([engine.c:4859](../src/engine.c#L4859)), which is what
+`done:` restores ([engine.c:4875](../src/engine.c#L4875)), which is what
 earns it the right to skip the label — there is nothing yet to give back.
 Before the move it silently cleared the enclosing render's `taint` on its way
 out.
@@ -210,13 +211,13 @@ The five `check-sites` sites never render a `.md` through `$.render`
 #### B4 — `$.find` is O(N³) in the number of documents (High) — FIXED
 
 **Fixed.** The set carries a map from `_id` to document index
-([engine.c:2756](../src/engine.c#L2756)) — open addressing on the 24 hex
+([engine.c:2772](../src/engine.c#L2772)) — open addressing on the 24 hex
 characters, built the first time a query asks and freed with the set, so it is
 exactly as valid as `ids` is. `index_of_id`
-([engine.c:2776](../src/engine.c#L2776)) is a lookup rather than a scan.
+([engine.c:2792](../src/engine.c#L2792)) is a lookup rather than a scan.
 
 The ordering pass reads each hit's `_id` ONCE
-([engine.c:2837](../src/engine.c#L2837)) and sorts the hits by the index it
+([engine.c:2853](../src/engine.c#L2853)) and sorts the hits by the index it
 resolves to, instead of walking every document position against every hit.
 Two allocations per inner step went with it: the `_id` atom was being interned
 again on every one of them, and the id itself converted to UTF-8 — the units
@@ -246,32 +247,46 @@ order or in `n` order would say so. Byte-identical to node on a full find, a
 filtered find, `$gt`, `findOne`, no match, `withTag`, a cross-package find,
 and `$.render` by document, by query and by index.
 
-#### B5 — The nisaba collection is never closed (Medium)
+#### B5 — The nisaba collection is never closed (Medium) — FIXED
 
-`nis_close` has no callers anywhere in the package; `close_set`
-([engine.c:2374–2386](../src/engine.c#L2374-L2386)) and `mdy_engine_free` free
-everything except the collection handle. Every `mdy_engine_new`+`open_dir`
-leaks the primary store, the `path` index store and a slot in the global
-table. `mdy dev` and `--watch` create a fresh engine per rebuild, so memory
-grows with every save.
+**Fixed.** `close_set` closes the collection and puts the handle back to -1
+([engine.c:2394](../src/engine.c#L2394)), so a set's data dies with the set.
+`nis_close` was finished first ([nis.c:234](../src/nis.c#L234)): it freed the
+stores but never the B+trees over them, which is a tree's buffers per index
+plus one for the primary store. The two open paths that could leak a tree on
+failure were closed with it.
 
-Measured with the memo rotated per cycle, as the CLI does: 200
-open+render+free cycles of `examples/blog` (16 files) took the process from
-5 MB to 71 MB — about 0.33 MB per rebuild for a tiny site, proportional to
-the site's data.
+Measured with the memo rotated per cycle, as the CLI does — open+render+free
+of `examples/blog` (16 files), peak RSS:
 
-`nis_close` also leaves `bpt` trees unfreed (it frees the stores but never
-calls `bpt_free` on `s->tree` or `s->index_trees[i]`), so closing it will
-need finishing too.
+| cycle | before | after |
+| --- | --- | --- |
+| 1 | 6.8 MB | 5.2 MB |
+| 50 | 29.1 MB | 14.2 MB |
+| 100 | 43.6 MB | 14.5 MB |
+| 200 | 72.1 MB | 15.6 MB |
+| 400 | — | 15.8 MB |
+
+Before, about 0.33 MB per rebuild with no sign of stopping. After, flat from
+roughly cycle 250. A leak checker saw nothing either way and still does: the
+memory stayed reachable from nisaba's slot table, which nothing marked free,
+so only RSS showed it.
+
+Regression test: `reopen_checks` ([test/engine.c:604](../test/engine.c#L604)).
+The leak itself is not a thing a check can assert, but the other half of the
+same fact is — opening a set twice on ONE engine, which could not be done at
+all: the second open reached a collection that still had the first set's
+`path` index and nisaba refused it with `-2`. It works now, and the second set
+is the whole set. On the old engine two of its three assertions fail.
 
 #### B6 — The memo never hits across builds (Medium)
 
 The memo is documented as keeping two generations so "a rebuild may reuse the
 build before it" ([engine.h:193–200](../src/engine.h#L193-L200)). The key is
 `document_fingerprint`, which hashes the document's *record* as returned from
-nisaba ([engine.c:4798–4810](../src/engine.c#L4798-L4810)) — and the record
+nisaba ([engine.c:4814–4826](../src/engine.c#L4814-L4826)) — and the record
 includes `_id`, a fresh ObjectId minted at every open
-([2557](../src/engine.c#L2557)). Two builds of the same unchanged site never
+([2573](../src/engine.c#L2573)). Two builds of the same unchanged site never
 share a key.
 
 Measured with `MDY_MEMO_DEBUG=1` over three consecutive rotate+open+render
@@ -439,9 +454,9 @@ end of the stream, and to stop the line walk there.
   it: `js_object_get(e->vm, hit, key(e->vm, "_id"))` on an unrooted query
   result in `mdy_engine_entry` ([1994](../src/engine.c#L1994)) and
   `resolve_target` ([2240](../src/engine.c#L2240)), on an unrooted decode in
-  `lookup_import` ([3015](../src/engine.c#L3015)), and
+  `lookup_import` ([3031](../src/engine.c#L3031)), and
   `js_object_get(e->vm, document_record(e, i), key(…))` in `publish_native`
-  ([3797–3798](../src/engine.c#L3797-L3798)). They survive `MDY_GC_STRESS`
+  ([3813–3814](../src/engine.c#L3813-L3814)). They survive `MDY_GC_STRESS`
   only because the atom is already interned by the time they run. Root the
   value or build the key first.
 - **B14 — `report()` uses `strftime("%l")`** ([cli.c:1082](../src/cli.c#L1082))
@@ -485,7 +500,7 @@ end of the stream, and to stop the line walk there.
   paragraph ([inline.c:160](../src/parse/inline.c#L160)); tag hrefs
   ([inline.c:458](../src/parse/inline.c#L458)), footnote ids
   ([footnote.c:33](../src/parse/footnote.c#L33)), TOC hrefs
-  ([engine.c:3557](../src/engine.c#L3557)), identity records over 4 KB
+  ([engine.c:3573](../src/engine.c#L3573)), identity records over 4 KB
   ([engine.c:1650](../src/engine.c#L1650), where a truncated `ident_len` can
   also underflow the second `snprintf`'s size). Each is unlikely alone; none
   says anything when it happens.
@@ -509,7 +524,7 @@ end of the stream, and to stop the line walk there.
   `collect_message`, `buf_put`, `seen_before`, `read_stdin`, `absolute` in
   cli.c; `add`/`snapshot_changes` in watch.c; the `recv` buffer in http.c
   ([155](../src/http.c#L155)); `broker_request` ([broker.c:104](../src/broker.c#L104));
-  `mdy_engine_encode_json` ([engine.c:2688](../src/engine.c#L2688)); the fence
+  `mdy_engine_encode_json` ([engine.c:2704](../src/engine.c#L2704)); the fence
   body, list and paragraph joins in block.c ([1405](../src/parse/block.c#L1405),
   [1605](../src/parse/block.c#L1605), [1691](../src/parse/block.c#L1691),
   [1818](../src/parse/block.c#L1818)); `cache_put` frees the *new* array on a
@@ -525,7 +540,7 @@ end of the stream, and to stop the line walk there.
   ([cli.c:1555–1566](../src/cli.c#L1555-L1566)); `dev_deliver` returns 500 so
   the broker dead-letters them ([1700–1707](../src/cli.c#L1700-L1707)).
 - **B27 — `wrap()` assembles the document's source with `snprintf("%s…")`**
-  ([engine.c:4551–4554](../src/engine.c#L4551-L4554)); on a 3.6 GB input
+  ([engine.c:4567–4570](../src/engine.c#L4567-L4570)); on a 3.6 GB input
   AddressSanitizer reports `negative-size-param` from the `int` return value
   overflowing. Pathological, but `memcpy` is also simpler.
 
@@ -537,12 +552,12 @@ end of the stream, and to stop the line walk there.
 | --- | --- | --- |
 | [fsx.c:395–589](../src/fsx.c#L395-L589), [fsx.h:60–86](../src/fsx.h#L60-L86) | "What the ported test suite needs": `fsx_readdir`, `fsx_mkdirp`, `fsx_rm_rf`, `fsx_mkdtemp`, `fsx_tmpdir`, plus `is_dir_path`/`remove_dir` | The suite it served is gone (README, "that binary is gone"). `fsx_readdir` and `fsx_remove` have no callers at all; the other four are used only by `test/engine.c`, which could use `mkdtemp` directly. ~200 lines including the Win32 halves. The header still cites `../shims/fs.js` and `../shims/node/`, which do not exist. |
 | [oswin.c:32–85](../src/oswin.c#L32-L85), `oswin.h` | `win_pread`, `win_pwrite`, `win_fsize`, `win_ftruncate`, `win_temp_file`, `win_close` | Left from when nisaba's store was a temp file. No callers. |
-| [nis.c:213–225](../src/nis.c#L213-L225) | `nis_close` | No callers — see B5; this one should gain a caller rather than be deleted. Its neighbour comment (43–55) describes a `host.c` finalizer and per-collection temp files, neither of which exists; `nis.h:543–546` says the same. |
+| ~~[nis.c:234–251](../src/nis.c#L234-L251)~~ | `nis_close` | ~~No callers~~ — it has one now (B5), and it frees the B+trees it used to leave. Its neighbour comment ([nis.c:43–55](../src/nis.c#L43-L55)) still describes a `host.c` finalizer and per-collection temp files, neither of which exists, and `nis.h:16` still calls the store "a fresh temp file". |
 | [httpd.c](../src/httpd.c) | `httpd_query`, `httpd_kept_count`, `httpd_close` | No callers (the dev loop never exits). |
 | [Makefile:128–134](../Makefile#L128-L134) | `build/libnisaba.a` | Nothing links it; every engine binary recompiles all 20 nisaba sources from scratch instead. The stale `build/libnisaba.a`, `build/mdy-build`, `build/mdy-build-asan` in the build tree are its fossils. |
 | [Makefile:245–246](../Makefile#L245-L246) and [249–250](../Makefile#L249-L250), `test/doccat.c`, `test/datacat.c` | Two drivers with build rules that no check target or script invokes | `md4cprobe` is in the same state but is at least mentioned in `docs/parser.md` as a manual baseline tool. |
 | [cli.c:1183–1208](../src/cli.c#L1183-L1208) | `is_help` | Set, then `(void)is_help`. |
-| [engine.c:3362](../src/engine.c#L3362) | `column_align`'s `e` parameter | Compiler warning in every build. |
+| [engine.c:3378](../src/engine.c#L3378) | `column_align`'s `e` parameter | Compiler warning in every build. |
 | [block.c:333](../src/parse/block.c#L333) | `(void)id_len` in `set_heading_id` | The variable is only computed to be discarded. |
 | [block.c:1605](../src/parse/block.c#L1605) | `mdy_alloc(doc ? &doc->arena : NULL, …)` | `doc` cannot be NULL there and `mdy_alloc(NULL)` would crash. |
 | [engine.h:22–30](../src/engine.h#L22-L30) | "WHAT THIS DOES NOT DO YET" | All three items are done; the list now misleads. Same for [block.c:1973](../src/parse/block.c#L1973) (`shims/parse.js`) and [docs/cli-plan.md:116–125](cli-plan.md) (`scripts-compare-cli.mjs`, "N/40 cases" — neither exists; `check-cli` runs `cli.test.js` directly, 34 cases). |
@@ -588,7 +603,7 @@ in the file's own section comments: the walk (`open_dir_inner`,
 be a file with a small internal header.
 
 **Long functions with several exits.** `render_tree_out`
-([4827–5130](../src/engine.c#L4827-L5130), ~300 lines) manages seven GC roots
+([4843–5146](../src/engine.c#L4843-L5146), ~300 lines) manages seven GC roots
 and a `FAIL` macro that jumps to `done:`. It had three early returns that
 *bypassed* `done:` — one was B3, another B12, the third silently cleared the
 enclosing render's `taint` — and it has one exit now. Length is what let three
@@ -598,9 +613,9 @@ caused B1 and B2; what is left of it is B8. `mdy_parse_block` ([block.c:1280–1
 480 lines) inlines the entire list grammar. `resize_in` defines a
 `RESIZE_FAIL` macro and then uses it for two of its eight failures.
 
-**Process-global state.** The memo tables ([engine.c:4699](../src/engine.c#L4699))
+**Process-global state.** The memo tables ([engine.c:4715](../src/engine.c#L4715))
 and `mdy_engine_rotate_memo(void)`, the nisaba slot table (`nis.c`),
-`lookup_import`'s `static char path[1024]` ([2997](../src/engine.c#L2997)),
+`lookup_import`'s `static char path[1024]` ([3013](../src/engine.c#L3013)),
 `seen_sources` in cli.c, the OID statics in ingest.c. These make the engine
 non-reentrant and are the reason `wasm/index.mjs` instantiates a fresh module
 per call. They also make the memo shared between unrelated engines in one
@@ -664,8 +679,8 @@ against the checked-in headers would catch a `property-information` upgrade.
 
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`
-([engine.c:2279](../src/engine.c#L2279), [2973](../src/engine.c#L2973),
-[5079](../src/engine.c#L5079)), the unused parameter above, and two from stb
+([engine.c:2279](../src/engine.c#L2279), [2989](../src/engine.c#L2989),
+[5095](../src/engine.c#L5095)), the unused parameter above, and two from stb
 under `STBI_ONLY_PNG`. A non-const `mdy_root_mut` in `mdybuild.h` (or
 `-Wno-unused-function` around the stb include) makes the build silent, which
 is the only state in which a *new* warning is noticed.
@@ -673,12 +688,12 @@ is the only state in which a *new* warning is noticed.
 **Error reporting has four conventions.** `0/-1` with an error buffer
 (engine, fsx), `BJ_*` codes (memns, nis), `NULL` plus a static message buffer
 (cli), and `fprintf(stderr)` from inside the library
-([engine.c:4343](../src/engine.c#L4343), [4358](../src/engine.c#L4358)) even
+([engine.c:4359](../src/engine.c#L4359), [4374](../src/engine.c#L4374)) even
 though `on_message` exists for exactly that. Pick two.
 
 **Debug switches are read in hot paths.** `getenv("MDY_MEMO_DEBUG")` runs
 three times per render and `getenv("MDY_LINEMAP_DEBUG")` once per produced
-line ([engine.c:4643](../src/engine.c#L4643)); read them once in
+line ([engine.c:4659](../src/engine.c#L4659)); read them once in
 `mdy_engine_new`.
 
 **Fragile initialisers.** `bjval.c` fills `bj_visitor` positionally
@@ -702,7 +717,8 @@ accumulating.
    is gone. B8 is what remains: identity is still YAML written by `snprintf`,
    and the fix is to build it as values rather than escape it.
 3. ~~B4~~: sort hits by a decoded index. Done.
-4. B5: call `nis_close` from `close_set` and finish `nis_close` (`bpt_free`).
+4. ~~B5~~: call `nis_close` from `close_set` and finish `nis_close`
+   (`bpt_free`). Done.
 5. B11, B7 (a depth cap in the walkers), B9, B10, B13 — each a few lines.
 6. Delete §2's dead code; add the `check-sites` fixture and a
    `check-generated` target; make the default build warning-free.

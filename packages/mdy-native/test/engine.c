@@ -585,6 +585,56 @@ static void query_order_checks(void) {
 }
 
 
+/* ---- a set closed with the engine -------------------------------------------
+ *
+ * A set's data lives in a nisaba collection, opened the first time a set is
+ * and never closed. Every engine left behind a primary store, an index store,
+ * two B+trees and a slot in nisaba's table. A build is one engine and does not
+ * care; `mdy dev` and `--watch` are a NEW engine per save, and two hundred
+ * rebuilds of examples/blog took the process from 7 MB to 72 MB. A leak
+ * checker never saw a byte of it: the memory stayed reachable from nisaba's
+ * slot table, which nothing ever marked free.
+ *
+ * That is not a thing a check can assert. What it can assert is the other half
+ * of the same fact — opening a set twice on ONE engine, which could not be
+ * done at all: the second open reached a collection that already had its
+ * `path` index and nisaba refused it. The first set is closed with its
+ * collection now, so the second is the whole set.
+ */
+static void reopen_checks(void) {
+    printf("\n--- engine: a set closed with the engine ---\n");
+
+    const char *first =
+        "= {{ $.find({ who: { $exists: true } }).map((d) => d.who).join(',') }}\n"
+        "---\n+++\nwho: first\n+++\n";
+    const char *second =
+        "= {{ $.find({ who: { $exists: true } }).map((d) => d.who).join(',') }}\n"
+        "---\n+++\nwho: second\n+++\n";
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    err[0] = '\0';
+
+    char *html = NULL;
+    if (mdy_engine_open(e, first, strlen(first), err, sizeof err) == 0)
+        html = mdy_engine_render(e, 0, err, sizeof err);
+    ok_("a set opens and finds its own document",
+        html && strcmp(html, "<h1 id=\"first\">first</h1>") == 0, html ? html : err);
+    free(html);
+
+    html = NULL;
+    err[0] = '\0';
+    int opened = mdy_engine_open(e, second, strlen(second), err, sizeof err) == 0;
+    ok_("...and the SAME engine opens a second one", opened, err);
+    if (opened) html = mdy_engine_render(e, 0, err, sizeof err);
+    ok_("...which is the whole set, the first having gone with its collection",
+        html && strcmp(html, "<h1 id=\"second\">second</h1>") == 0, html ? html : err);
+    free(html);
+
+    mdy_engine_free(e);
+}
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1486,6 +1536,7 @@ int main(void) {
     blank_file_checks();
     markdown_render_checks();
     query_order_checks();
+    reopen_checks();
     natives_checks();
     resize_checks();
     gc_checks();
