@@ -262,6 +262,14 @@ build/md4cprobe$(EXE): test/md4cprobe.c $(MD4C_SRCS)
 # swaps the executable. See docs/cli-plan.md.
 check-cli: build/mdy$(EXE)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test ../../test/cli.test.js
+
+# The dev server, which had no test of any kind until a delivery arriving
+# before the first good build was found to kill it. Native only, and this
+# file rather than ../../test/cli.test.js: the in-process broker is this
+# binary's, and bin/mdy.js's dev server has no delivery endpoint to hold to
+# the same answer.
+check-dev: build/mdy$(EXE)
+	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test test/dev.test.js
 check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
 	@./build/parse-test$(EXE)
 	@./build/html-test$(EXE)
@@ -412,7 +420,7 @@ check-golden: build/mdy$(EXE)
 	done; \
 	exit $$fail
 
-.PHONY: check-ingest check-engine check-site check-sites clean
+.PHONY: check-ingest check-engine check-site check-sites check-dev clean
 
 # A document from text into a nisaba collection, with no JavaScript in it:
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the

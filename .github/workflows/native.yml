@@ -177,6 +177,14 @@ jobs:
         working-directory: packages/mdy-native
         run: make check-cli
 
+      # The dev server: it spawns the binary, waits for the banner, and POSTs
+      # a delivery at it. One platform, for the same reason as above — what it
+      # exercises is this C, and the C is the same everywhere.
+      - name: Check the dev server
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/mdy-native
+        run: make check-dev
+
       # The binary, downloadable from the run. Only after every check has
       # passed, so what is there is what was proved; a release is a later
       # step and a workflow of its own.

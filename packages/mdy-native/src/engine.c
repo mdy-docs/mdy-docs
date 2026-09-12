@@ -5330,7 +5330,12 @@ static void wrap_failure(size_t index, char *error, size_t error_len) {
     snprintf(error, error_len, "mdy: document %zu failed: %s", index, copy);
 }
 
+/* NULL is no set, and no set has no page — the same answer mdy_engine_count
+ * gives, and for the same reason: a host may hold an engine it has not opened
+ * (`mdy dev` keeps serving when a build fails) and asking it a question about
+ * documents should not be a crash. */
 int mdy_engine_page_index(mdy_engine *e, const char *name) {
+    if (!e) return -1;
     int found = -1;
     for (size_t i = 0; i < e->count; i++) {
         char *have = message_name(e, i);
@@ -5344,7 +5349,7 @@ int mdy_engine_page_index(mdy_engine *e, const char *name) {
 }
 
 char *mdy_engine_document_path(mdy_engine *e, size_t index) {
-    if (index >= e->count) return NULL;
+    if (!e || index >= e->count) return NULL;
     JsValue record = document_record(e, index);
     js_gc_protect(e->vm, &record);
     char *path = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "path")));

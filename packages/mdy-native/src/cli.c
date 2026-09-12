@@ -1496,7 +1496,9 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
                           double *done_indexes, double *failed_indexes);
 
 static void dev_drain(Dev *d) {
-    if (!d->local) return;
+    /* Nothing to render them with: they stay queued rather than being taken
+     * and found undeliverable. The drain after the next good build has them. */
+    if (!d->local || !d->engine) return;
     for (int round = 0; round < 32; round++) {
         size_t handled = 0;
         BrokerReply r;
@@ -1685,6 +1687,28 @@ static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
     if (!httpd_header(req, "X-Sukkal-Subject", subject, sizeof subject)) { httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
     bjv *batch = bjv_decode(req->body, req->body_len);
     if (!batch || batch->type != BJV_ARRAY || batch->count == 0) { bjv_free(batch); httpd_respond(s, req, 400, "text/plain", NULL, "", 0); return; }
+
+    /*
+     * No build to deliver to. `mdy dev` goes on serving when the FIRST build
+     * fails — there is nothing to fall back to and a broken save should not
+     * take the server down with it — so the engine can be absent here, and
+     * this used to read documents off it: the first message delivered killed
+     * the server outright.
+     *
+     * 500 returns them to the broker, which brings them back after a backoff,
+     * and by then a save may have fixed the build. Routing them with no engine
+     * would find no page of that name, which is a different thing and settles
+     * them away.
+     */
+    if (!d->engine) {
+        char ts[32];
+        fprintf(stderr, "%s %s[hold]%s %s %s(no build yet)%s — %zu message(s) returned; the broker will try again\n",
+                TS(ts), YELLOW_OPEN(), YELLOW_CLOSE(), subject, DIM_OPEN(), DIM_CLOSE(), batch->count);
+        bjv_free(batch);
+        httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
+        fflush(stdout);
+        return;
+    }
 
     dev_policy(d, subject);
 

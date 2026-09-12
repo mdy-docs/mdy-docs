@@ -31,7 +31,7 @@ what those checks do not reach.
 | B7 | ~~Medium~~ **fixed** | parser, writer, engine, YAML | Unbounded recursion: crafted input crashed the process |
 | B8 | ~~Medium~~ **fixed** | `engine.c` directory walk | A file name containing `"` or `\` silently lost its identity |
 | B9 | Medium | `yaml.c` | Text after a closing quote is silently dropped |
-| B10 | Medium | `cli.c` dev server | NULL engine dereference on delivery after a failed first build |
+| B10 | ~~Medium~~ **fixed** | `cli.c` dev server | NULL engine dereference on delivery after a failed first build |
 | B11 | Medium | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13–B27 | Low | various | Rooting fragility, portability, leaks on error paths, truncation, UB casts |
@@ -43,8 +43,9 @@ what those checks do not reach.
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3), and
 the maintainability items in §4 — of which the most important is that the
-directory walk, the dev server and the HTTP layer have no tests that could
-have caught B1–B3, B5, B6 or B10. (B1's through B7's fixes come with tests of
+directory walk, the dev server and the HTTP layer had no tests that could
+have caught B1–B3, B5, B6 or B10. The walk and the dev server have them now;
+the HTTP layer still does not. (B1's through B7's fixes come with tests of
 their own — `data_file_checks`, `blank_file_checks`, `markdown_render_checks`,
 `query_order_checks`, `reopen_checks`, `memo_key_checks` and
 `deep_value_checks` in `test/engine.c`, plus depth checks in `test/parse.c`
@@ -436,15 +437,40 @@ parses as `Hello`; `name: "it"s.mdy"` as `it`. The file's own contract is
 mis-reads data is worse than one that refuses it" — this is the one place it
 guesses.
 
-#### B10 — `mdy dev --broker <url>`: crash on delivery after a failed first build (Medium)
+#### B10 — `mdy dev`: crash on delivery after a failed first build (Medium) — FIXED
 
-`cmd_dev` deliberately keeps serving when the first build fails
-([cli.c:1918](../src/cli.c#L1918)), leaving `d.engine == NULL`
-([1829–1833](../src/cli.c#L1829-L1833)). With a remote broker the registration
-still happens, and the first delivery reaches `dev_deliver`, which calls
-`mdy_engine_page_index(d->engine, …)` and `mdy_engine_document_path` on the
-NULL engine ([1692](../src/cli.c#L1692), [1563](../src/cli.c#L1563)). By
-reading; not executed against a broker.
+**Reproduced, and worse than filed.** The original said "with a remote
+broker… by reading; not executed". No remote broker is needed: `mdy dev` opens
+an IN-PROCESS one when `--broker` is absent, which is the default, and that
+sets `d.live` — so the delivery endpoint is live on every `mdy dev`. Start one
+on a site that does not compile and POST a batch at `/mdy/mdy-bus` and the
+process is gone: `curl` reports `http 000`, the connection closed with no
+response.
+
+**Fixed.** `dev_deliver` holds when there is no build
+([cli.c:1705](../src/cli.c#L1705)): 500 returns the messages to the broker,
+which brings them back after a backoff, by which time a save may have fixed
+the build. Routing them with no engine would have found no page of that name,
+which is a different thing and settles them away — so the guard has to come
+before the routing, not be folded into it. `dev_drain`, the in-process path,
+does not take messages it cannot render either
+([cli.c:1501](../src/cli.c#L1501)); they stay queued for the drain after the
+next good build. And `mdy_engine_page_index` and `mdy_engine_document_path`
+tolerate a NULL engine ([engine.c:5338](../src/engine.c#L5338)), which is the
+convention `mdy_engine_count` already sets in that file.
+
+**The dev server has a test now** — its first, which is the real reason this
+went unnoticed. `test/dev.test.js` with a `check-dev` target
+([Makefile:271](../Makefile#L271)) and a CI step: it spawns the binary on a
+site that does not compile, waits for the banner, POSTs a delivery, and
+asserts 500, the `[hold]` line, and that the process is still running. Then it
+fixes the site, waits for the rebuild and POSTs again, which is the half that
+shows holding was the right answer rather than merely a survivable one. On the
+old binary the first POST fails with `socket hang up`.
+
+Native only, and not in `../../test/cli.test.js`: the in-process broker is
+this binary's, and `bin/mdy.js`'s dev server has no delivery endpoint at all —
+it answers 404 — so there is no shared behaviour to hold both to.
 
 #### B11 — TIFF dimension reader: 32-bit overflow → out-of-bounds read (Medium)
 
@@ -617,9 +643,9 @@ end of the stream, and to stop the line walk there.
   the dev server's registration forever. `parse_url` also cannot take an IPv6
   literal (`http://[::1]:8080` → host `[`).
 - **B17 — Dev server exposure**: it binds `0.0.0.0`
-  ([cli.c:1923](../src/cli.c#L1923)) and the delivery bearer token is four
-  `rand()` calls seeded from the clock ([1930](../src/cli.c#L1930),
-  [2009](../src/cli.c#L2009)). The request buffer has no size cap
+  ([cli.c:1947](../src/cli.c#L1947)) and the delivery bearer token is four
+  `rand()` calls seeded from the clock ([1954](../src/cli.c#L1954),
+  [2033](../src/cli.c#L2033)). The request buffer has no size cap
   ([httpd.c:278–283](../src/httpd.c#L278-L283)) and responses are written with
   a blocking `send` ([188](../src/httpd.c#L188)), so one slow LAN client stalls
   rebuilds. Binding `127.0.0.1` by default removes most of this.
@@ -628,7 +654,7 @@ end of the stream, and to stop the line walk there.
   snapshots come from `fsx_list`, which sorts, so a merge would be linear.
 - **B19 — `mdy build`/`dev`/`dead` accept anything as the positional**: an
   unknown flag or a flag with its value missing falls into `else root = a`
-  ([cli.c:668](../src/cli.c#L668), [1891](../src/cli.c#L1891),
+  ([cli.c:668](../src/cli.c#L668), [1915](../src/cli.c#L1915),
   [440](../src/cli.c#L440)). `mdy build --draft` builds a site called
   `--draft`; `mdy build site --out` builds `--out`. Document mode (and the
   JavaScript CLI) reject unknown options.
@@ -682,8 +708,8 @@ end of the stream, and to stop the line walk there.
 - **B26 — Local-bus and remote-bus disagree on an undeliverable subject**:
   `dev_drain` passes `target < 0` for *any* subject with no page into the
   "dead-letter channel with no page" branch, which marks every message done
-  ([cli.c:1551–1562](../src/cli.c#L1551-L1562)); `dev_deliver` returns 500 so
-  the broker dead-letters them ([1696–1703](../src/cli.c#L1696-L1703)).
+  ([cli.c:1553–1564](../src/cli.c#L1553-L1564)); `dev_deliver` returns 500 so
+  the broker dead-letters them ([1720–1727](../src/cli.c#L1720-L1727)).
 - **B27 — `wrap()` assembles the document's source with `snprintf("%s…")`**
   ([engine.c:4661–4664](../src/engine.c#L4661-L4664)); on a 3.6 GB input
   AddressSanitizer reports `negative-size-param` from the `int` return value
@@ -778,9 +804,9 @@ and then there would be nothing to escape.
 **The `Dev` struct and the bus code in cli.c** carry fixed-size scratch
 (`done_ix[64]`, `done_list[4096]`, `char cand[3][4200]`), fake growable
 arrays by passing a compound literal as the capacity
-([1473](../src/cli.c#L1473), [1860](../src/cli.c#L1860)), and reuse the drain
+([1473](../src/cli.c#L1473), [1884](../src/cli.c#L1884)), and reuse the drain
 loop for document mode by constructing a fake `Dev`
-([1645–1678](../src/cli.c#L1645-L1678)). Five functions return pointers to
+([1647–1680](../src/cli.c#L1647-L1680)). Five functions return pointers to
 `static char msg[4096]`.
 
 **The Makefile** repeats the twelve-file engine source list four times
@@ -800,9 +826,11 @@ and the broker; it never calls `render_text`, `render_json`, `page_index`,
 `set_split`/`sanitize`/`tasks`, `set_context_json`, `encode_json`,
 `root_count`/`root_at` or `rotate_memo` — those are covered only by the 34
 CLI cases, which CI runs on Linux alone. `httpd.c`, `http.c` and `watch.c`
-have no test of any kind; `mdy dev` (about 900 lines across four files) has
-none — `test/serve.test.js` exists upstream and `docs/cli-plan.md` names
-running it as Phase 5's exit criterion, but nothing wires it up. The
+have no test of any kind. `mdy dev` (about 900 lines across four files) has
+ONE, `test/dev.test.js`, added with B10's fix and covering exactly the path
+that bug was on — `test/serve.test.js` exists upstream and `docs/cli-plan.md`
+names running it as Phase 5's exit criterion, and nothing still wires that up.
+The
 differential harnesses (`compare`, `check-html`, `check-script`,
 `check-yaml`, `check-links`, `check-markdown`) depend on a corpus outside the
 repository and never run in CI; `test/compare.mjs` exits 0 whatever it finds.
