@@ -36,10 +36,11 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B18–B20, B24, B26, B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B18–B20, B24, B26 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
 | B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
+| B27 | ~~Low~~ **fixed** | `engine.c` | `wrap()` built the program with `snprintf`, whose `int` overflows past 2 GB |
 | B39 | Low | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
@@ -1834,10 +1835,22 @@ end of the stream, and to stop the line walk there.
   "dead-letter channel with no page" branch, which marks every message done
   ([cli.c:1552–1563](../src/cli.c#L1552-L1563)); `dev_deliver` returns 500 so
   the broker dead-letters them ([1719–1726](../src/cli.c#L1719-L1726)).
-- **B27 — `wrap()` assembles the document's source with `snprintf("%s…")`**
-  ([engine.c:2584–2587](../src/engine.c#L2584-L2587)); on a 3.6 GB input
-  AddressSanitizer reports `negative-size-param` from the `int` return value
-  overflowing. Pathological, but `memcpy` is also simpler.
+- **~~B27 — `wrap()` assembles the document's source with `snprintf("%s…")`~~
+  FIXED.** `snprintf` returns `int`, so a document over two gigabytes overflows
+  it and the cast to `size_t` makes `out + o` an address nowhere near the
+  buffer — AddressSanitizer's `negative-size-param` on a 3.6 GB input. The big
+  pieces are `memcpy` now ([engine.c:2605](../src/engine.c#L2605)), which has
+  no `int` in the path and reads more plainly besides.
+
+  The scope lines keep `snprintf`: each is one short identifier twice, the
+  reservation gives it `2*len + 32`, and its return cannot overflow an int at
+  that size. It is checked anyway, because a negative there would be the same
+  bug in miniature.
+
+  Not tested at 3.6 GB — the machine would not enjoy it. What is tested is that
+  nothing changed below that: `check-golden`, `check-sites` and
+  `check-determinism` are byte-identical, the scope path still resolves a
+  `const`, and an 8 MB document renders unchanged.
 
 ---
 

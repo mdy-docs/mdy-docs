@@ -2584,13 +2584,35 @@ static char *wrap(mdy_engine *e, const char *statements) {
      * it (mdy_engine_set_scope_json refuses the toolkit's). */
     size_t scope_len = 0;
     for (size_t i = 0; i < e->scope_count; i++) scope_len += 2 * strlen(e->scope_names[i]) + 32;
-    size_t n = strlen(OPEN) + strlen(MDY_TOOLKIT) + scope_len + strlen(statements) + strlen(CLOSE) + 1;
+    /*
+     * memcpy and not snprintf for the big pieces: snprintf returns `int`, and
+     * a document over two gigabytes overflows it — the cast to size_t then
+     * makes `out + o` an address nowhere near the buffer. AddressSanitizer
+     * reported `negative-size-param` on a 3.6 GB input, which is where B27
+     * came from. Pathological, and memcpy is also the simpler thing to read.
+     *
+     * The scope lines keep snprintf: each is one short identifier twice, the
+     * reservation above gives it 2*len + 32, and its return cannot overflow an
+     * int at that size. It is still checked, because a negative would be the
+     * same bug in miniature.
+     */
+    size_t open_len = strlen(OPEN), tool_len = strlen(MDY_TOOLKIT);
+    size_t stmt_len = strlen(statements), close_len = strlen(CLOSE);
+    size_t n = open_len + tool_len + scope_len + stmt_len + close_len + 1;
     char *out = malloc(n);
     if (!out) return NULL;
-    size_t o = (size_t)snprintf(out, n, "%s%s", OPEN, MDY_TOOLKIT);
-    for (size_t i = 0; i < e->scope_count; i++)
-        o += (size_t)snprintf(out + o, n - o, "const %s = $$.__scope[\"%s\"];\n", e->scope_names[i], e->scope_names[i]);
-    snprintf(out + o, n - o, "%s%s", statements, CLOSE);
+    size_t o = 0;
+    memcpy(out + o, OPEN, open_len); o += open_len;
+    memcpy(out + o, MDY_TOOLKIT, tool_len); o += tool_len;
+    for (size_t i = 0; i < e->scope_count; i++) {
+        int w = snprintf(out + o, n - o, "const %s = $$.__scope[\"%s\"];\n",
+                         e->scope_names[i], e->scope_names[i]);
+        if (w < 0 || (size_t)w >= n - o) { free(out); return NULL; }
+        o += (size_t)w;
+    }
+    memcpy(out + o, statements, stmt_len); o += stmt_len;
+    memcpy(out + o, CLOSE, close_len); o += close_len;
+    out[o] = '\0';
     return out;
 }
 
