@@ -36,7 +36,8 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B18–B20, B22–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B18–B20, B23–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
@@ -1698,11 +1699,29 @@ end of the stream, and to stop the line walk there.
   across the engine and the parser, which share no private header. §2's
   un-folded duplication, again, and now with a correctness argument attached:
   five copies needed the same fix and one already had it.
-- **B22 — `match_port` calls `strtoul` on a length-delimited slice**
-  ([linkify.c:156](../src/parse/linkify.c#L156)); it reads digits past the
-  slice's end, so a port like `:12345` immediately followed by digits outside
-  the span is rejected where linkify-it accepts it, and on a buffer that is
-  not NUL-terminated it reads past the end.
+- **~~B22 — `match_port` calls `strtoul` on a length-delimited slice~~
+  FIXED.** A `Text` is a view and not a copy, so there need not be a non-digit
+  inside `len` for `strtoul` to stop at. Digits after the span were read as
+  part of the port, made it larger than 65535, and **the whole link was
+  dropped** — measured, with the buffer not NUL-terminated and `99999`
+  following the span:
+
+  ```
+  http://a:12345  (len 14, "99999" after)   before  links=0
+                                            after   links=1  [0,14)
+  http://a:99999                            both    links=0
+  ```
+
+  Five digits are read from the span now
+  ([linkify.c:167](../src/parse/linkify.c#L167)), which is the count the loop
+  above has already established. Two checks in `test/parse.c` — the span case
+  and a port that really is too large — and fourteen port spellings added to
+  `check-links`, which is 14,896 inputs agreeing with linkify-it. Reverting
+  fails both checks.
+
+  The read past the end is real by construction and is what the loop now
+  avoids; I could not get AddressSanitizer to flag it, so the lost link is the
+  evidence rather than a sanitiser report.
 - **B23 — markdown link attributes ignore entity substrings**: `set_attribute`
   takes `a->text` whole ([markdown.c:218–221](../src/parse/markdown.c#L218-L221)),
   so `[x](http://a?b=1&amp;c=2)` keeps the literal `&amp;` and the writer

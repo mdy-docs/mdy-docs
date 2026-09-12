@@ -151,9 +151,20 @@ static size_t match_port(const Text *t, size_t i) {
     while (i + n < t->len && digits < 5 && is_digit((unsigned char)t->s[i + n])) { n++; digits++; }
     if (digits == 0) return 0;
 
-    /* The regex bounds the value; a five-digit port over 65535 is not one. */
+    /*
+     * The regex bounds the value; a five-digit port over 65535 is not one.
+     *
+     * Read from the SPAN and not with strtoul, which stops at the first
+     * non-digit and this text may not have one: `t->s` is a slice of a larger
+     * buffer, so strtoul walked past `t->len` into whatever followed. Digits
+     * there made a valid port look too large, and on a buffer that is not
+     * NUL-terminated it was a read past the end. Exactly five digits are known
+     * to be here — the loop above counted them — so five is what this reads.
+     * (B22.)
+     */
     if (digits == 5) {
-        unsigned long v = strtoul(t->s + i + 1, NULL, 10);
+        unsigned v = 0;
+        for (size_t k = 1; k <= 5; k++) v = v * 10 + (unsigned)(t->s[i + k] - '0');
         if (v > 65535) return 0;
     }
     return n;

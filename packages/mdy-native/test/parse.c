@@ -898,6 +898,43 @@ int main(void) {
         mdy_free(doc);
     }
 
+    /*
+     * A five-digit port where the SPAN ends but the buffer does not.
+     *
+     * match_port bounded the value with `strtoul(t->s + i + 1, …)`, which
+     * stops at the first non-digit — and a Text is a view, not a copy, so
+     * there need not be one inside `len`. Digits after the span were read as
+     * part of the port, made it larger than 65535, and the whole link was
+     * dropped: `links=0` for a perfectly good URL. B22.
+     *
+     * The buffer here is deliberately not NUL-terminated and is followed by
+     * digits, which is the arrangement that went wrong; `mdy_find_links` is
+     * given only the URL's length.
+     */
+    {
+        const char *span = "http://a:12345";
+        const char *after = "99999";
+        size_t n = strlen(span), m = strlen(after);
+        char *buf = malloc(n + m);
+        memcpy(buf, span, n);
+        memcpy(buf + n, after, m);
+        mdy_link links[8];
+        size_t got = mdy_find_links(buf, n, links, 8);
+        int ok = got == 1 && links[0].start == 0 && links[0].end == n;
+        printf("  %s  a 5-digit port is read from the span, not past it\n", ok ? "ok  " : "FAIL");
+        if (!ok) { printf("      found %zu link(s)\n", got); failures++; }
+        free(buf);
+    }
+    {
+        /* ...and a port that really is too large is still not one. */
+        const char *span = "http://a:99999";
+        mdy_link links[8];
+        size_t got = mdy_find_links(span, strlen(span), links, 8);
+        int ok = got == 0;
+        printf("  %s  ...and 99999 is still not a port\n", ok ? "ok  " : "FAIL");
+        if (!ok) { printf("      found %zu link(s)\n", got); failures++; }
+    }
+
     printf("\n%s\n", failures ? "FAILURES" : "all checks passed");
     return failures ? 1 : 0;
 }
