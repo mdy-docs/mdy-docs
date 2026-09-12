@@ -162,15 +162,51 @@ static void flush_gathered(Build *b) {
 
 /* ---- entities ------------------------------------------------------------- */
 
-static void put_codepoint(Build *b, unsigned cp) {
-    char out[4];
+/* One codepoint as UTF-8, into `out`; returns how many bytes. */
+static size_t utf8_of(unsigned cp, char out[4]) {
     size_t n = 0;
     if (cp < 0x80) out[n++] = (char)cp;
     else if (cp < 0x800) { out[n++] = (char)(0xC0 | (cp >> 6)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
     else if (cp < 0x10000) { out[n++] = (char)(0xE0 | (cp >> 12)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
     else { out[n++] = (char)(0xF0 | (cp >> 18)); out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
+    return n;
+}
+
+static void put_codepoint(Build *b, unsigned cp) {
+    char out[4];
+    size_t n = utf8_of(cp, out);
     if (b->gathering) gather(b, out, n);
     else text_node(b, out, n);
+}
+
+/*
+ * An entity's codepoints, as UTF-8 bytes, or 0 if the table does not have it.
+ * The numeric and named halves of `entity()` below, without a Build to write
+ * into — which is what an ATTRIBUTE needs.
+ */
+static size_t entity_utf8(const char *s, size_t len, char out[8]) {
+    if (len >= 4 && s[1] == '#') {
+        unsigned cp = 0;
+        size_t i = 2;
+        int hex = (s[2] == 'x' || s[2] == 'X');
+        if (hex) i = 3;
+        for (; i + 1 < len; i++) {
+            char c = s[i];
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (hex && c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (hex && c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else { cp = 0; break; }
+            cp = cp * (hex ? 16u : 10u) + (unsigned)d;
+        }
+        if (cp == 0) cp = 0xFFFD;
+        return utf8_of(cp, out);
+    }
+    const ENTITY *e = entity_lookup(s, len);
+    if (!e) return 0;
+    size_t n = utf8_of(e->codepoints[0], out);
+    if (e->codepoints[1]) n += utf8_of(e->codepoints[1], out + n);
+    return n;
 }
 
 /*
@@ -213,11 +249,57 @@ static void entity(Build *b, const char *s, size_t len) {
 
 /* ---- attributes ------------------------------------------------------------ */
 
-/* md4c hands an attribute as a run of substrings so entities can be resolved
- * in it; for the common case there is exactly one and it is plain text. */
+/*
+ * md4c hands an attribute as a run of SUBSTRINGS so entities can be resolved
+ * in it, and this took `a->text` whole — so `[x](http://a?b=1&amp;c=2)` kept
+ * the literal `&amp;` and the HTML writer escaped it again, giving
+ * `href="http://a?b=1&#x26;amp;c=2"` where node has `&#x26;`. The comment here
+ * said "for the common case there is exactly one"; a query string is the
+ * common case where there is not. (B23.)
+ *
+ * The substrings are `substr_offsets[i]`..`[i+1]`, ending when the offset
+ * reaches `size` (md4c.h states both invariants). An entity the table does not
+ * have goes through as it was typed, which is what CommonMark says about
+ * `&nope;` and what `entity()` does for text.
+ */
 static void set_attribute(Build *b, mdy_node *el, const char *name, const MD_ATTRIBUTE *a) {
     if (!a || !a->text || !a->size) return;
-    mdy_set_string(b->doc, el, name, a->text, a->size);
+
+    /* No substrings to speak of: the whole thing, as before. */
+    if (!a->substr_offsets || !a->substr_types) {
+        mdy_set_string(b->doc, el, name, a->text, a->size);
+        return;
+    }
+
+    char stack[512];
+    char *buf = stack;
+    size_t cap = sizeof stack, len = 0;
+    char *heap = NULL;
+    if (a->size + 8 > cap) {
+        heap = malloc((size_t)a->size + 8);
+        if (!heap) { b->failed = 1; return; }
+        buf = heap;
+        cap = (size_t)a->size + 8;
+    }
+
+    for (size_t i = 0; a->substr_offsets[i] < a->size; i++) {
+        size_t from = a->substr_offsets[i];
+        size_t to = a->substr_offsets[i + 1];
+        if (to > a->size) to = a->size;
+        const char *piece = a->text + from;
+        size_t plen = to - from;
+
+        char enc[8];
+        size_t n = 0;
+        if (a->substr_types[i] == MD_TEXT_ENTITY) n = entity_utf8(piece, plen, enc);
+        else if (a->substr_types[i] == MD_TEXT_NULLCHAR) n = utf8_of(0xFFFD, enc);
+
+        if (n) { if (len + n <= cap) { memcpy(buf + len, enc, n); len += n; } }
+        else if (len + plen <= cap) { memcpy(buf + len, piece, plen); len += plen; }
+    }
+
+    mdy_set_string(b->doc, el, name, buf, len);
+    free(heap);
 }
 
 /* ---- blocks ---------------------------------------------------------------- */

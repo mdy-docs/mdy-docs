@@ -36,9 +36,12 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B18–B20, B23, B24, B26, B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B18–B20, B24, B26, B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
+| B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
+| B39 | Low | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
+| B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
@@ -996,6 +999,46 @@ digits (always exact), seventy digits, seventy leading zeros, and hex/octal.
 Removing the conversion fails one of them, and the 440-block corpus stays
 identical.
 
+#### B39 — an `<img>`'s attributes come out in a different order (Low)
+
+Found while fixing B23, and present before it:
+
+```
+$.markdown('![i](http://a?x&y "cap")')
+C     <img src="…" title="cap" alt="i">
+node  <img src="…" alt="i" title="cap">
+```
+
+Same three attributes, same values; `title` and `alt` swap. `enter_span`'s
+`MD_SPAN_IMG` sets them in the order md4c hands them over, and node's
+`hast-util-to-html` writes them in the order hast's `properties` object holds
+them, which is the order `mdast-util-to-hast` built it in.
+
+It costs nothing until something diffs the HTML, at which point every `<img>`
+with a title differs. No site in the tree has one, which is why `check-sites`
+and `check-golden` are green either way.
+
+#### B40 — a non-ASCII character in a URL is not percent-encoded (Low)
+
+The other one B23 uncovered, and the one with nothing to do with entities:
+
+```
+$.markdown('[u](http://a?é)')
+C     href="http://a?é"
+node  href="http://a?%C3%A9"
+```
+
+node percent-encodes; this writes the bytes through. It shows for any
+non-ASCII in a link destination — an accented path, a CJK query, a
+`&copy;` that B23's fix now correctly resolves to `©` and then leaves
+unencoded.
+
+Worth deciding rather than fixing on sight: the encoding node applies comes
+from `mdast-util-to-hast`'s `normalizeUri`, which encodes the bytes it cannot
+leave alone and leaves already-percent-encoded sequences untouched — so a fix
+has to be that function's rule, not "URL-encode the non-ASCII", or
+`%C3%A9` in the source becomes `%25C3%25A9`.
+
 #### B28 — YAML: a trailing `...` is refused as a second document (Low) — FIXED
 
 ```
@@ -1723,11 +1766,31 @@ end of the stream, and to stop the line walk there.
   The read past the end is real by construction and is what the loop now
   avoids; I could not get AddressSanitizer to flag it, so the lost link is the
   evidence rather than a sanitiser report.
-- **B23 — markdown link attributes ignore entity substrings**: `set_attribute`
-  takes `a->text` whole ([markdown.c:218–221](../src/parse/markdown.c#L218-L221)),
-  so `[x](http://a?b=1&amp;c=2)` keeps the literal `&amp;` and the writer
-  escapes it again. The comment says "for the common case there is exactly
-  one" substring; query strings are the common case where there is not.
+- **~~B23 — markdown link attributes ignore entity substrings~~ FIXED.**
+  `set_attribute` took `a->text` whole, so the literal `&amp;` survived and the
+  writer escaped it a second time:
+
+  ```
+  $.markdown('[x](http://a?b=1&amp;c=2)')
+  before  href="http://a?b=1&#x26;amp;c=2"
+  after   href="http://a?b=1&#x26;c=2"          node  the same
+  ```
+
+  It walks the substrings now
+  ([markdown.c:265](../src/parse/markdown.c#L265)), resolving `MD_TEXT_ENTITY`
+  through the table `entity()` already uses and `MD_TEXT_NULLCHAR` to U+FFFD;
+  an entity the table does not have goes through as typed, which is what
+  CommonMark says about `&nope;`. `entity_utf8` and `utf8_of`
+  ([187](../src/parse/markdown.c#L187)) are the numeric and named halves of
+  `entity()` without a `Build` to write into, which is what an attribute needs.
+
+  **It reproduces through `$.markdown`, not through a `.md` file** — a `.md`
+  linkifies the bare URL instead of parsing the link syntax — which is why the
+  first four shapes tried all agreed and looked like the finding was stale.
+  Five checks in `test/engine.c`; reverting fails three.
+
+  Two differences it uncovered and did NOT fix, both present before it and
+  independent of entities — see B39 and B40.
 - **B24 — Unchecked allocations that dereference on failure**: `outputs_put`,
   `collect_message`, `buf_put`, `seen_before`, `read_stdin`, `absolute` in
   cli.c; `add`/`snapshot_changes` in watch.c; the `recv` buffer in http.c

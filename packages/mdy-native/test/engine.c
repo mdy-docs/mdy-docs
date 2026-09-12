@@ -917,6 +917,39 @@ static void nonfinite_checks(void) {
 }
 
 
+/* ---- an entity inside a link's attribute ------------------------------------
+ *
+ * md4c hands an attribute as a run of SUBSTRINGS so entities can be resolved
+ * in it, and set_attribute took `a->text` whole. So `&amp;` stayed literal and
+ * the HTML writer escaped it a second time: `href="http://a?b=1&#x26;amp;c=2"`
+ * where node has `&#x26;`. The comment said "for the common case there is
+ * exactly one"; a query string is the common case where there is not. B23.
+ *
+ * Every expectation was read off `node bin/mdy.js` on the same input.
+ */
+static void attr_entity_checks(void) {
+    printf("\n--- engine: an entity inside a link's attribute ---\n");
+
+    check("an entity in an href is resolved, not escaped twice",
+          "{{ $.markdown('[x](http://a?b=1&amp;c=2)') }}\n",
+          "<p><a href=\"http://a?b=1&#x26;c=2\">x</a></p>");
+    check("...and in a title",
+          "{{ $.markdown('[t](http://a \"q&amp;r\")') }}\n",
+          "<p><a href=\"http://a\" title=\"q&#x26;r\">t</a></p>");
+    check("a bare ampersand is unchanged",
+          "{{ $.markdown('[y](http://a?b=1&c=2)') }}\n",
+          "<p><a href=\"http://a?b=1&#x26;c=2\">y</a></p>");
+    check("numeric entities too, decimal and hex",
+          "{{ $.markdown('[h](http://a?&#x26;&#38;)') }}\n",
+          "<p><a href=\"http://a?&#x26;&#x26;\">h</a></p>");
+    /* An entity the table does not have goes through as it was typed, which is
+     * what CommonMark says about `&nope;` and what text does. */
+    check("an unknown entity is left as it was typed",
+          "{{ $.markdown('[n](http://a?&nope;b)') }}\n",
+          "<p><a href=\"http://a?&#x26;nope;b\">n</a></p>");
+}
+
+
 /* ---- a file written on Windows ---------------------------------------------
  *
  * mdy-docs' splitter splits on `\n` alone, so every line keeps its `\r`; the
@@ -2428,6 +2461,7 @@ int main(void) {
     nonfinite_checks();
     big_integer_checks();
     crlf_checks();
+    attr_entity_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();
