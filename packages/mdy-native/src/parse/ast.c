@@ -13,6 +13,17 @@
 
 #include "internal.h"
 
+int mdy_is_void_element(const char *tag) {
+    static const char *const VOID[] = {
+        "area", "base", "basefont", "bgsound", "br", "col", "command", "embed",
+        "frame", "hr", "image", "img", "input", "keygen", "link", "meta",
+        "param", "source", "track", "wbr",
+    };
+    for (size_t i = 0; i < sizeof VOID / sizeof VOID[0]; i++)
+        if (strcmp(VOID[i], tag) == 0) return 1;
+    return 0;
+}
+
 /* ---- building ------------------------------------------------------------ */
 
 static mdy_node *new_node(mdy_doc *doc, mdy_node_type type) {

@@ -64,8 +64,10 @@ void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
         if (!note) continue;
 
         mdy_node *li = mdy_new_element(doc, "li", 2);
-        mdy_set_string(doc, li, "id", ref_id(doc, "fn-", note->id, 1),
-                       strlen(ref_id(doc, "fn-", note->id, 1)));
+        /* Once: ref_id copies into the arena, and calling it for the string
+         * and again for its length made two of every footnote's id. */
+        const char *fn = ref_id(doc, "fn-", note->id, 1);
+        mdy_set_string(doc, li, "id", fn, strlen(fn));
         mdy_append(li, mdy_new_text(doc, "\n", 1));
 
         mdy_node *p = mdy_new_element(doc, "p", 1);

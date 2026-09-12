@@ -831,17 +831,6 @@ static int is_separator(const mdy_line *l) {
 }
 
 /* html-void-elements: the elements that hold nothing. */
-static int is_void_element(const char *tag) {
-    static const char *const VOID[] = {
-        "area", "base", "basefont", "bgsound", "br", "col", "command", "embed",
-        "frame", "hr", "image", "img", "input", "keygen", "link", "meta",
-        "param", "source", "track", "wbr",
-    };
-    for (size_t i = 0; i < sizeof VOID / sizeof VOID[0]; i++)
-        if (strcmp(VOID[i], tag) == 0) return 1;
-    return 0;
-}
-
 /* The five elements whose content is text and nothing else — html.js's
  * `rawText` set, and the same names the HTML parser treats as RCDATA. */
 static int is_raw_text(const char *tag) {
@@ -947,7 +936,7 @@ static size_t parse_element(mdy_doc *doc, mdy_node *parent,
      * content — the lines stay where they are and the block loop makes of
      * them whatever it would have anyway (a <div>, when they are indented).
      */
-    if (is_void_element(build)) {
+    if (mdy_is_void_element(build)) {
         if (content) trim(&content, &content_len);
         if ((content && content_len) || end > i + 1)
             mdy_warn(doc, lines, i, "void-element",

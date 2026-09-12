@@ -223,6 +223,12 @@ typedef struct {
     uint32_t units;
 } mdy_line;
 
+/* An element with no closing tag and no children — the same twenty names the
+ * block parser needs to stop at and the writer needs to close. It was this
+ * list twice, character for character, with nothing to say if one of them
+ * ever gained a name the other did not. */
+int mdy_is_void_element(const char *tag);
+
 /* Raise a warning against one source line, with the same span a block element
  * on that line would carry. `fmt` is printf's. */
 void mdy_warn(mdy_doc *doc, const mdy_line *lines, size_t line, const char *rule,

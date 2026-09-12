@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "internal.h"
 #include "mdyhtml.h"
 #include "props_table.h"
 
@@ -199,17 +200,6 @@ static void attr_info(const char *property, size_t len, AttrInfo *out) {
 /* ---- void elements --------------------------------------------------------- */
 
 /** html-void-elements, the same list the parser uses. */
-static int is_void(const char *tag) {
-    static const char *const VOID[] = {
-        "area", "base", "basefont", "bgsound", "br", "col", "command", "embed",
-        "frame", "hr", "image", "img", "input", "keygen", "link", "meta",
-        "param", "source", "track", "wbr",
-    };
-    for (size_t i = 0; i < sizeof VOID / sizeof VOID[0]; i++)
-        if (strcmp(VOID[i], tag) == 0) return 1;
-    return 0;
-}
-
 /* ---- values ---------------------------------------------------------------- */
 
 /** `String(value)` for a number, which for every value this tree can hold is
@@ -356,7 +346,7 @@ static void write_node(Buf *b, const mdy_node *n, const mdy_node *parent,
      * void after all — which is how `<menuitem>` and anything else the lists
      * disagree about still serialises with a closing tag.
      */
-    int self_closing = is_void(n->tag) && n->first == NULL;
+    int self_closing = mdy_is_void_element(n->tag) && n->first == NULL;
 
     put(b, "<", 1);
     puts_(b, n->tag);

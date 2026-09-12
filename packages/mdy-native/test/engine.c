@@ -924,6 +924,72 @@ static void bad_image_checks(void) {
 }
 
 
+/* ---- a tag the tags writer has to carry -------------------------------------
+ *
+ * A document's tags are lowercased and deduplicated, and the way that happens
+ * is that the engine WRITES them back out as YAML and reads them in again.
+ * They were pasted in with `%s`, so one tag with a quote in it made the whole
+ * generated block unparseable — and the failure was silent: the document's
+ * tags fell back to whatever its front matter said, never lowercased and never
+ * deduplicated, which is a quieter wrong answer than the truncation the same
+ * bug caused for file names (B8).
+ *
+ * Every expected value is what `node bin/mdy.js` writes for this directory.
+ */
+static void tag_checks(void) {
+    printf("\n--- engine: a tag the writer has to carry ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-tags", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "q.mdy", "+++\ntags: ['A\"b', Alpha, ALPHA, 'c\\d', \"e\\tf\"]\n+++\nbody\n");
+    write_file(root, "h.md", "# H\n\n#One and #one and #Two\n");
+    write_file(root, "e.mdy", "+++\ntags: []\n+++\nnone\n");
+    write_file(root, "main.mdy",
+        "% $.emit('tags.txt', $.find({}).filter((d) => d.tags)"
+        ".map((d) => d.path + '=' + JSON.stringify(d.tags)).join('|'))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of tagged documents\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    ok_("a quote, a backslash and a tab in a tag survive the round trip",
+        emitted("tags.txt") &&
+            strcmp(emitted("tags.txt"),
+                   "e.mdy=[]|"
+                   "h.md=[\"one\",\"two\"]|"
+                   "q.mdy=[\"a\\\"b\",\"alpha\",\"c\\\\d\",\"e\\tf\"]") == 0,
+        emitted("tags.txt"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1834,6 +1900,7 @@ int main(void) {
     natives_checks();
     resize_checks();
     bad_image_checks();
+    tag_checks();
     gc_checks();
     broker_checks();
 

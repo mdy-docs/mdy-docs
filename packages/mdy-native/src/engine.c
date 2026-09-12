@@ -231,45 +231,41 @@ struct mdy_engine {
 
 /* ---- strings across the boundary ------------------------------------------- */
 
+/*
+ * The UTF-16 boundary, which is what lamassu's strings are.
+ *
+ * The conversion is the PARSER's — mdy_to_utf16 and mdy_from_utf16, over
+ * mdy_utf8_decode — so the same bytes mean the same thing whichever way they
+ * entered the process. This file had a second pair of its own, and they were
+ * not the same function: they took any byte that was not an ASCII one or a
+ * 2- or 3-byte lead as the start of a FOUR-byte character and consumed four
+ * bytes without checking that the three after it were continuations. So
+ * `\xc0\xaf` — an overlong `/`, the encoding a path check is meant to refuse —
+ * came out as a real `/`; a surrogate spelled in UTF-8 came out unchanged;
+ * and a single stray `\x80` in a paragraph ate the three bytes after it, which
+ * is how `and \x80 end` came back as `and <mojibake>d`. node replaces each
+ * ill-formed byte with U+FFFD and leaves the rest of the line alone, and so
+ * does mdy_utf8_decode.
+ *
+ * Both wrappers still allocate, which is what every caller here wants; the
+ * parser's take a buffer because its callers have one.
+ */
 static uint16_t *to_utf16(const char *in, size_t len, size_t *out_len) {
+    /* Never more than one unit per byte: a character that is two units is at
+     * least four bytes, and an ill-formed one is one byte and one U+FFFD. */
     uint16_t *out = malloc((len + 1) * sizeof *out);
     if (!out) { *out_len = 0; return NULL; }
-    size_t o = 0;
-    for (size_t i = 0; i < len;) {
-        unsigned char c = (unsigned char)in[i];
-        unsigned cp;
-        size_t w;
-        if (c < 0x80) { cp = c; w = 1; }
-        else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; w = 2; }
-        else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; w = 3; }
-        else { cp = c & 0x07; w = 4; }
-        if (i + w > len) { cp = 0xFFFD; w = 1; }
-        else for (size_t k = 1; k < w; k++) cp = (cp << 6) | ((unsigned char)in[i + k] & 0x3F);
-        i += w;
-        if (cp > 0xFFFF) {
-            cp -= 0x10000;
-            out[o++] = (uint16_t)(0xD800 + (cp >> 10));
-            out[o++] = (uint16_t)(0xDC00 + (cp & 0x3FF));
-        } else out[o++] = (uint16_t)cp;
-    }
-    *out_len = o;
+    *out_len = mdy_to_utf16(in, len, out, len + 1);
     return out;
 }
 
 static char *from_utf16(const uint16_t *u, size_t len) {
-    char *out = malloc(len * 4 + 1);
+    /* Never more than three bytes per unit: a surrogate pair is two units and
+     * four bytes, and a lone surrogate is one unit and a three-byte U+FFFD. */
+    char *out = malloc(len * 3 + 1);
     if (!out) return NULL;
-    size_t o = 0;
-    for (size_t i = 0; i < len; i++) {
-        unsigned cp = u[i];
-        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < len && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF)
-            cp = 0x10000 + ((cp - 0xD800) << 10) + (u[++i] - 0xDC00);
-        if (cp < 0x80) out[o++] = (char)cp;
-        else if (cp < 0x800) { out[o++] = (char)(0xC0 | (cp >> 6)); out[o++] = (char)(0x80 | (cp & 0x3F)); }
-        else if (cp < 0x10000) { out[o++] = (char)(0xE0 | (cp >> 12)); out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[o++] = (char)(0x80 | (cp & 0x3F)); }
-        else { out[o++] = (char)(0xF0 | (cp >> 18)); out[o++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[o++] = (char)(0x80 | (cp & 0x3F)); }
-    }
-    out[o] = '\0';
+    size_t n = mdy_from_utf16(u, len, out, len * 3);
+    out[n] = '\0';
     return out;
 }
 
@@ -1168,24 +1164,40 @@ static int ends_with_ci(const char *s, const char *suffix) {
  * to make an mdy_yaml mapping from C, which there is not. Until there is, the
  * writer and the reader have to agree, and this is the half that can be sure.
  */
-static void put_quoted(char **buf, size_t *len, size_t *cap,
-                       const char *key, const char *value) {
+/* Room for `more` bytes, growing from nothing. 0 when there is none. */
+static int put_room(char **buf, size_t *len, size_t *cap, size_t more) {
+    size_t need = *len + more;
+    if (need <= *cap) return 1;
+    size_t want = *cap ? *cap : 256;
+    while (need > want) want *= 2;
+    char *grown = realloc(*buf, want);
+    if (!grown) return 0;
+    *buf = grown;
+    *cap = want;
+    return 1;
+}
+
+/*
+ * One double-quoted YAML scalar, escaped the way read_quoted unescapes it —
+ * `\` and `"` named, control characters as `\xNN`, and everything else
+ * including UTF-8 through as bytes, since only what the reader would take for
+ * something else has to be named.
+ *
+ * Everything this file writes as YAML goes through here. It did not: identity
+ * was pasted in with `%s` (which is B8) and so was every tag, where the
+ * consequence was quieter and worse — one tag with a quote in it made the
+ * whole generated `tags:` block unparseable, so the document's tags fell back
+ * to whatever its front matter said and were silently never lowercased or
+ * deduplicated at all.
+ */
+static void put_scalar(char **buf, size_t *len, size_t *cap, const char *value) {
     static const char H[] = "0123456789abcdef";
-    size_t klen = strlen(key), vlen = strlen(value);
+    size_t vlen = strlen(value);
     /* Four bytes out for one in is the worst an escape does (`\xNN`). */
-    size_t need = *len + klen + vlen * 4 + 16;
-    if (need > *cap) {
-        size_t want = *cap ? *cap : 256;
-        while (need > want) want *= 2;
-        char *grown = realloc(*buf, want);
-        if (!grown) return;
-        *buf = grown;
-        *cap = want;
-    }
+    if (!put_room(buf, len, cap, vlen * 4 + 8)) return;
 
     char *out = *buf + *len;
-    memcpy(out, key, klen); out += klen;
-    *out++ = ':'; *out++ = ' '; *out++ = '"';
+    *out++ = '"';
     for (size_t i = 0; i < vlen; i++) {
         unsigned char c = (unsigned char)value[i];
         switch (c) {
@@ -1195,8 +1207,6 @@ static void put_quoted(char **buf, size_t *len, size_t *cap,
             case '\t': *out++ = '\\'; *out++ = 't';  break;
             case '\r': *out++ = '\\'; *out++ = 'r';  break;
             default:
-                /* Everything else goes out as bytes, UTF-8 included: only what
-                 * the reader would take for something else has to be named. */
                 if (c < 0x20 || c == 0x7f) {
                     *out++ = '\\'; *out++ = 'x'; *out++ = H[c >> 4]; *out++ = H[c & 15];
                 } else {
@@ -1205,9 +1215,49 @@ static void put_quoted(char **buf, size_t *len, size_t *cap,
         }
     }
     *out++ = '"';
-    *out++ = '\n';
     *out = '\0';
     *len = (size_t)(out - *buf);
+}
+
+/* `key: "value"` on a line of its own. */
+static void put_quoted(char **buf, size_t *len, size_t *cap,
+                       const char *key, const char *value) {
+    size_t klen = strlen(key);
+    if (!put_room(buf, len, cap, klen + 4)) return;
+    memcpy(*buf + *len, key, klen);
+    *len += klen;
+    (*buf)[(*len)++] = ':';
+    (*buf)[(*len)++] = ' ';
+    put_scalar(buf, len, cap, value);
+    if (!put_room(buf, len, cap, 2)) return;
+    (*buf)[(*len)++] = '\n';
+    (*buf)[*len] = '\0';
+}
+
+/* `tags:` and its list, or `tags: []` for a document that declared the key
+ * and has nothing to put under it. Written in one place because it was
+ * written in two, character for character, and only one of them knew about
+ * the empty case. */
+static void put_tag_list(char **buf, size_t *len, size_t *cap,
+                         const char (*tags)[128], size_t count) {
+    if (count == 0) {
+        if (!put_room(buf, len, cap, 16)) return;
+        *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags: []\n");
+        return;
+    }
+    if (!put_room(buf, len, cap, 8)) return;
+    *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags:\n");
+    for (size_t k = 0; k < count; k++) {
+        if (!put_room(buf, len, cap, 8)) return;
+        (*buf)[(*len)++] = ' ';
+        (*buf)[(*len)++] = ' ';
+        (*buf)[(*len)++] = '-';
+        (*buf)[(*len)++] = ' ';
+        put_scalar(buf, len, cap, tags[k]);
+        if (!put_room(buf, len, cap, 2)) return;
+        (*buf)[(*len)++] = '\n';
+        (*buf)[*len] = '\0';
+    }
 }
 
 /* The identity fields that are numbers. Whole ones — a size in bytes, a
@@ -1386,18 +1436,7 @@ static void put_tags_from_text(char **buf, size_t *len, size_t *cap,
     char (*tags)[128] = NULL;
     size_t count = 0, cap_t = 0;
     scan_hashtags(text, tlen, &tags, &count, &cap_t);
-    if (count > 0) {
-        size_t need = *len + count * 132 + 32;
-        if (need > *cap) {
-            while (need > *cap) *cap *= 2;
-            char *grown = realloc(*buf, *cap);
-            if (!grown) { free(tags); return; }
-            *buf = grown;
-        }
-        *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags:\n");
-        for (size_t k = 0; k < count; k++)
-            *len += (size_t)snprintf(*buf + *len, *cap - *len, "  - \"%s\"\n", tags[k]);
-    }
+    if (count > 0) put_tag_list(buf, len, cap, tags, count);
     free(tags);
 }
 
@@ -2039,22 +2078,7 @@ static void put_document_tags(char **buf, size_t *len, size_t *cap,
 
     scan_hashtags(body, body_len, &tags, &count, &cap_t);
 
-    if (count > 0 || declared_key) {
-        size_t need = *len + count * 132 + 32;
-        if (need > *cap) {
-            while (need > *cap) *cap *= 2;
-            char *grown = realloc(*buf, *cap);
-            if (!grown) { free(tags); return; }
-            *buf = grown;
-        }
-        if (count == 0) {
-            *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags: []\n");
-        } else {
-            *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags:\n");
-            for (size_t k = 0; k < count; k++)
-                *len += (size_t)snprintf(*buf + *len, *cap - *len, "  - \"%s\"\n", tags[k]);
-        }
-    }
+    if (count > 0 || declared_key) put_tag_list(buf, len, cap, tags, count);
     free(tags);
 }
 
