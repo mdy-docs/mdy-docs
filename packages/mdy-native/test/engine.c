@@ -912,6 +912,72 @@ static void nonfinite_checks(void) {
 }
 
 
+/* ---- a file written on Windows ---------------------------------------------
+ *
+ * mdy-docs' splitter splits on `\n` alone, so every line keeps its `\r`; the
+ * script compiler then puts each line inside a backtick template literal,
+ * where ECMAScript normalises a `<CR>` to `<LF>`. So one file line becomes two
+ * program lines, and a CRLF document renders with a blank line between every
+ * pair. Nothing in mdy.js mentions `\r`; it is a property of the language the
+ * generated program is written in.
+ *
+ * This engine dropped the `\r` and got one line, which read better and was not
+ * what node did. B30 is the decision to match node, and these are the two
+ * observables it was measured on — the rendered HTML and the text a render
+ * wrote, both byte-compared against `node bin/mdy.js` on the same input.
+ */
+static void crlf_checks(void) {
+    printf("\n--- engine: a file written on Windows ---\n");
+
+    check("CRLF prose breaks the paragraph, as node's does",
+          "crlf line\r\nsecond\r\n",
+          "<p>crlf line</p><p>second</p>");
+    check("...and the same file with LF is one paragraph, unchanged",
+          "crlf line\nsecond\n",
+          "<p>crlf line second</p>");
+
+    /*
+     * $.text is the other half, and the one B30 was filed on. Emitted to a
+     * file the bytes are "crlf line\n\nsecond\n\n" on both sides now, where
+     * this engine used to write "crlf line\nsecond\n"; through markdown the
+     * backslashes of JSON.stringify are eaten identically by both, which is
+     * what this pins.
+     */
+    check("a CRLF document's text carries the empty lines",
+          "{{ JSON.stringify($.text(1)) }}\n---\ncrlf line\r\nsecond\r\n",
+          "<p>\"crlf linennsecondnn\"</p>");
+
+    /* A CR with no LF after it is NOT a line ending, on either side — measured
+     * rather than reasoned, because the template-literal argument above would
+     * have predicted otherwise. */
+    check("a lone carriage return is not a line ending",
+          "a\rb\n",
+          "<p>a b</p>");
+
+    /*
+     * Where this deliberately does NOT follow node, and it is not a small
+     * thing. node's separators are anchored regexes that allow only spaces and
+     * tabs after the marker —
+     *
+     *     DOCUMENT_SEPARATOR     = /^---[ \t]*$/
+     *     FRONT_MATTER_SEPARATOR = /^\+\+\+[ \t]*$/
+     *
+     * — so `---\r` and `+++\r` match neither. On a CRLF file node therefore
+     * ignores front matter entirely, and FAILS THE BUILD on a second document:
+     * `mdy: document 0 failed: mdy: no document at index 1`. Matching that
+     * would mean a Windows-authored file losing its front matter and a
+     * multi-document one refusing to build, which is a different order of
+     * thing from a blank line. These two stay as they are.
+     */
+    check("CRLF front matter is still read here, where node ignores it",
+          "+++\r\ntitle: T\r\n+++\r\n= {{ res.data.title }}\r\n",
+          "<h1 id=\"t\">T</h1>");
+    check("...and a CRLF separator still splits, where node cannot find doc 1",
+          "A {{ $.text(1) }}\r\n---\r\nsecond doc\r\n",
+          "<p>A second doc</p>");
+}
+
+
 /* ---- an integer too big to be one -------------------------------------------
  *
  * `big: 9007199254740992` in front matter made the document it was in
@@ -2291,6 +2357,7 @@ int main(void) {
     url_checks();
     nonfinite_checks();
     big_integer_checks();
+    crlf_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

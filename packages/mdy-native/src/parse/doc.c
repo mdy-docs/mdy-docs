@@ -80,6 +80,27 @@ static int acc_span(Acc *a, size_t start, size_t len) {
  * `source.split('\n')` then rejoin per chunk, which is what mdy-docs does —
  * so a chunk's own line endings are `\n` whatever the file used, and the
  * boundaries land where the separators were.
+ *
+ * A CRLF file gets an EXTRA EMPTY LINE per line, which is not a tidy rule and
+ * is not ours: it is what mdy-docs does, and B30 is the decision to match it.
+ *
+ * The path there, because it is worth writing down rather than rediscovering.
+ * `splitDocuments` splits on `\n` alone, so every line keeps its `\r`. The
+ * script compiler then puts each line inside a BACKTICK TEMPLATE LITERAL
+ * (src/parse/script.js), and ECMAScript normalises a `<CR>` inside one to
+ * `<LF>` — so `"crlf line\r"` is the string `"crlf line\n"` before anything
+ * has looked at it. `scriptOutput` splits that on `/\r\n|\r|\n/` and gets two
+ * lines where the file had one. Nothing in mdy.js mentions `\r` at all; the
+ * behaviour is a property of the language the generated program is written in.
+ *
+ * So: the content keeps no `\r` (as before — a chunk's endings are `\n`), and
+ * a line that ended in one is followed by an empty line. `crlf line\r\nsecond
+ * \r\n` is five lines here and five there, and `$.text` is the same nineteen
+ * bytes either side.
+ *
+ * This engine's own script layer already treats a lone `\r` as a terminator
+ * (script.c) but coalesces `\r\n` into one, which is the correct reading of a
+ * line ending and the reason it could not produce mdy-docs' answer by itself.
  */
 static int acc_source(Acc *a, const char *text, size_t len, int split) {
     /* Never more than `len` bytes of content: a separator line gives up at
@@ -95,7 +116,9 @@ static int acc_source(Acc *a, const char *text, size_t len, int split) {
     for (size_t i = 0; i <= len; i++) {
         if (i != len && text[i] != '\n') continue;
         size_t line_end = i;
-        if (line_end > line_start && text[line_end - 1] == '\r') line_end--;
+        /* The `\r` leaves the content and comes back as an empty line below. */
+        int had_cr = line_end > line_start && text[line_end - 1] == '\r';
+        if (had_cr) line_end--;
 
         if (split && is_separator(text + line_start, line_end - line_start)) {
             if (acc_span(a, chunk_start, a->written - chunk_start) != 0) return -1;
@@ -106,6 +129,12 @@ static int acc_source(Acc *a, const char *text, size_t len, int split) {
             if (wrote_line) a->joined[a->written++] = '\n';
             memcpy(a->joined + a->written, text + line_start, line_end - line_start);
             a->written += line_end - line_start;
+            /*
+             * The empty line the `\r` becomes. One byte in for one byte out —
+             * the terminator replaces the carriage return — so the `len + 2`
+             * this reserved still covers it.
+             */
+            if (had_cr) a->joined[a->written++] = '\n';
             wrote_line = 1;
         }
         line_start = i + 1;

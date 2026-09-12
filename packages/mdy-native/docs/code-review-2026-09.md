@@ -43,7 +43,7 @@ what those checks do not reach.
 | B17 | ~~Low~~ **fixed** | `cli.c` / `httpd.c` | Dev server bound every interface, with a clock-seeded token, no request cap and a blocking write |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
 | B29 | ~~Medium~~ **fixed** | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
-| B30 | Low | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
+| B30 | ~~Low~~ **part fixed** | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
 | B31 | Low | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
 | B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
@@ -607,19 +607,54 @@ build of a three-document set renders `<h1 id="2">2</h1>`.
 **mdy-docs has the second half of this bug** — see B33, which is this
 measurement pointed the other way.
 
-#### B30 — A CRLF source: the splitter normalises, node does not (Low)
+#### B30 — A CRLF source: the splitter normalises, node does not (Low) — FIXED for content; the rest PARKED
 
-`acc_source` drops a `\r` before the line ending
-([doc.c:98](../src/parse/doc.c#L98)) — deliberately, so "a chunk's own line
-endings are `\n` whatever the file used". node's `splitDocuments` splits on
-`\n` and rejoins, so the `\r` stays in the chunk and the script layer then
-makes two line breaks of it. `$.text` of a CRLF document is
-`"crlf line\nsecond\n"` here and `"crlf line\n\nsecond\n\n"` there.
+`acc_source` dropped a `\r` before the line ending, so a chunk's endings were
+`\n` whatever the file used. It keeps the line's content the same way, but a
+line that ended in `\r` is now followed by an **empty line**, which is what
+mdy-docs ends up with:
 
-Reproduces in document mode with one file, so it is nothing to do with the
-walk. The C behaviour is the more defensible of the two, which is why this is
-filed as a divergence to decide about rather than a bug to fix: matching node
-here means reproducing something that looks accidental.
+| | before | after / node |
+| --- | --- | --- |
+| `crlf line\r\nsecond\r\n` rendered | `<p>crlf line second</p>` | `<p>crlf line</p><p>second</p>` |
+| its `$.text` | `crlf line\nsecond\n` (17 bytes) | `crlf line\n\nsecond\n\n` (19) |
+
+**Why node does that**, since nothing in `mdy.js` mentions `\r` at all:
+`splitDocuments` splits on `\n` alone, so every line keeps its carriage
+return; the script compiler then puts each line inside a **backtick template
+literal** (`src/parse/script.js:375`), and ECMAScript normalises a `<CR>`
+inside one to `<LF>`. `scriptOutput` splits the result on `/\r\n|\r|\n/` and
+gets two lines where the file had one. The behaviour is a property of the
+language the generated program is written in, which is what "looks accidental"
+meant.
+
+**What is parked, and why it is not a small thing.** Two cases cannot be
+matched without breaking files that work. node's markers are anchored regexes
+allowing only spaces and tabs after themselves —
+
+```
+DOCUMENT_SEPARATOR     = /^---[ \t]*$/
+FRONT_MATTER_SEPARATOR = /^\+\+\+[ \t]*$/
+```
+
+— so `---\r` and `+++\r` match neither. On a CRLF file node therefore ignores
+front matter completely, and **fails the build** on a second document:
+
+```
+mdy: document 0 failed: mdy: no document at index 1
+```
+
+Matching that would mean a Windows-authored document losing its front matter
+and a multi-document one refusing to build. That is a different order of thing
+from a blank line, so those two stay as they are and the divergence is now
+deliberate rather than unexamined. It is node's regexes that want the `\r`, not
+this engine that wants to forget it.
+
+`crlf_checks` in `test/engine.c` pins both halves — the match and the two
+places it stops. Two of its expectations were wrong when first written (a lone
+`\r` is *not* a line ending on either side, and markdown eats
+`JSON.stringify`'s backslashes identically in both); they were replaced with
+what `node bin/mdy.js` actually prints.
 
 #### B31 — A record's keys are in a different order (Low)
 
