@@ -23,6 +23,10 @@
 #if defined(__GNUC__) || defined(__clang__)
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wunused-function"
+/* stb_image_resize2.h's ring_buffer_size, which it computes and then only uses
+ * under an #ifdef. It appears at -O1 and not at -O2, so it was invisible until
+ * the ASan build started being read for warnings as well as the default one. */
+#  pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #endif
 
 #define STB_IMAGE_IMPLEMENTATION

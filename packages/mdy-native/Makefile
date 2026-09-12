@@ -40,6 +40,31 @@ DEBUG   ?= -g
 CFLAGS  += -std=gnu11 -Wall -Wextra -O2 $(DEBUG) -I$(LAMASSU)/include
 LDLIBS  += -lm
 
+# GNU Make 3.81 — which is the one macOS ships, and the one this is most often
+# run under — compares mtimes at SECOND resolution. A prerequisite written half
+# a second after the target still reads as "up to date":
+#
+#     touch out; touch -r out src; <src 0.5s newer within the same second>
+#     make  →  `out' is up to date.
+#
+# Object files do not fix this and neither does anything else in here; the
+# comparison is make's. It is worth saying out loud because it has produced a
+# wrong answer three times in this repository's review — a FAIL from a binary
+# that predated the fix, a PASS from one that predated the bug, and a leak
+# measurement that reported clean because `git stash` restored the file within
+# the same second as the link. Each time the result described a different
+# binary than the one named.
+#
+# So the warning fires exactly where being wrong costs something: when a check
+# target is what was asked for. Ordinary builds stay quiet.
+ifeq ($(firstword $(subst ., ,$(MAKE_VERSION))),3)
+ifneq ($(filter check-%,$(MAKECMDGOALS)),)
+$(warning make $(MAKE_VERSION) compares file times to the second, so an edit made)
+$(warning in the same second as the object built from it will not rebuild. If a)
+$(warning check result surprises you, `make clean` and run it again before believing it.)
+endif
+endif
+
 # Windows has no libpthread of its own and mingw's winpthreads is not needed:
 # nothing here starts a thread.
 ifeq ($(OS),Windows_NT)
@@ -432,33 +457,87 @@ check-ingest: build/ingest-test$(EXE)
 # binary that depends on it untouched, and a stale build is a test result that
 # means nothing.
 ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_walk.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c
-ENGINE_HDRS := src/engine.h src/engine_internal.h src/fsx.h src/ingest.h src/nis.h \
-               src/images.h src/http.h src/bjval.h src/watch.h src/httpd.h src/broker.h
+
+# ---- and the objects they compile to ---------------------------------------
+#
+# Every engine binary used to be one `cc` over all thirty-one sources. A
+# one-character change to cli.c recompiled nisaba's seventeen; `make
+# check-engine` after an edit recompiled them again for the test binary; ASan
+# a third time. The split into four engine files made that worse, which is
+# what §3 of the review said it would.
+#
+# So: one object per source, and three binaries that link them. cli.c and
+# test/engine.c are objects too, so an edit to either relinks and compiles
+# nothing else. ASan gets its own directory because its flags differ (-O1,
+# -fsanitize=address) and an object built one way is not the other.
+#
+# -MMD -MP writes a .d beside each .o naming every header that source actually
+# opened — including build/highlight_bundle.h and lamassu's and nisaba's, which
+# no hand-written list had. That is strictly better than ENGINE_HDRS, which
+# named eleven of ours and nothing else, so ENGINE_HDRS is gone. -MP adds a
+# phony target per header so that DELETING one is a rebuild rather than a
+# "No rule to make target".
+#
+# Basenames are the object names, so two sources may not share one. They are
+# distinct today across all thirty-one; the check below is what says so if a
+# future one is not, because the failure otherwise is a silent mis-link.
+OBJ_SRCS  := $(ENGINE_SRCS) $(NIS_SRCS)
+ENGINE_OBJS := $(addprefix build/obj/,$(notdir $(OBJ_SRCS:.c=.o)))
+ASAN_OBJS   := $(addprefix build/obj-asan/,$(notdir $(OBJ_SRCS:.c=.o)))
+ifneq ($(words $(ENGINE_OBJS)),$(words $(sort $(ENGINE_OBJS))))
+  $(error two of ENGINE_SRCS/NIS_SRCS share a basename; object names would collide)
+endif
+
+ENGINE_CPPFLAGS := -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME)
+ASAN_CFLAGS     := -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer
+
+# An explicit rule per source rather than a vpath: the sources come from four
+# directories, two of them outside this tree, and a global `vpath %.c` would
+# also be consulted for the parser's and the tests', which resolve by exact
+# path today and should go on doing so.
+define ENGINE_OBJ_RULE
+build/obj/$(notdir $(1:.c=.o)): $(1) $$(HL_HDR)
+	@mkdir -p build/obj
+	$$(CC) $$(CFLAGS) $$(ENGINE_CPPFLAGS) -MMD -MP -c $$< -o $$@
+build/obj-asan/$(notdir $(1:.c=.o)): $(1) $$(HL_HDR)
+	@mkdir -p build/obj-asan
+	$$(CC) $$(ASAN_CFLAGS) $$(ENGINE_CPPFLAGS) -I$$(LAMASSU)/include -MMD -MP -c $$< -o $$@
+endef
+$(foreach s,$(OBJ_SRCS),$(eval $(call ENGINE_OBJ_RULE,$(s))))
+
+build/obj/cli.o: src/cli.c $(HL_HDR)
+	@mkdir -p build/obj
+	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
+build/obj-asan/cli.o: src/cli.c $(HL_HDR)
+	@mkdir -p build/obj-asan
+	$(CC) $(ASAN_CFLAGS) $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include -MMD -MP -c $< -o $@
+# Named for the binary, not the file: src/engine.c already owns engine.o.
+build/obj/engine-test.o: test/engine.c $(HL_HDR)
+	@mkdir -p build/obj
+	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
+
+ENGINE_LIBS := $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS)
+
+-include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) \
+         build/obj/cli.d build/obj-asan/cli.d build/obj/engine-test.d
 
 # One document, end to end, with no JavaScript engine but lamassu — the three
 # passes of src/mdy.js done in C. No JavaScript engine but lamassu is linked
 # into this binary.
-build/engine-test$(EXE): test/engine.c $(ENGINE_SRCS) $(ENGINE_HDRS) $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR) build/libsukkal.a
+build/engine-test$(EXE): build/obj/engine-test.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/engine.c $(ENGINE_SRCS) $(NIS_SRCS) \
-	  $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) build/obj/engine-test.o $(ENGINE_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
 
 # The same driver under AddressSanitizer. A use-after-free in the boundary
 # between the tree, the document store and the VM is invisible without it:
 # a freed key cell is silently reused and a property becomes a different one.
-build/mdy-asan$(EXE): src/cli.c $(ENGINE_SRCS) $(ENGINE_HDRS) $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR) build/libsukkal.a
+build/mdy-asan$(EXE): build/obj-asan/cli.o $(ASAN_OBJS) $(ENGINE_LIBS)
 	@mkdir -p build
-	$(CC) -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer \
-	  -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) -I$(LAMASSU)/include \
-	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) \
-	  $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(ASAN_CFLAGS) build/obj-asan/cli.o $(ASAN_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
 
-build/mdy$(EXE): src/cli.c $(ENGINE_SRCS) $(ENGINE_HDRS) $(NIS_SRCS) $(LAM_LIBS) $(PARSE_LIB) $(HL_HDR) build/libsukkal.a
+build/mdy$(EXE): build/obj/cli.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) \
-	  $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) build/obj/cli.o $(ENGINE_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
 
 # Twice: once normally, once collecting at EVERY safe point.
 #
@@ -567,7 +646,12 @@ build/wasm/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	done
 	$(EMAR) rcs $@ build/wasm/sukkal/*.o
 
-$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(ENGINE_HDRS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
+# The one target still built in a single invocation. It is built rarely, emcc
+# spends its time linking rather than compiling, and the headers it depends on
+# are named by the .d files the native objects already wrote — so `make wasm`
+# after a header edit is correct because build/obj carries the knowledge, and
+# `make clean wasm` is correct because there is nothing to be stale.
+$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
 	@mkdir -p build/wasm
 	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
 	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/libsukkal.a build/wasm/liblamassu.a \

@@ -1218,10 +1218,66 @@ a test result that described the previous binary — a phantom FAIL once and,
 worse, a passing run of code that had not been rebuilt. A header is a
 prerequisite now.
 
-What is still true: every engine binary compiles from source in one `cc`
-invocation, with no object files, so a one-line change to `cli.c` recompiles
-nisaba's twenty sources — and with four engine files instead of one, that is
-four more full compiles per relink rather than one incremental one.
+~~What is still true: every engine binary compiles from source in one `cc`
+invocation, with no object files~~ — **also fixed, and it was the larger
+half.** One object per source ([Makefile:484](../Makefile#L484)), and three
+binaries that link them; `build/mdy` and `build/engine-test` share theirs,
+ASan has its own because its flags differ.
+
+| | before | after |
+| --- | --- | --- |
+| clean build of `mdy` + `engine-test` | 34.4s | 23.6s |
+| after editing `cli.c` | 12.8s | **0.9s** |
+| after editing `engine_internal.h` | 27.4s | **2.1s** |
+
+`-MMD -MP` writes a `.d` beside each object naming every header that source
+actually opened. `engine.o` depends on twenty-six, of which `ENGINE_HDRS`
+named five: the rest are lamassu's, nisaba's, and the *generated*
+`build/highlight_bundle.h`. So `ENGINE_HDRS` is gone — a hand-written list
+that was wrong in the safe direction is still wrong, and editing
+`engine_internal.h` now rebuilds exactly the four files that include it,
+`fsx.h` exactly seven.
+
+Rules are generated per source with `$(eval)` rather than found by a `vpath`
+([Makefile:498](../Makefile#L498)): the sources come from four directories, two
+outside this tree, and a global `vpath %.c` would also be consulted for the
+parser's and the tests', which resolve by exact path and should keep doing so.
+Object names are basenames, so two sources may not share one — thirty-one are
+distinct today and the Makefile now `$(error)`s if that ever stops being true,
+because the failure otherwise is a silent mis-link.
+
+`make wasm` is deliberately left as one `emcc` invocation: one target, built
+rarely, and emcc spends its time linking rather than compiling.
+
+**What none of this fixes, and it took three wrong answers to isolate.** GNU
+Make 3.81 — which is the one macOS ships — compares mtimes at **second**
+resolution. A prerequisite written half a second after the target still reads
+as up to date:
+
+```
+$ touch out; touch -r out src      # then make src 0.5s newer, same second
+$ make
+make: `out' is up to date.
+```
+
+Object files do not change that; the comparison is make's, not the rule's.
+This has produced a wrong answer three times in this review — a FAIL from a
+binary that predated the fix, a PASS from one that predated the bug, and a
+leak measurement that reported clean because `git stash` restored the file
+within the same second as the link, which nearly had B34 recorded as
+self-inflicted. Each time the result described a different binary than the one
+named.
+
+There is nothing a Makefile can do about it, so the Makefile says so
+([Makefile:60](../Makefile#L60)) — and only when a `check-` target is what was
+asked for, since that is where believing a stale result costs something.
+Ordinary builds stay quiet.
+
+While here: the ASan build was never read for warnings, and had one from
+`stb_image_resize2.h` that appears at `-O1` and not at `-O2`. It goes in the
+`#pragma` block `images.c` already keeps for exactly this
+([images.c:29](../src/images.c#L29)). A clean build of all three binaries is
+silent now, not just the default one.
 
 ---
 
@@ -1259,7 +1315,9 @@ currently in sync.) A `check-generated` target that diffs generator output
 against the checked-in headers would catch a `property-information` upgrade.
 
 **~~Warnings in a clean build.~~ Fixed, with §2.** `-Wall -Wextra` on a
-`make clean` build is silent now. The unused parameter went with `column_align`;
+`make clean` build is silent now — and since the Makefile work in §3, so are
+`build/engine-test` and `build/mdy-asan`, which had never been read for
+warnings and where `-O1` shows one `-O2` does not. The unused parameter went with `column_align`;
 the three `const mdy_node *` casts were added, which is what the same file
 already does in six other places — the wart underneath is that `mdy_root`
 returns const to callers who own the tree, and that is still there; and
