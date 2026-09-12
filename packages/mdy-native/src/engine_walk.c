@@ -1095,7 +1095,7 @@ int mdy_engine_entry(mdy_engine *e, const char *entry) {
     JsValue hit = run_query(e, query, 1);
     js_gc_unprotect(e->vm, &query);
     if (!js_is_object(hit)) return -1;
-    char *id = js_string_utf8(js_object_get(e->vm, hit, key(e->vm, "_id")));
+    char *id = js_string_utf8(get_val(e, hit, "_id"));
     int at = id ? index_of_id(e, id, strlen(id)) : -1;
     free(id);
     return at;

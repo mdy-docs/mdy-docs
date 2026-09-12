@@ -797,6 +797,69 @@ static void count_checks(void) {
     free(html_big);
 }
 
+/* ---- a package, imported ----------------------------------------------------
+ *
+ * `% import style from "../pkg"` opens a SECOND set beside this one and
+ * `style.render(...)` renders into it. The engine test had no coverage of this
+ * at all, which is how one of B13's four unrooted reads — lookup_import's,
+ * which asks the CURRENT document's record for its `path` to know who declared
+ * the import — could be reverted without a single test noticing.
+ *
+ * The site and the package are siblings under one temp root, which is how
+ * fixture-pkg is laid out and the case a relative specifier has to get right.
+ */
+static void import_checks(void) {
+    printf("\n--- engine: a package, imported ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-imp", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    char site[1100], pkg[1100];
+    snprintf(site, sizeof site, "%s/site", root);
+    snprintf(pkg, sizeof pkg, "%s/pkg", root);
+
+    write_file(site, "main.mdy",
+        "% import style from \"../pkg\"\n"
+        "% $.emit(\"out.txt\", style.render({ path: \"layouts/card.mdy\" }, { t: \"from the site\" }))\n"
+        "% $.emit(\"who.txt\", style.findOne({ path: \"layouts/card.mdy\" }).path)\n");
+    write_file(pkg, "layouts/card.mdy", "= {{ req.t }}\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+    if (mdy_engine_open_dir(e, site, err, sizeof err) != 0) {
+        printf("  FAIL  open the importing site\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    ok_("a site that imports a package beside it renders",
+        html != NULL, html ? html : err);
+
+    const char *out = emitted("out.txt");
+    ok_("...and a render THROUGH the package comes back composed",
+        out && strstr(out, "from the site") != NULL, out ? out : "(nothing emitted)");
+
+    /* The package's own set answers its own queries — which is the read that
+     * was unrooted: the import is resolved by the importing document's path. */
+    const char *who = emitted("who.txt");
+    ok_("...and the package's set is the one queried, not the site's",
+        who && strcmp(who, "layouts/card.mdy") == 0, who ? who : "(nothing emitted)");
+
+    free(html);
+    mdy_engine_free(e);
+    free(root);
+}
+
+
 /* ---- values a document can make deeper than the walk ------------------------
  *
  * Everything that carries a tree or a value recurses per level, and a document
@@ -1266,11 +1329,24 @@ static void natives_checks(void) {
     refuses("publishing to a name no document answers to",
             "% $.publish('nowhere.at.all', {})\n",
             "no document is named \"nowhere.at.all\"");
+    /*
+     * Both halves of the ambiguity message, and the second half is the point:
+     * naming the documents means READING each one's `path` back out of its
+     * record, and a record is built fresh per call and reachable only from the
+     * C stack. Asserting only "is ambiguous" left that read unchecked, which
+     * is how one of B13's four sites sat in a covered function and still went
+     * unmeasured — reverting it broke no test.
+     */
     refuses("...or to one that several share",
             "% $.publish('x', {})\n"
             "---\n+++\npath: a/one.mdy\next: .mdy\nmessageName: x\n+++\n= A\n"
             "---\n+++\npath: b/two.mdy\next: .mdy\nmessageName: x\n+++\n= B\n",
             "is ambiguous");
+    refuses("...and it says WHICH documents share it",
+            "% $.publish('x', {})\n"
+            "---\n+++\npath: a/one.mdy\next: .mdy\nmessageName: x\n+++\n= A\n"
+            "---\n+++\npath: b/two.mdy\next: .mdy\nmessageName: x\n+++\n= B\n",
+            "(a/one.mdy, b/two.mdy)");
     refuses("...or to a name that is not one",
             "% $.publish('bad name!', {})\n",
             "may only contain letters, digits");
@@ -1986,6 +2062,7 @@ int main(void) {
     reopen_checks();
     memo_key_checks();
     count_checks();
+    import_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

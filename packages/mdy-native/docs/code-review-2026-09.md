@@ -34,7 +34,8 @@ what those checks do not reach.
 | B10 | ~~Medium~~ **fixed** | `cli.c` dev server | NULL engine dereference on delivery after a failed first build |
 | B11 | ~~Medium~~ **fixed** | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
-| B13–B27 | Low | various | Rooting fragility, portability, leaks on error paths, truncation, UB casts |
+| B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
+| B14–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
 | B29 | ~~Medium~~ **fixed** | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
 | B30 | Low | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
@@ -745,17 +746,50 @@ end of the stream, and to stop the line walk there.
 
 ### By reading
 
-- **B13 — GC rooting that works by luck.** The file's own rule (lines 268–287)
-  is that a value reachable only from the C stack must be rooted before
-  anything allocates, and that building a key allocates. Four sites violate
-  it: `js_object_get(e->vm, hit, key(e->vm, "_id"))` on an unrooted query
-  result in `mdy_engine_entry` ([1098](../src/engine_walk.c#L1098)) and
-  `resolve_target` ([243](../src/engine.c#L243)), on an unrooted decode in
-  `lookup_import` ([1048](../src/engine.c#L1048)), and
-  `js_object_get(e->vm, document_record(e, i), key(…))` in `publish_native`
-  ([1830–1831](../src/engine.c#L1830-L1831)). They survive `MDY_GC_STRESS`
-  only because the atom is already interned by the time they run. Root the
-  value or build the key first.
+- **~~B13 — GC rooting that works by luck.~~ FIXED, and the luck is now
+  measurable.** The rule
+  ([engine_value.c:85–104](../src/engine_value.c#L85-L104)) is that a value
+  reachable only from the C stack must be rooted before anything allocates,
+  and that building a key allocates. Four sites violated it:
+  `js_object_get(e->vm, hit, key(e->vm, "_id"))` on an unrooted query result
+  in `mdy_engine_entry` and `resolve_target`, on an unrooted decode in
+  `lookup_import`, and `js_object_get(e->vm, document_record(e, i), key(…))`
+  in `publish_native`.
+
+  **Why they survived, and why that is the real finding.** `MDY_GC_STRESS`
+  collects at every safe point — but `js_atom` of an atom that is ALREADY
+  interned allocates nothing, so it is not a safe point, and every `"_id"` or
+  `"path"` after the first one in a process is already interned. The stress
+  mode could not reach this class of bug at all. Four unrooted reads were
+  correct because the atom they asked for happened to be old.
+
+  So the first change is to the stress mode, not to the four sites: under
+  `MDY_GC_STRESS`, building a key now costs a collection whether it interns or
+  not ([engine_value.c:75](../src/engine_value.c#L75)), which enforces the rule
+  instead of assuming it. **It failed twelve checks the first time it ran.**
+
+  The fix itself is one function. `set_val` already existed, and its comment
+  already explained exactly this hazard for writes — the absence of the
+  matching `get_val` is *why* the four sites existed. `get_val`
+  ([engine_value.c:145](../src/engine_value.c#L145)) roots the object and
+  builds the key after, as `set_val` does, and works for an object that is an
+  rvalue at the call site because the parameter is the function's own stack
+  slot. All forty-three inline-key reads across `engine.c`, `engine_value.c`
+  and `engine_walk.c` were converted, so the shape is safe by construction
+  rather than by audit.
+
+  Two things checked rather than assumed. `js_object_get` allocates nothing —
+  `js_object_key_lookup` only *finds* an atom — so the get is never itself a
+  safe point and the whole of B13 was the key; the three reads that pass a
+  pre-built key are therefore fine as they are. And each of the four sites was
+  reverted alone, under the new stress mode, to confirm a test actually catches
+  it. Two did not: `lookup_import` and `publish_native` could be put back
+  unrooted and the suite stayed green. Both are genuine hazards —
+  `document_record` builds a fresh object per call — so they were untested, not
+  safe. `import_checks` is new (the engine test had *no* import coverage), and
+  the publish ambiguity check now asserts the paths the message names rather
+  than just the words "is ambiguous", which is the read that was unrooted. With
+  those, reverting any one of the four fails the suite.
 - **B14 — `report()` uses `strftime("%l")`** ([cli.c:1078](../src/cli.c#L1078))
   while `stamp_now`, twenty lines later, avoids `%l` precisely because
   emscripten and msvcrt lack it. The `--watch` status line is the one place it
@@ -1137,8 +1171,9 @@ accumulating.
 5. ~~B11~~, ~~B7~~ (a depth cap — in what BUILDS the trees, not in the
    thirteen things that walk them), ~~B9~~, ~~B10~~, ~~B29~~, B13 — each a few
    lines, except B29, which was three: the binding, the value, and the memo
-   key that has to know the set's size now that a document can read it. B13 is
-   what is left.
+   key that has to know the set's size now that a document can read it, and
+   ~~B13~~, which was one function — plus the stress mode that had to be able
+   to see it first.
 6. Delete §2's dead code; add the `check-sites` fixture and a
    `check-generated` target; make the default build warning-free.
 7. ~~Then the structural work in §3, starting with splitting engine.c along its

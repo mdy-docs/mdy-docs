@@ -231,7 +231,7 @@ static int resolve_target(mdy_engine *e, JsValue target) {
     if (!js_is_object(target)) return -1;
 
     /* A document from `$.find` carries the id it was inserted with. */
-    char *id = js_string_utf8(js_object_get(e->vm, target, key(e->vm, "_id")));
+    char *id = js_string_utf8(get_val(e, target, "_id"));
     if (id) {
         int at = index_of_id(e, id, strlen(id));
         free(id);
@@ -240,7 +240,7 @@ static int resolve_target(mdy_engine *e, JsValue target) {
 
     JsValue hit = run_query(e, target, 1);
     if (!js_is_object(hit)) return -1;
-    char *hit_id = js_string_utf8(js_object_get(e->vm, hit, key(e->vm, "_id")));
+    char *hit_id = js_string_utf8(get_val(e, hit, "_id"));
     if (!hit_id) return -1;
     int at = index_of_id(e, hit_id, strlen(hit_id));
     free(hit_id);
@@ -746,8 +746,8 @@ void mdy_engine_on_source(mdy_engine *e, void (*fn)(void *ud, const char *path),
 static JsValue context_value(mdy_engine *e, const char *json, int strict) {
     JsValue text = str(e->vm, json, strlen(json));
     js_gc_protect(e->vm, &text);
-    JsValue JSON = js_object_get(e->vm, js_context_globals(e->ctx), key(e->vm, "JSON"));
-    JsValue parse = js_is_object(JSON) ? js_object_get(e->vm, JSON, key(e->vm, "parse")) : js_undefined();
+    JsValue JSON = get_val(e, js_context_globals(e->ctx), "JSON");
+    JsValue parse = js_is_object(JSON) ? get_val(e, JSON, "parse") : js_undefined();
     JsValue out = js_undefined();
     int ok = js_is_function(parse) && js_call(e->ctx, parse, JSON, &text, 1, &out);
     js_gc_unprotect(e->vm, &text);
@@ -1045,8 +1045,7 @@ static mdy_engine *lookup_import(mdy_engine *e, const char *spec, const char **w
                 JsValue hits = binjson_to_js(e, out, out_len, NULL);
                 free(out);
                 if (js_is_array(hits) && js_array_length(hits) > 0) {
-                    char *p = js_string_utf8(js_object_get(e->vm, js_array_get(hits, 0),
-                                                           key(e->vm, "path")));
+                    char *p = js_string_utf8(get_val(e, js_array_get(hits, 0), "path"));
                     if (p) { snprintf(path, sizeof path, "%s", p); free(p); }
                 }
             }
@@ -1220,7 +1219,7 @@ static void parse_options(mdy_engine *e, mdy_options *options) {
  */
 static void note_references(mdy_engine *e, const mdy_doc *tree) {
     if (!js_is_object(e->render_res)) return;
-    JsValue data = js_object_get(e->vm, e->render_res, key(e->vm, "data"));
+    JsValue data = get_val(e, e->render_res, "data");
     if (!js_is_object(data)) return;
     static const char *const lists[] = { "tags", "users", "links" };
     /* Every value made here is a GC root until it is stored: interning a key
@@ -1229,7 +1228,7 @@ static void note_references(mdy_engine *e, const mdy_doc *tree) {
     js_gc_protect(e->vm, &data);
     JsValue arrays[3];
     for (int k = 0; k < 3; k++) {
-        JsValue have = js_object_get(e->vm, data, key(e->vm, lists[k]));
+        JsValue have = get_val(e, data, lists[k]);
         if (js_is_undefined(have)) {
             have = js_array_new(e->ctx, 0);
             js_gc_protect(e->vm, &have);
@@ -1321,7 +1320,7 @@ static bool node_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     if (argc < 1 || !js_is_object(args[0]) ||
-        !js_is_string(js_object_get(e->vm, args[0], key(e->vm, "type")))) {
+        !js_is_string(get_val(e, args[0], "type"))) {
         const char *msg = "mdy: $.node expects a hast node ({ type, … })";
         *result = str(e->vm, msg, strlen(msg));
         return false;
@@ -1368,7 +1367,7 @@ static bool html_native(JsContext *ctx, JsValue this_val, const JsValue *args,
         return true;
     }
     if (argc < 1 || !js_is_object(args[0]) ||
-        !js_is_string(js_object_get(e->vm, args[0], key(e->vm, "type")))) {
+        !js_is_string(get_val(e, args[0], "type"))) {
         const char *msg = "mdy: $.html expects a hast node ({ type, … }) or a string";
         *result = str(e->vm, msg, strlen(msg));
         return false;
@@ -1686,7 +1685,7 @@ static bool toc_native(JsContext *ctx, JsValue this_val, const JsValue *args,
         }
         free(s);
     } else if (js_is_object(args[0]) &&
-               js_is_string(js_object_get(e->vm, args[0], key(e->vm, "type")))) {
+               js_is_string(get_val(e, args[0], "type"))) {
         owned = mdy_doc_new();
         tree = owned ? js_to_tree(e, owned, args[0]) : NULL;
     }
@@ -1774,18 +1773,18 @@ static char *message_name(mdy_engine *e, size_t at) {
      * stops static/logo.png and static/logo.jpg colliding on `static.logo`.
      * A set built from a string has no `ext` at all and stays addressable.
      */
-    char *ext = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "ext")));
+    char *ext = js_string_utf8(get_val(e, record, "ext"));
     if (ext) {
         int runnable = ends_with_ci(ext, ".mdy") || ends_with_ci(ext, ".md");
         free(ext);
         if (!runnable) { js_gc_unprotect(e->vm, &record); return NULL; }
     }
 
-    char *declared = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "messageName")));
+    char *declared = js_string_utf8(get_val(e, record, "messageName"));
     if (declared && *declared) { js_gc_unprotect(e->vm, &record); return declared; }
     free(declared);
 
-    char *path = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "path")));
+    char *path = js_string_utf8(get_val(e, record, "path"));
     js_gc_unprotect(e->vm, &record);
     if (!path || !*path) { free(path); return NULL; }
 
@@ -1828,7 +1827,7 @@ static bool publish_native(JsContext *ctx, JsValue this_val, const JsValue *args
             if (found == 0) first = i;
             found++;
             char *path = js_string_utf8(
-                js_object_get(e->vm, document_record(e, i), key(e->vm, "path")));
+                get_val(e, document_record(e, i), "path"));
             if (path && used + strlen(path) + 3 < sizeof others)
                 used += (size_t)snprintf(others + used, sizeof others - used,
                                          "%s%s", used ? ", " : "", path);
@@ -1964,9 +1963,9 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
     const char *got = shown ? shown : "undefined";
 
     char *path = js_is_object(doc)
-        ? js_string_utf8(js_object_get(e->vm, doc, key(e->vm, "path"))) : NULL;
+        ? js_string_utf8(get_val(e, doc, "path")) : NULL;
     char *ext = js_is_object(doc)
-        ? js_string_utf8(js_object_get(e->vm, doc, key(e->vm, "ext"))) : NULL;
+        ? js_string_utf8(get_val(e, doc, "ext")) : NULL;
     if (!path || !ext) {
         snprintf(msg, sizeof msg,
                  "resize: expected a file document (path/ext, from $.find/$.findOne), not %s",
@@ -1987,8 +1986,8 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
         return false;
     }
 
-    JsValue vw = js_object_get(e->vm, doc, key(e->vm, "width"));
-    JsValue vh = js_object_get(e->vm, doc, key(e->vm, "height"));
+    JsValue vw = get_val(e, doc, "width");
+    JsValue vh = get_val(e, doc, "height");
     if (!js_is_number(vw) || !js_is_number(vh)) {
         snprintf(msg, sizeof msg,
                  "resize: %s has no known width/height (its dimensions could not be read)",
@@ -2001,9 +2000,9 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
 
     /* At least one of width/height; the other follows from the aspect ratio. */
     JsValue options = argc > 1 && js_is_object(args[1]) ? args[1] : js_undefined();
-    JsValue ow = js_is_object(options) ? js_object_get(e->vm, options, key(e->vm, "width"))
+    JsValue ow = js_is_object(options) ? get_val(e, options, "width")
                                        : js_undefined();
-    JsValue oh = js_is_object(options) ? js_object_get(e->vm, options, key(e->vm, "height"))
+    JsValue oh = js_is_object(options) ? get_val(e, options, "height")
                                        : js_undefined();
     int has_w = js_is_number(ow), has_h = js_is_number(oh);
     if (!has_w && !has_h) {
@@ -2156,7 +2155,7 @@ static bool module_canonicalize(void *ud, const uint16_t *spec, size_t spec_len,
         if (e->current < e->count) {
             JsValue record = document_record(e, e->current);
             js_gc_protect(e->vm, &record);
-            path = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "path")));
+            path = js_string_utf8(get_val(e, record, "path"));
             js_gc_unprotect(e->vm, &record);
         }
         snprintf(joined, sizeof joined, "%s/%s", e->root ? e->root : "",
@@ -2371,7 +2370,7 @@ static void load_highlighter(mdy_engine *e) {
     if (js_promise_state(promise) != 1) {
         JsValue reason = js_promise_result(promise);
         char *text = js_is_object(reason)
-            ? js_string_utf8(js_object_get(e->vm, reason, key(e->vm, "message")))
+            ? js_string_utf8(get_val(e, reason, "message"))
             : js_string_utf8(reason);
         fprintf(stderr, "fenced code will not be highlighted: the highlighter did not load (%s)\n",
                 text ? text : "no reason given");
@@ -2415,9 +2414,9 @@ static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
     if (!ok || !js_is_object(result)) return 0;
 
     js_gc_protect(e->vm, &result);
-    int highlighted = js_get_bool(js_object_get(e->vm, result, key(e->vm, "highlighted")));
+    int highlighted = js_get_bool(get_val(e, result, "highlighted"));
     if (highlighted) {
-        js_children_to_tree(e, doc, code, js_object_get(e->vm, result, key(e->vm, "children")));
+        js_children_to_tree(e, doc, code, get_val(e, result, "children"));
         mdy_add_class(doc, code, "hljs");
     }
     js_gc_unprotect(e->vm, &result);
@@ -2850,7 +2849,7 @@ static uint64_t canonical_hash_deep(mdy_engine *e, JsValue v, uint64_t h,
         qsort(names, m, sizeof *names, key_cmp);
         h = fnv64(h, "{", 1);
         for (size_t i = 0; i < m; i++) {
-            JsValue val = js_object_get(e->vm, v, key(e->vm, names[i]));
+            JsValue val = get_val(e, v, names[i]);
             int left_out = skip && strcmp(names[i], skip) == 0;
             if (!left_out && !js_is_undefined(val) && !js_is_function(val)) {
                 h = fnv64(h, names[i], strlen(names[i]));
@@ -2955,7 +2954,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     if (getenv("MDY_MEMO_DEBUG")) {
         JsValue rec = document_record(e, index);
         js_gc_protect(e->vm, &rec);
-        char *path = js_string_utf8(js_object_get(e->vm, rec, key(e->vm, "path")));
+        char *path = js_string_utf8(get_val(e, rec, "path"));
         js_gc_unprotect(e->vm, &rec);
         fprintf(stderr, "memo %s %s\n", hit ? "hit " : "miss", path ? path : "?");
         free(path);
@@ -3020,7 +3019,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     if (d->is_markdown) {
         JsValue record = document_record(e, index);
         js_gc_protect(e->vm, &record);
-        char *text = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "body")));
+        char *text = js_string_utf8(get_val(e, record, "body"));
         js_gc_unprotect(e->vm, &record);
         out = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
         if (!out) { free(text); FAIL("the markdown document could not be read"); }
@@ -3125,7 +3124,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
             const uint16_t *mu = js_string_units(reason, &mlen);
             if (mu) msg = from_utf16(mu, mlen);
             if (!msg && js_is_object(reason)) {
-                JsValue m = js_object_get(e->vm, reason, key(e->vm, "message"));
+                JsValue m = get_val(e, reason, "message");
                 mu = js_string_units(m, &mlen);
                 if (mu) msg = from_utf16(mu, mlen);
             }
@@ -3152,7 +3151,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
      * it through `$.compose` and handed back what its transforms made of it —
      * and one without hands back its lines for the host to parse.
      */
-    JsValue lines_out = js_object_get(e->vm, result, key(e->vm, "out"));
+    JsValue lines_out = get_val(e, result, "out");
     if (wrote && js_is_array(lines_out)) {
         /* No transform: the text is what the code wrote, joined — mdy.js's
          * `scriptOutput(out).lines.join('\n')`, which is exactly `flatten`. */
@@ -3160,7 +3159,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         *wrote = flatten(lines_out, &n);
     }
 
-    transformed = js_object_get(e->vm, result, key(e->vm, "tree"));
+    transformed = get_val(e, result, "tree");
     if (js_is_object(transformed)) {
         /* Already composed: `$.compose` spliced it before the transforms saw
          * it, which is what let a transform work on the finished tree. */
@@ -3190,7 +3189,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
          * what mdy.js falls back to for exactly this case. */
         if (wrote && !*wrote) *wrote = mdy_to_html(mdy_root(doc), NULL);
     } else {
-        JsValue lines = js_object_get(e->vm, result, key(e->vm, "out"));
+        JsValue lines = get_val(e, result, "out");
         if (!js_is_array(lines)) FAIL("the document did not produce its lines");
         mdy_doc *tree = parse_lines(lines, e);
         if (!tree) FAIL("the produced lines did not parse");
@@ -3206,10 +3205,10 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     /* What it answered with, now that the parse has added what the text
      * refers to — the guest's own serialiser, called from here. */
     if (out && e->want_response) {
-        JsValue answer = js_object_get(e->vm, dollar, key(e->vm, "__answer"));
+        JsValue answer = get_val(e, dollar, "__answer");
         JsValue ignored = js_undefined();
         if (js_is_function(answer) && js_call(e->ctx, answer, js_undefined(), NULL, 0, &ignored)) {
-            char *text = js_string_utf8(js_object_get(e->vm, dollar, key(e->vm, "__response")));
+            char *text = js_string_utf8(get_val(e, dollar, "__response"));
             if (text) { free(e->last_response); e->last_response = text; }
         }
     }
@@ -3218,7 +3217,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
          * either — `$.text` and the CLI's default output want the text. */
         char *text = wrote && *wrote ? strdup(*wrote) : NULL;
         if (!text) {
-            JsValue lo = js_object_get(e->vm, result, key(e->vm, "out"));
+            JsValue lo = get_val(e, result, "out");
             size_t n = 0;
             text = js_is_array(lo) && !js_is_object(transformed) ? flatten(lo, &n) : mdy_to_html(mdy_root(out), NULL);
         }
@@ -3296,7 +3295,7 @@ char *mdy_engine_document_path(mdy_engine *e, size_t index) {
     if (!e || index >= e->count) return NULL;
     JsValue record = document_record(e, index);
     js_gc_protect(e->vm, &record);
-    char *path = js_string_utf8(js_object_get(e->vm, record, key(e->vm, "path")));
+    char *path = js_string_utf8(get_val(e, record, "path"));
     js_gc_unprotect(e->vm, &record);
     return path;
 }

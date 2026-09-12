@@ -58,6 +58,23 @@ JsValue str(JsVm *vm, const char *s, size_t len) {
 }
 
 JsValue key(JsVm *vm, const char *s) {
+    /*
+     * Building a key is a safe point — that is the rule below, and it is why
+     * set_val builds its key INSIDE, after the value is rooted. But js_atom of
+     * an atom that is ALREADY interned allocates nothing, so the VM's own
+     * gc_stress never collects here, and every "_id"/"path" after the first
+     * one in a process is already interned. That is the exact hole B13 lived
+     * in: four reads of an unrooted object were correct only because the atom
+     * they asked for happened to be old.
+     *
+     * So under MDY_GC_STRESS a key costs a collection whether it interns or
+     * not, and the rule is enforced rather than assumed. It found twelve
+     * failures the first time it ran. Cost: check-engine goes from 0.9s to
+     * 1.3s, under a flag no build uses.
+     */
+    static int stress = -1;
+    if (stress < 0) stress = getenv("MDY_GC_STRESS") != NULL;
+    if (stress) js_gc_collect(vm);
     size_t n = 0;
     uint16_t *u = to_utf16(s, strlen(s), &n);
     JsValue v = u ? js_atom(vm, u, n) : js_undefined();
@@ -94,6 +111,45 @@ void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v) {
     js_gc_unprotect(e->vm, &k);
     js_gc_unprotect(e->vm, &v);
     js_gc_unprotect(e->vm, &obj);
+}
+
+/*
+ * ...and the read, which has the same hazard from the other side.
+ *
+ * `js_object_get(e->vm, thing, key(e->vm, "path"))` was the shape this engine
+ * reached for forty-three times, and it is wrong whenever `thing` is reachable
+ * only from the C stack: C does not say which argument is evaluated first, and
+ * building the key is a safe point, so the object can be collected before the
+ * get it was an argument to. It survives when the atom is already interned,
+ * which is nearly always, which is why it survived at all (B13). All
+ * forty-three say `get_val` now.
+ *
+ * Rooting the object here — and building the key after, as set_val does —
+ * makes the whole shape safe by construction, including for an object that is
+ * an rvalue at the call site (`get_val(e, document_record(e, i), "path")`):
+ * the parameter is this function's own stack slot, and its address is what the
+ * collector is given.
+ *
+ * The value comes back unrooted, as js_object_get's did — but it is a PROPERTY
+ * of `obj`, so the collector reaches it through `obj` for as long as `obj`
+ * itself is reachable. That is why the tree walk can read `children` and
+ * recurse through it without rooting anything: the root of that walk is rooted
+ * by its caller and everything below is reachable from it. A caller that keeps
+ * a read value after the object it came from may have gone is the case that
+ * needs js_gc_protect of its own.
+ *
+ * js_object_get allocates nothing (a hash lookup, and js_object_key_lookup
+ * only FINDS an atom), so the get is not itself a safe point. The whole of
+ * B13 was the key.
+ */
+JsValue get_val(mdy_engine *e, JsValue obj, const char *name) {
+    js_gc_protect(e->vm, &obj);
+    JsValue k = key(e->vm, name);
+    js_gc_protect(e->vm, &k);
+    JsValue v = js_object_get(e->vm, obj, k);
+    js_gc_unprotect(e->vm, &k);
+    js_gc_unprotect(e->vm, &obj);
+    return v;
 }
 
 void push_item(mdy_engine *e, JsValue array, JsValue v) {
@@ -229,12 +285,12 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
     if (depth >= MDY_MAX_DEPTH) return NULL;
     if (!js_is_object(v)) return NULL;
 
-    char *type = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "type")));
+    char *type = js_string_utf8(get_val(e, v, "type"));
     if (!type) return NULL;
 
     mdy_node *out = NULL;
     if (strcmp(type, "text") == 0 || strcmp(type, "raw") == 0 || strcmp(type, "comment") == 0) {
-        char *value = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "value")));
+        char *value = js_string_utf8(get_val(e, v, "value"));
         out = mdy_new_text(doc, value ? value : "", value ? strlen(value) : 0);
         if (out) out->type = strcmp(type, "raw") == 0 ? MDY_RAW
                            : strcmp(type, "comment") == 0 ? MDY_COMMENT : MDY_TEXT;
@@ -247,10 +303,10 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
         if (out) {
             out->type = MDY_ROOT;
             out->text = NULL;
-            js_children_to_tree_at(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")), depth + 1);
+            js_children_to_tree_at(e, doc, out, get_val(e, v, "children"), depth + 1);
         }
     } else if (strcmp(type, "element") == 0) {
-        char *tag = js_string_utf8(js_object_get(e->vm, v, key(e->vm, "tagName")));
+        char *tag = js_string_utf8(get_val(e, v, "tagName"));
         out = mdy_new_element(doc, tag ? tag : "div", tag ? strlen(tag) : 3);
         free(tag);
         if (out) {
@@ -260,7 +316,7 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
              * there rather than a fixed list. `className` is the one that is
              * an array; everything else is a string, a number or a boolean.
              */
-            JsValue props = js_object_get(e->vm, v, key(e->vm, "properties"));
+            JsValue props = get_val(e, v, "properties");
             if (js_is_object(props)) {
                 for (size_t i = 0; i < js_object_size(props); i++) {
                     JsValue name = js_object_key_at(props, i);
@@ -286,7 +342,7 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
                     free(pname);
                 }
             }
-            js_children_to_tree_at(e, doc, out, js_object_get(e->vm, v, key(e->vm, "children")), depth + 1);
+            js_children_to_tree_at(e, doc, out, get_val(e, v, "children"), depth + 1);
         }
     }
 
