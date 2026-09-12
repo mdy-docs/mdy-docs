@@ -944,6 +944,40 @@ static JsValue document_record(mdy_engine *e, size_t at) {
                ? js_array_get(hits, 0) : js_object_new(e->ctx);
 }
 
+/*
+ * The record without its store id.
+ *
+ * `$.data(i)` carries no `_id` under mdy-docs, and did here — the same rule
+ * wrap()'s `__answer` already applies to `res.data`, written once more for the
+ * native. A store id says when a set was opened, not what a document is; a
+ * document that serialises its own data was putting one in. (B31.)
+ */
+static JsValue record_without_id(mdy_engine *e, JsValue rec) {
+    if (!js_is_object(rec)) return rec;
+    /*
+     * `rec` rooted BEFORE the object that will hold the copy, because
+     * js_object_new allocates and the record arrives here reachable only from
+     * the C stack — `record_without_id(e, document_record(e, index))` hands
+     * over a value nothing else holds. Rooting it second cost sixteen checks
+     * under MDY_GC_STRESS, which is the same mistake B13 was and the reason
+     * that stress mode exists.
+     */
+    js_gc_protect(e->vm, &rec);
+    JsValue out = js_object_new(e->ctx);
+    js_gc_protect(e->vm, &out);
+    size_t n = js_object_size(rec);
+    for (size_t i = 0; i < n; i++) {
+        JsValue k = js_object_key_at(rec, i);
+        char *name = js_string_utf8(k);
+        if (!name) continue;
+        if (strcmp(name, "_id") != 0) set_val(e, out, name, js_object_get(e->vm, rec, k));
+        free(name);
+    }
+    js_gc_unprotect(e->vm, &rec);
+    js_gc_unprotect(e->vm, &out);
+    return out;
+}
+
 static bool data_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
     ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
@@ -968,7 +1002,8 @@ static bool data_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     if (rc != 0 || !out) { *result = js_null(); return true; }
     JsValue hits = binjson_to_js(e, out, out_len, NULL);
     free(out);
-    *result = js_is_array(hits) && js_array_length(hits) > 0 ? js_array_get(hits, 0) : js_null();
+    *result = js_is_array(hits) && js_array_length(hits) > 0
+                  ? record_without_id(e, js_array_get(hits, 0)) : js_null();
     return true;
 }
 
@@ -3100,7 +3135,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
      * That is what lets a template write `req.x ?? res.data.x` and always be
      * able to reach its own declared value.
      */
-    set_val(e, res, "data", document_record(e, index));
+    set_val(e, res, "data", record_without_id(e, document_record(e, index)));
     dollar = js_object_new(e->ctx);
     js_gc_protect(e->vm, &dollar);
     /* the host's scope values, for the `const`s the wrapper declared */

@@ -52,7 +52,7 @@ what those checks do not reach.
 | B28 | ~~Low~~ **fixed** | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
 | B29 | ~~Medium~~ **fixed** | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
 | B30 | ~~Low~~ **part fixed** | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
-| B31 | Low | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
+| B31 | ~~Low~~ **fixed** | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
 | B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
@@ -664,72 +664,46 @@ places it stops. Two of its expectations were wrong when first written (a lone
 `JSON.stringify`'s backslashes identically in both); they were replaced with
 what `node bin/mdy.js` actually prints.
 
-#### B31 — A record's keys are in a different order (Low)
-
-A document sees its own record as an object, and the order its keys come back
-in is not node's:
+#### B31 — A record's keys are in a different order (Low) — FIXED
 
 ```
-$.find({})  C: ["_id","title","name","ext","size","mtime","path"]
-         node: ["title","path","name","ext","size","mtime","_id"]
-$.data(0)   C: ["_id","title","name","ext","size","mtime","path"]
-         node: ["title","path","name","ext","size","mtime"]
+$.find({})[0]   before  ["_id","name","ext","size","mtime","path"]
+                after   ["path","name","ext","size","mtime","_id"]   node the same
+$.data(0)       before  ["_id","name","ext","size","mtime","path"]
+                after   ["path","name","ext","size","mtime"]         node the same
+res.data        before  carried `_id`
+                after   does not                                     node the same
 ```
 
-Two differences. `_id` is first here and last there — and `$.data` does not
-carry it at all under node, while it does here. And the identity block is
-written `name, ext, size, mtime, path`
-([engine_walk.c:767–767](../src/engine_walk.c#L767-L767)), `path` last so that it
-wins over a data file's own; node reaches the same result with
-`{ ...meta, ...parsed, path }`, where re-assigning `path` leaves it in the
-position it was first written — first.
+Three changes, each matching a decision node makes for a reason:
 
-It costs nothing until a document serialises a record or walks its keys, at
-which point the two engines disagree about the bytes. No site in the tree
-does, which is why `check-sites` is green. Found while fixing B2; it predates
-both fixes.
+- **`_id` last** ([ingest.c:103](../src/ingest.c#L103)), because nisaba's JS
+  insert adds it after spreading the document. The merge also skips an `_id` a
+  mapping tries to declare — the store's id is the store's, and writing it
+  twice was reachable before.
+- **`path` first** ([engine_walk.c:796](../src/engine_walk.c#L796)), because
+  mdy-docs builds the record as `{ ...meta, ...parsed, path }` and re-assigning
+  a key in JS leaves it where it was first written. Safe because
+  `mdy_bj_document` takes a key's *place* from the first mapping that has it
+  and its *value* from the last, so moving it does not change which `path`
+  wins over a data file's own — checked, with a `.yaml` that declares
+  `path: i-said-this` and still resolves to `note.yaml` on both engines.
+- **`$.data` and `res.data` carry no store id**
+  ([engine.c:955](../src/engine.c#L955)) — the rule `wrap()`'s `__answer`
+  already applied to the response, now applied where the document reads it.
 
-#### B32 — A file name with a newline in it disappears (Medium) — FIXED
+Seven checks in `test/engine.c`, four in document mode and three over a
+directory, where the identity is what gives the order meaning.
 
-**Fixed.** The listing separates on `\0` and ends with an empty entry
-([fsx.h:24](../src/fsx.h#L24)), which is the one byte a file name cannot hold.
-`walk` writes each path with its own terminator
-([fsx.c:174](../src/fsx.c#L174)), `fsx_list`'s sort counts and splits on it
-([fsx.c:253](../src/fsx.c#L253)), and all three readers became the same one
-line — `for (const char *rel = listing; *rel; rel += strlen(rel) + 1)` — in
-the engine's walk ([engine_walk.c:737](../src/engine_walk.c#L737)), `cli.c`'s static
-copier ([636](../src/cli.c#L636)) and `watch.c`'s snapshot
-([48](../src/watch.c#L48)). Each of them lost a `strchr`, a mutation of the
-buffer and an empty-entry guard.
-
-`fsx_readdir` went with it, and its one caller `fsx_rm_rf`: a test that makes
-a file named this way has to be able to delete it again, and that one split on
-`\n` too.
-
-All three paths were checked end to end against node: the document set
-(`new\nline.mdy` is a document with its own record), `mdy build`'s static copy
-(the file is written under its real name), and `--watch` (an edit to it
-rebuilds). Regression test: `odd_name_checks`
-([test/engine.c:774](../test/engine.c#L774)), which now carries a newline
-beside the quote, the backslash and the control character.
-
-The original finding follows.
-
-`fsx_list` returns the walk as one string, "one per line", and every caller
-splits it on `\n` — the engine's walk, `cli.c`'s static copier and `watch.c`'s
-snapshot. A file name may contain a newline on any POSIX system, and
-`new\nline.mdy` becomes two entries, `new` and `line.mdy`, neither of which
-exists. The file is silently not part of the site; node has it.
-
-```
-C:    [read] line.mdy … [read] new        (and no document for either)
-node: - new\nline.mdy | name=new\nline.mdy
-```
-
-Found while fixing B8, and the same shape as it — a file name carried through
-a text encoding that cannot hold every file name — but a different component:
-this one is decided before identity is built, so escaping identity does not
-reach it.
+**And a rooting bug of my own, caught by B13's stress mode.**
+`record_without_id` called `js_object_new` *before* rooting the record it was
+copying — and the record arrives reachable only from the C stack, since
+`record_without_id(e, document_record(e, index))` hands over a value nothing
+else holds. Sixteen checks failed under `MDY_GC_STRESS` and none without it.
+It took three wrong guesses (a stale build, a build-order difference, a
+nondeterministic test) before noticing that `make check-engine` runs the binary
+twice and the second run is the stressed one. That is the mode earning its
+place inside a week of existing.
 
 #### B33 — mdy-docs: the render memo serves a stale `$.count` (Medium)
 

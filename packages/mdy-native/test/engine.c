@@ -950,6 +950,86 @@ static void attr_entity_checks(void) {
 }
 
 
+/* ---- a record's keys, and whose id it is ------------------------------------
+ *
+ * A document sees its own record as an object, and the order its keys come
+ * back in is part of what it sees: one that serialises its record, or walks
+ * `Object.keys`, produced different bytes on the two engines. B31.
+ *
+ *   $.find({})[0]   before  ["_id","name","ext","size","mtime","path"]
+ *                   after   ["path","name","ext","size","mtime","_id"]   = node
+ *   $.data(0)       before  carried `_id`
+ *                   after   does not                                     = node
+ *
+ * `_id` moved last because nisaba's JS insert adds it after spreading the
+ * document; `path` moved first because mdy-docs builds the record as
+ * `{ ...meta, ...parsed, path }` and re-assigning a key in JS leaves it where
+ * it was first written. Position and value are separate in mdy_bj_document —
+ * the first mapping decides a key's place, the last decides its value — so
+ * moving `path` does not change which one wins, which the directory check
+ * below is for.
+ *
+ * The order only shows where there IS a file identity, so that half needs a
+ * directory; document mode has `_id` and whatever the front matter declared.
+ */
+static void record_key_checks(void) {
+    printf("\n--- engine: a record's keys, and whose id it is ---\n");
+
+    /* Document mode: the store id is the only key a bare document has. */
+    check("a bare document's record is its store id",
+          "= {{ JSON.stringify(Object.keys($.find({})[0])) }}\n",
+          "<h1 id=\"_id\">[\"_id\"]</h1>");
+    check("$.data carries no store id",
+          "= {{ JSON.stringify(Object.keys($.data(0))) }}\n",
+          "<h1>[]</h1>");
+    check("...and neither does res.data",
+          "= {{ JSON.stringify(Object.keys(res.data)) }}\n",
+          "<h1>[]</h1>");
+    check("what the front matter declared is there, and the id is not",
+          "+++\ntitle: T\n+++\n= {{ JSON.stringify(Object.keys(res.data)) }}\n",
+          "<h1 id=\"title\">[\"title\"]</h1>");
+
+    /* A directory, where the identity gives the order its meaning. */
+    {
+        char *tmp = fsx_tmpdir();
+        char prefix[1024];
+        snprintf(prefix, sizeof prefix, "%s/mdy-keys", tmp ? tmp : ".");
+        free(tmp);
+        char *root = fsx_mkdtemp(prefix);
+        if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+        write_file(root, "main.mdy",
+            "% $.emit('k.txt', JSON.stringify(Object.keys($.find({ path: 'main.mdy' })[0]))\n"
+            "%   + ' ' + JSON.stringify(Object.keys(res.data))\n"
+            "%   + ' path=' + $.find({ name: 'note.yaml' })[0].path)\n");
+        /* A data file naming its own `path`: the walk's must still win. */
+        write_file(root, "note.yaml", "path: i-said-this\ntitle: T\n");
+
+        mdy_engine *e = mdy_engine_new();
+        char err[512];
+        emit_count = 0;
+        mdy_engine_on_emit(e, collect_all, NULL);
+        char *html = NULL;
+        if (mdy_engine_open_dir(e, root, err, sizeof err) == 0) {
+            int at = mdy_engine_entry(e, "main.mdy");
+            if (at >= 0) html = mdy_engine_render(e, (size_t)at, err, sizeof err);
+        }
+        const char *got = emitted("k.txt");
+        ok_("a walked record is path first and _id last",
+            got && strstr(got, "[\"path\",\"name\",\"ext\",\"size\",\"mtime\",\"_id\"]") == got,
+            got ? got : err);
+        ok_("...res.data has the same order without the id",
+            got && strstr(got, "[\"path\",\"name\",\"ext\",\"size\",\"mtime\"] path=") != NULL,
+            got ? got : err);
+        ok_("...and the walk's path still beats a data file's own",
+            got && strstr(got, "path=note.yaml") != NULL, got ? got : err);
+        free(html);
+        mdy_engine_free(e);
+        free(root);
+    }
+}
+
+
 /* ---- a file written on Windows ---------------------------------------------
  *
  * mdy-docs' splitter splits on `\n` alone, so every line keeps its `\r`; the
@@ -2462,6 +2542,7 @@ int main(void) {
     big_integer_checks();
     crlf_checks();
     attr_entity_checks();
+    record_key_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

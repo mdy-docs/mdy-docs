@@ -785,11 +785,19 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         iso8601_utc(mtime, when, sizeof when);
         char *ident = NULL;
         size_t ilen = 0, icap = 0;
+        /*
+         * `path` FIRST, because mdy-docs has it first: it builds the record as
+         * `{ ...meta, ...parsed, path }`, and re-assigning a key in JS leaves
+         * it where it was first written. Position and value are separate here
+         * — mdy_bj_document takes a key's place from the FIRST mapping that
+         * has it and its value from the LAST — so moving it does not change
+         * which `path` wins over a data file's own. (B31.)
+         */
+        put_quoted(&ident, &ilen, &icap, "path", rel);
         put_quoted(&ident, &ilen, &icap, "name", name);
         put_quoted(&ident, &ilen, &icap, "ext", ext);
         put_number(&ident, &ilen, &icap, "size", size);
         put_quoted(&ident, &ilen, &icap, "mtime", when);
-        put_quoted(&ident, &ilen, &icap, "path", rel);
         /*
          * A picture's dimensions, read from its header. Not decodable —
          * corrupt, truncated, a variant this does not know — is not an error:

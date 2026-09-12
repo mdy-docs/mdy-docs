@@ -83,8 +83,6 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
 int mdy_bj_document(bj_builder *b, const uint8_t oid[12],
                     const mdy_yaml_node *const *mappings, size_t count) {
     if (bj_begin_object(b) != 0) return -1;
-    if (bj_put_key(b, (const uint8_t *)"_id", 3) != 0) return -1;
-    if (bj_put_oid(b, oid) != 0) return -1;
 
     /*
      * The merge, in one pass: for each key, the FIRST mapping that has it
@@ -99,6 +97,10 @@ int mdy_bj_document(bj_builder *b, const uint8_t oid[12],
         for (size_t i = 0; i < mdy_yaml_count(map); i++) {
             size_t klen = 0;
             const char *k = mdy_yaml_key(map, i, &klen);
+
+            /* The store's id is the store's: a document cannot declare one,
+             * and this writes it below, last, where mdy-docs has it. (B31.) */
+            if (klen == 3 && memcmp(k, "_id", 3) == 0) continue;
 
             /* Already written, because an earlier mapping had it. */
             int seen = 0;
@@ -129,6 +131,16 @@ int mdy_bj_document(bj_builder *b, const uint8_t oid[12],
             if (mdy_bj_put_yaml(b, value) != 0) return -1;
         }
     }
+
+    /*
+     * `_id` LAST, which is where mdy-docs has it: nisaba's JS insert adds it
+     * after spreading the document, so `Object.keys` gives
+     * `[…, "_id"]` there and gave `["_id", …]` here. Key order is not
+     * cosmetic — a document that serialises its own record, or walks its keys,
+     * produced different bytes on the two engines. (B31.)
+     */
+    if (bj_put_key(b, (const uint8_t *)"_id", 3) != 0) return -1;
+    if (bj_put_oid(b, oid) != 0) return -1;
 
     return bj_end_object(b);
 }
