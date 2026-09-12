@@ -89,6 +89,18 @@ int main(void) {
     check("...hex and octal are unchanged",
           "a: 0x20000000000000\nb: 0o777", "{\"a\":9007199254740992,\"b\":511}");
 
+    /* A closing `...`, which is single-document YAML and reads as one. */
+    check("a closing document marker ends the document",
+          "a: 1\n...\n", "{\"a\":1}");
+    check("...with blank lines after it",
+          "a: 1\n...\n\n", "{\"a\":1}");
+    check("...with a comment after it",
+          "a: 1\n...\n# tail\n", "{\"a\":1}");
+    check("...and after a leading marker too",
+          "---\na: 1\n...\n", "{\"a\":1}");
+    check("a marker on its own is an empty document",
+          "...\n", "null");
+
     check("a date is a string", "a: 2024-01-01\nb: 12:30",
           "{\"a\":\"2024-01-01\",\"b\":\"12:30\"}");
     check("a colon inside a value", "a: x:y\nb: a#b",
@@ -186,6 +198,17 @@ int main(void) {
     refuses("tags", "a: !!str 1", "line 1: tags are not supported");
     refuses("merge keys", "<<: *base\na: 1", "line 1: merge keys are not supported");
     refuses("a second document", "a: 1\n---\nb: 2",
+            "line 2: more than one document in a stream is not supported");
+    /*
+     * ...but a `...` that CLOSES the one document is not a second one. It was
+     * refused along with them, so `a: 1\n...\n` errored where node reads
+     * `{a: 1}` — in a data file and in `+++` front matter alike. B28. What
+     * decides is whether anything of substance follows: blanks and comments
+     * do not make a document, a mapping does.
+     */
+    refuses("a second document after a closing marker", "a: 1\n...\nb: 2",
+            "line 2: more than one document in a stream is not supported");
+    refuses("...or one opened again after it", "a: 1\n...\n---\nb: 2",
             "line 2: more than one document in a stream is not supported");
     refuses("directives", "%YAML 1.2\n---\na: 1", "line 1: directives are not supported");
     refuses("a tab for indentation", "a:\n\tb: 1", "line 2: a tab cannot be used for indentation");

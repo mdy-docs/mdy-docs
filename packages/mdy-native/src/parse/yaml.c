@@ -1114,7 +1114,18 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
     p.lines = split_lines(text, len, &p.count, &p);
     if (!p.lines) { free(doc); return NULL; }
 
-    /* Directives and document markers: one document per stream here. */
+    /*
+     * Directives and document markers: one document per stream here.
+     *
+     * A `...` that CLOSES the one document is ordinary single-document YAML,
+     * and was refused along with the rest — `a: 1\n...\n` errored where node
+     * reads `{a: 1}`, in a data file and in `+++` front matter alike. That was
+     * B28. It closes the document when nothing of substance follows it, which
+     * is what `next_content` answers: blanks and comments after the marker are
+     * fine, anything else is the second document this does not support. The
+     * line below already made the symmetric allowance for a leading `---`.
+     */
+    size_t ends_at = p.count;
     for (size_t i = 0; i < p.count && !p.failed; i++) {
         const Line *l = &p.lines[i];
         if (l->indent == 0 && l->len && l->s[0] == '%')
@@ -1122,9 +1133,14 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
         if (l->indent == 0 && l->len >= 3 && memcmp(l->s, "---", 3) == 0 &&
             (l->len == 3 || is_space(l->s[3])) && i > 0)
             fail(&p, i, "more than one document in a stream is not supported");
-        if (l->indent == 0 && l->len >= 3 && memcmp(l->s, "...", 3) == 0 && l->len == 3)
-            fail(&p, i, "more than one document in a stream is not supported");
+        if (l->indent == 0 && l->len >= 3 && memcmp(l->s, "...", 3) == 0 && l->len == 3) {
+            if (next_content(&p, i + 1) < p.count)
+                fail(&p, i, "more than one document in a stream is not supported");
+            else { ends_at = i; break; }
+        }
     }
+    /* The marker and the blank lines after it are not the document's. */
+    if (!p.failed) p.count = ends_at;
 
     /* A leading `---` opening the one document is fine. */
     if (!p.failed && p.count && p.lines[0].indent == 0 && p.lines[0].len >= 3 &&

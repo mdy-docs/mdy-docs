@@ -41,7 +41,7 @@ what those checks do not reach.
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
 | B17 | ~~Low~~ **fixed** | `cli.c` / `httpd.c` | Dev server bound every interface, with a clock-seeded token, no request cap and a blocking write |
-| B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
+| B28 | ~~Low~~ **fixed** | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
 | B29 | ~~Medium~~ **fixed** | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
 | B30 | ~~Low~~ **part fixed** | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
 | B31 | Low | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
@@ -606,6 +606,419 @@ build of a three-document set renders `<h1 id="2">2</h1>`.
 
 **mdy-docs has the second half of this bug** — see B33, which is this
 measurement pointed the other way.
+
+#### B30 — A CRLF source: the splitter normalises, node does not (Low) — FIXED for content; the rest PARKED
+
+`acc_source` dropped a `\r` before the line ending, so a chunk's endings were
+`\n` whatever the file used. It keeps the line's content the same way, but a
+line that ended in `\r` is now followed by an **empty line**, which is what
+mdy-docs ends up with:
+
+| | before | after / node |
+| --- | --- | --- |
+| `crlf line\r\nsecond\r\n` rendered | `<p>crlf line second</p>` | `<p>crlf line</p><p>second</p>` |
+| its `$.text` | `crlf line\nsecond\n` (17 bytes) | `crlf line\n\nsecond\n\n` (19) |
+
+**Why node does that**, since nothing in `mdy.js` mentions `\r` at all:
+`splitDocuments` splits on `\n` alone, so every line keeps its carriage
+return; the script compiler then puts each line inside a **backtick template
+literal** (`src/parse/script.js:375`), and ECMAScript normalises a `<CR>`
+inside one to `<LF>`. `scriptOutput` splits the result on `/\r\n|\r|\n/` and
+gets two lines where the file had one. The behaviour is a property of the
+language the generated program is written in, which is what "looks accidental"
+meant.
+
+**What is parked, and why it is not a small thing.** Two cases cannot be
+matched without breaking files that work. node's markers are anchored regexes
+allowing only spaces and tabs after themselves —
+
+```
+DOCUMENT_SEPARATOR     = /^---[ \t]*$/
+FRONT_MATTER_SEPARATOR = /^\+\+\+[ \t]*$/
+```
+
+— so `---\r` and `+++\r` match neither. On a CRLF file node therefore ignores
+front matter completely, and **fails the build** on a second document:
+
+```
+mdy: document 0 failed: mdy: no document at index 1
+```
+
+Matching that would mean a Windows-authored document losing its front matter
+and a multi-document one refusing to build. That is a different order of thing
+from a blank line, so those two stay as they are and the divergence is now
+deliberate rather than unexamined. It is node's regexes that want the `\r`, not
+this engine that wants to forget it.
+
+`crlf_checks` in `test/engine.c` pins both halves — the match and the two
+places it stops. Two of its expectations were wrong when first written (a lone
+`\r` is *not* a line ending on either side, and markdown eats
+`JSON.stringify`'s backslashes identically in both); they were replaced with
+what `node bin/mdy.js` actually prints.
+
+#### B31 — A record's keys are in a different order (Low)
+
+A document sees its own record as an object, and the order its keys come back
+in is not node's:
+
+```
+$.find({})  C: ["_id","title","name","ext","size","mtime","path"]
+         node: ["title","path","name","ext","size","mtime","_id"]
+$.data(0)   C: ["_id","title","name","ext","size","mtime","path"]
+         node: ["title","path","name","ext","size","mtime"]
+```
+
+Two differences. `_id` is first here and last there — and `$.data` does not
+carry it at all under node, while it does here. And the identity block is
+written `name, ext, size, mtime, path`
+([engine_walk.c:767–767](../src/engine_walk.c#L767-L767)), `path` last so that it
+wins over a data file's own; node reaches the same result with
+`{ ...meta, ...parsed, path }`, where re-assigning `path` leaves it in the
+position it was first written — first.
+
+It costs nothing until a document serialises a record or walks its keys, at
+which point the two engines disagree about the bytes. No site in the tree
+does, which is why `check-sites` is green. Found while fixing B2; it predates
+both fixes.
+
+#### B32 — A file name with a newline in it disappears (Medium) — FIXED
+
+**Fixed.** The listing separates on `\0` and ends with an empty entry
+([fsx.h:24](../src/fsx.h#L24)), which is the one byte a file name cannot hold.
+`walk` writes each path with its own terminator
+([fsx.c:174](../src/fsx.c#L174)), `fsx_list`'s sort counts and splits on it
+([fsx.c:253](../src/fsx.c#L253)), and all three readers became the same one
+line — `for (const char *rel = listing; *rel; rel += strlen(rel) + 1)` — in
+the engine's walk ([engine_walk.c:737](../src/engine_walk.c#L737)), `cli.c`'s static
+copier ([636](../src/cli.c#L636)) and `watch.c`'s snapshot
+([48](../src/watch.c#L48)). Each of them lost a `strchr`, a mutation of the
+buffer and an empty-entry guard.
+
+`fsx_readdir` went with it, and its one caller `fsx_rm_rf`: a test that makes
+a file named this way has to be able to delete it again, and that one split on
+`\n` too.
+
+All three paths were checked end to end against node: the document set
+(`new\nline.mdy` is a document with its own record), `mdy build`'s static copy
+(the file is written under its real name), and `--watch` (an edit to it
+rebuilds). Regression test: `odd_name_checks`
+([test/engine.c:774](../test/engine.c#L774)), which now carries a newline
+beside the quote, the backslash and the control character.
+
+The original finding follows.
+
+`fsx_list` returns the walk as one string, "one per line", and every caller
+splits it on `\n` — the engine's walk, `cli.c`'s static copier and `watch.c`'s
+snapshot. A file name may contain a newline on any POSIX system, and
+`new\nline.mdy` becomes two entries, `new` and `line.mdy`, neither of which
+exists. The file is silently not part of the site; node has it.
+
+```
+C:    [read] line.mdy … [read] new        (and no document for either)
+node: - new\nline.mdy | name=new\nline.mdy
+```
+
+Found while fixing B8, and the same shape as it — a file name carried through
+a text encoding that cannot hold every file name — but a different component:
+this one is decided before identity is built, so escaping identity does not
+reach it.
+
+#### B33 — mdy-docs: the render memo serves a stale `$.count` (Medium)
+
+This one is node's, not this engine's. It was found by asking what B29's fix
+had to do about the memo, and then checking what mdy-docs does about it.
+
+`buildProgram` embeds the count in the program text as a literal
+(`src/mdy.js`, `count: ${count}` from `documents.length`). The render memo is
+keyed on `doc.fingerprint`, which is
+
+```js
+`${setSignature}\u0000${doc.data?.path ?? doc.index}\u0000${doc.body ?? ''}\u0000${JSON.stringify(doc.data ?? null)}`
+```
+
+— the native names, the path, the body and the record. **Not the size of the
+set.** So a document that reads `$.count` has a fingerprint that does not
+change when the count does, and `renderMemoPrev` hands the previous build's
+render back.
+
+Two builds in one process, a file added between them:
+
+```js
+import { renderSite } from 'mdy-docs/src/build.js';
+await build('two documents:');            // main.mdy emits $.html($.render({ path: "card.mdy" }))
+fs.writeFileSync(dir + '/c.mdy', '= c\n'); // card.mdy is `= count is {{ $.count }}`
+await build('after adding a third:');
+```
+
+```
+two documents:           <h1 id="count-is-2">count is 2</h1>   (files on disk: 2)
+after adding a third:    <h1 id="count-is-2">count is 2</h1>   (files on disk: 3)
+```
+
+The page is otherwise correct and nothing is reported. It needs all three of:
+a long-lived process (`mdy dev`, `--watch`, or an embedder calling
+`renderSite` twice), a document whose render is memoised at all — one that
+emits or otherwise taints re-runs every build and so hides this — and a
+document that reads `$.count`. The last is rare, which is the same reason
+B29 went unnoticed here.
+
+**This engine deliberately does not reproduce it** (B29): `e->count` is in the
+fingerprint. That makes `mdy dev` a place where the two engines disagree, and
+it is the one divergence in this document where the C answer is the right one
+by construction rather than by accident. `check-sites` does not see it: it
+builds each site once per process, where the two agree.
+
+The fix in node is one term in one template string — the fingerprint wants
+`documents.length` in it, next to `setSignature`, for the reason the comment
+above `setSignature` already gives about two sets meeting in one process.
+
+#### B34 — `mdy build` had five exits and no two freed the same things (Low) — FIXED
+
+Found while leak-checking B16's change, and not B16's: the numbers below are
+identical at the commit before it.
+
+Filed as "every `$.publish` leaks its name and data", which was the 416 bytes
+that showed up on `examples/messaging`. Measuring the other exits first, rather
+than fixing the one, turned out to matter — **the failure paths leak the whole
+engine**:
+
+| `mdy build` … | before | after |
+| --- | --- | --- |
+| a site that publishes (`examples/messaging`) | 8 leaks, 416 B | 0 |
+| a site that does not (`examples/blog`) | 0 | 0 |
+| a directory that is not there | 787 leaks, 69,248 B | 0 |
+| an entry document that is not there | 793 leaks, 70,656 B | 0 |
+| a render that throws | 1,082 leaks, 118,416 B | 0 |
+
+`cmd_build` had five exits. The engine survived two of them, `out_abs` four,
+and the messages all five:
+
+| exit | `e` | `out_abs` | `messages` |
+| --- | --- | --- | --- |
+| `open_dir` failed | leaked | leaked | (empty) |
+| entry not found | leaked | leaked | (empty) |
+| render failed | leaked | leaked | leaked |
+| an output could not be written | freed | leaked | leaked |
+| success | freed | freed | leaked |
+
+So the fix is not a `free` added to one path; it is the shape §3 names under
+*Long functions with several exits*, and the one `render_tree_out` was given
+for B3 and B12. `cmd_build` has one exit now
+([cli.c:760](../src/cli.c#L760)), `rc` carries the answer to it
+([697](../src/cli.c#L697)), and the cleanup is written once — the third copy
+in this file, after `mdy dev`'s ([1707](../src/cli.c#L1707)) and document
+mode's, and the first that runs on every path rather than some.
+
+Every message and exit code was compared before and after: identical.
+
+**A note on how this was measured**, because it went wrong once. The first
+before/after run reported 0 leaks at HEAD, which would have meant the leak was
+mine. It was a stale binary: `git stash` restored `cli.c` within the same
+second as the existing `build/mdy`, so `make` skipped the relink and the
+"HEAD" measurement was of the fixed code. `rm -f build/mdy` before each build
+is what the table above was produced with. This is the third time in this
+review that a same-second `make` has produced a result that described a
+different binary — see §3's Makefile note, where it cost a phantom FAIL and a
+phantom PASS.
+
+#### B35 — the dev server's dedupe list only grows (Low)
+
+Found while measuring B15, and left alone deliberately: the 24 blocks that are
+the same before and after that fix.
+
+`dev_send` fingerprints each message as `name\1json` and keeps it in `d->sent`
+([cli.c:1441](../src/cli.c#L1441)) so a rebuild does not re-send what it
+already sent. Nothing ever removes one, and `mdy dev` has no exit path that
+frees the array — it runs until it is killed. So the list grows by one entry
+per distinct message for as long as the server is up, and `leaks` counts every
+entry.
+
+This is retention, not a leak: dropping an entry means re-sending its message,
+which is the thing the list exists to prevent. It is on the list because
+"grows without bound in a process meant to run all day" is worth someone
+deciding about rather than discovering — a session that publishes a message
+per save, with the data changing each time, accumulates a fingerprint per save.
+A bound (keep the last N, or key on the message name and let the newest win)
+changes delivery semantics, which is why it is a finding and not a fix.
+
+#### B36 — `.inf` and `.nan` crossed into a document as numbers (Medium) — FIXED
+
+Found by following B21 rather than by reading: the cast was undefined
+behaviour, and checking what the *value* should have been turned up three
+crossings where this engine and node disagreed about the page.
+
+`.inf`, `-.inf` and `.nan` are legal YAML, and node's parser reads them as a
+real `Infinity` and `NaN` — verified directly, not assumed:
+
+```
+node YAML gives: [["big","number","Infinity"],["nn","number","NaN"],["ok","number","1.5"]]
+```
+
+What crosses into a document does not. mdy-docs puts the record into the
+program with `JSON.stringify`, and JSON cannot write either:
+`JSON.stringify({a: Infinity})` is `{"a":null}`. So node's *store* holds an
+infinity and node's *document* sees null — and this engine handed the document
+the number.
+
+| | before | node |
+| --- | --- | --- |
+| `{{ res.data.big }}` with `big: .inf` | `Infinity` | `null` |
+| `{{ $.find({ big: 1/0 }).length }}` against that record | `1` | `0` |
+| `$.node({ properties: { "data-x": 1/0 } })` as HTML | `<p data-x="inf">` | `<p>` |
+
+Three crossings, one rule, and it is node's: **the store keeps the infinity,
+null is what crosses.** `finite_or_null`
+([engine_value.c:455](../src/engine_value.c#L455)) is the store-to-guest side,
+and it is on the int, date and pointer decoders as well as the float — none of
+those can carry a non-finite today, and a decoder that quietly starts to should
+not be the thing that reintroduces this. `js_to_binjson`
+([375](../src/engine_value.c#L375)) is the guest-to-store side, so a query for
+an infinity asks for null and matches nothing. And a guest's non-finite tree
+property is left unset ([339](../src/engine_value.c#L339)), which is the same
+attribute list node produces, since a null property is one the HTML writer
+leaves out.
+
+`ingest.c` deliberately does **not** change what it stores: a non-finite still
+goes in as a float, because that is what node's store holds, and matching node
+means agreeing about the record as well as about the page.
+
+What is *not* matched: node's tree has the property present-and-null where this
+one has it absent. Nothing in `mdy_node` can hold a null property, and adding
+`MDY_PROP_NULL` to the AST for this would be a change to the parser and the
+writer for a case whose rendered output is already identical. A transform that
+reads `tree.properties["data-x"]` back would see `null` there and `undefined`
+here; that is the one path where they still differ, and it is written down
+rather than fixed.
+
+`nonfinite_checks` in `test/engine.c` covers all three crossings plus the
+ordinary numbers around them — integer, float, negative, zero, exponent, and
+the integer/float distinction a query depends on. Every expectation in it was
+read off `node bin/mdy.js` on the same input; three were wrong the first time,
+in the slug and the escaping rather than the number.
+
+#### B37 — a YAML integer at or above 2^53 drops the whole front matter (High) — FIXED, in binjson
+
+Found while regression-testing B36, and confirmed pre-existing against a
+worktree at the commit before it.
+
+```
++++
+title: Fine
+big: 9007199254740993
+also: Fine too
++++
+= {{ res.data.title }}|{{ res.data.big }}|{{ res.data.also }}
+
+before  undefined|undefined|undefined
+after   Fine|9007199254740992|Fine too        node  Fine|9007199254740992|Fine too
+```
+
+Not the one field — **the whole document**. `$.find({})` answered `0`, no query
+by any field found it, and `title` and `also` are ordinary strings that went
+with it. The insert returned *success* and nothing was reported anywhere.
+
+**Where it is — and this entry first said the wrong thing.** It was filed
+against `ingest.c` / nisaba, with the index named as the likely cause. That was
+a guess. Reproduced against nisaba's own API — insert, find, the secondary
+index, the index created before the insert as `open_documents` does — nisaba is
+correct at every magnitude. Instrumenting the engine showed `nis_find`
+returning **identical bytes** in both cases and the engine's own
+`binjson_to_js` refusing to decode them.
+
+The defect is one line of contract in **binjson**
+([mdy-docs/binjson@e5d36e8](https://github.com/mdy-docs/binjson/commit/e5d36e8)):
+
+- `bj_put_int` wrote `BJ_TYPE_INT` at any magnitude.
+- **Both** decoders — binjson's C one and its JS reference — refuse an INT
+  outside the JS safe-integer range and **abort the whole decode**
+  (`BJ_ERR_INT_RANGE`, and a throw).
+- The JS *encoder* cannot produce one:
+  `Number.isInteger(val) && Number.isSafeInteger(val)` picks INT and every
+  other number, an integer past 2^53 included, takes the FLOAT branch.
+
+So a C producer could build a document no conformant reader would read, and
+because the refusal lands on the decode rather than on the value, one integer
+cost the document. `bj_put_int` now falls back to `bj_put_float`, which is the
+same narrowing the reference's `setFloat64` performs, so both encoders emit
+identical bytes for identical input. `bj_put_pointer` had the same asymmetry
+with a different correct answer — the reference *throws* there, because a
+rounded offset points elsewhere — so that one refuses.
+
+**What this means for the engine.** Nothing. `ingest.c` is unchanged from
+before B37 was filed: an integral value inside ±9.2e18 still goes in as an INT
+and everything else as a FLOAT. The string workaround that was written for this
+([the first fix](https://github.com/mdy-docs/mdy-docs/commit/510ac8e)) is
+**removed**: with the encoder correct, the value comes back as the same
+*number* node has, which is strictly better than a string that matched node's
+digits but not its type. Full parity across `9007199254740992`,
+`9007199254740993`, `1e17`, `0x20000000000000`, `-9007199254740992`, `1e308`,
+`.inf` and `.nan`.
+
+**Why no test could have caught it before.** Neither binjson's JS encoder nor
+its WASM binding can reach `bj_put_int` with an out-of-range value — both guard
+with `isSafeInteger` before the call — so it is reachable *only* from a direct C
+caller, and this engine is one. binjson's regression test drives its exported C
+builder for that reason; `big_integer_checks` here is the consumer-side half,
+and reverting binjson's fix fails six of these checks.
+
+#### B38 — `core_int` accumulated digits in a double (Low) — FIXED
+
+```
+big: 99999999999999999
+
+before  100000000000000016
+after   100000000000000000      node  100000000000000000
+```
+
+Different **doubles**, not one printed two ways: the nearest double to
+`99999999999999999` is exactly `100000000000000000`. `core_int` built the value
+a digit at a time, `v = v * 10 + (s[k] - '0')`, and seventeen roundings do not
+land where one correctly-rounded conversion does.
+
+The loop still validates; `strtod` now decides the value
+([yaml.c:179](../src/parse/yaml.c#L179)) — the same call `core_float` twenty
+lines below already made. Two things the fix has to not break, both of which
+the old accumulation got right and a naive `strtod` on a fixed buffer would
+not: leading zeros are skipped before the copy, so `0000…0001` stays short;
+and a span too long for the buffer keeps the accumulated value rather than a
+truncated conversion, because at five hundred significant digits the
+accumulation is already the right infinity.
+
+Hex and octal are untouched. They accumulate the same way (`v * base + d`) and
+drift past 2^53 in principle, but `strtod` reads neither `0o` nor a
+length-delimited hex span, node agrees with this engine on both today, and
+inventing a reader for a case nothing produces is not worth the surface.
+
+Five checks in `test/yaml.c`: the seventeen-digit value either sign, sixteen
+digits (always exact), seventy digits, seventy leading zeros, and hex/octal.
+Removing the conversion fails one of them, and the 440-block corpus stays
+identical.
+
+#### B28 — YAML: a trailing `...` is refused as a second document (Low) — FIXED
+
+```
+printf 'a: 1\n...\n' | ./build/yamlcat
+before  line 2: more than one document in a stream is not supported
+after   {"a":1}                                        node  {"a":1}
+```
+
+A `...` that CLOSES the one document is ordinary single-document YAML, and was
+refused along with real second documents — in a data file and in `+++` front
+matter alike.
+
+What decides is whether anything of substance follows the marker, which is
+what `next_content` already answers: blanks and comments do not make a
+document, a mapping does
+([yaml.c:1128](../src/parse/yaml.c#L1128)). The marker and whatever trails it
+then leave the stream, and the line below already made the symmetric
+allowance for a leading `---`.
+
+Eight shapes compared against node's `yaml` package, all agreeing: the closing
+marker, with blanks after, with a comment after, after a leading `---`, the
+marker alone (`null` both sides), a plain document, and the two that must still
+refuse — `a: 1\n...\nb: 2` and `a: 1\n...\n---\nb: 2`. Nine checks in
+`test/yaml.c`, four of them refusals, plus the front-matter path through the
+engine.
 
 #### B30 — A CRLF source: the splitter normalises, node does not (Low) — FIXED for content; the rest PARKED
 
