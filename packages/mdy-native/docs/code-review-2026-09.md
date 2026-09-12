@@ -36,13 +36,14 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B19, B20, B26 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B19, B20 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
 | B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
 | B27 | ~~Low~~ **fixed** | `engine.c` | `wrap()` built the program with `snprintf`, whose `int` overflows past 2 GB |
 | B18 | ~~Low~~ **fixed** | `watch.c` | The watcher's O(n²) scan cost 170 ms per poll on 8,000 files; a merge costs 0.1 |
 | B24 | Low **part fixed** | various | Unchecked allocations; `cache_put`'s dangling pointer fixed, the rest wants an error channel |
+| B26 | ~~Low~~ **fixed** | `cli.c` | The local bus marked an undeliverable message done where the remote one dead-lettered it |
 | B39 | Low | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
@@ -1844,11 +1845,32 @@ end of the stream, and to stop the line walk there.
   `unreadable_dir_checks` in `test/engine.c` covers the failure, the message,
   and the missing-directory contract. POSIX only, and it skips itself as root,
   where a mode of 000 stops nobody. Reverting fails two of the three.
-- **B26 — Local-bus and remote-bus disagree on an undeliverable subject**:
-  `dev_drain` passes `target < 0` for *any* subject with no page into the
-  "dead-letter channel with no page" branch, which marks every message done
-  ([cli.c:1552–1563](../src/cli.c#L1552-L1563)); `dev_deliver` returns 500 so
-  the broker dead-letters them ([1719–1726](../src/cli.c#L1719-L1726)).
+- **~~B26 — Local-bus and remote-bus disagree on an undeliverable subject~~
+  FIXED.** The same situation was finished-and-forgotten in-process and
+  dead-lettered over HTTP.
+
+  `deliver_batch` already took `is_dead` and its `target < 0` branch ignored
+  it, which only showed on the local bus: `dev_deliver` guards with
+  `target < 0 && !is_dead` *before* it calls, and `dev_drain` does not. So a
+  subject with no page took the "dead-letter channel with no page" path
+  locally and every message was marked **done**, where the remote path returns
+  500 and lets the broker's retry and dead-letter policy have them.
+
+  The guard is now one call deeper
+  ([cli.c:1610](../src/cli.c#L1610)), where both paths reach it: no page and
+  not the dead-letter channel means the batch is **returned**, with the same
+  `[return]` line the remote path prints. `dev_deliver`'s own guard is now
+  redundant and harmless.
+
+  Reachable without anything exotic — publish to a page, delete the page,
+  rebuild; the name was valid when the message was made. **Not covered by a
+  test**, and the reason is worth recording: `$.publish` validates the name at
+  publish time, so a message for a page that does not exist is never created,
+  and reaching the drain-time case means having one already queued when the
+  page disappears. Orchestrating that needs the drain stopped mid-flight.
+  What is checked is that the `.dead` channel still finishes rather than
+  returning — `[dead] handlers.thing.dead #1 no handlers.thing.dead page —
+  kept` — which is the half a wrong `is_dead` would have broken.
 - **~~B27 — `wrap()` assembles the document's source with `snprintf("%s…")`~~
   FIXED.** `snprintf` returns `int`, so a document over two gigabytes overflows
   it and the cast to `size_t` makes `out + o` an address nowhere near the

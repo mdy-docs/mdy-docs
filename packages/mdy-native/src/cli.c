@@ -1607,6 +1607,30 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
                           double *done_indexes, double *failed_indexes) {
     char ts[32];
     *done = 0; *failed = 0;
+    if (target < 0 && !is_dead) {
+        /*
+         * No page of that name, and this is not the dead-letter channel: the
+         * messages are RETURNED, so the broker's retry and dead-letter policy
+         * has them. `is_dead` was already a parameter and this branch ignored
+         * it — which only showed on the local bus, because dev_deliver guards
+         * before it calls and dev_drain does not. So the same situation was
+         * finished-and-forgotten in-process and dead-lettered over HTTP.
+         * (B26.)
+         *
+         * It is reachable without anything exotic: publish to a page, delete
+         * the page, rebuild. The name was valid when the message was made.
+         */
+        for (size_t i = 0; i < batch->count; i++) {
+            double index = bjv_number(batch->items[i], "index", 0);
+            if (*failed < 64) failed_indexes[*failed] = index;
+            (*failed)++;
+        }
+        fprintf(stderr, "%s %s[return]%s %s %s(%s)%s — %zu message(s) returned; they will dead-letter\n",
+                TS(ts), YELLOW_OPEN(), YELLOW_CLOSE(), subject, DIM_OPEN(),
+                target == -2 ? "2 pages share that name" : "no page of that name here",
+                DIM_CLOSE(), batch->count);
+        return;
+    }
     if (target < 0) {
         /* a dead-letter channel with no page: reported and finished */
         for (size_t i = 0; i < batch->count; i++) {
