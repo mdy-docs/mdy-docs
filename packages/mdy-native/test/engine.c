@@ -944,6 +944,18 @@ static void attr_entity_checks(void) {
           "<p><a href=\"http://a?&#x26;&#x26;\">h</a></p>");
     /* An entity the table does not have goes through as it was typed, which is
      * what CommonMark says about `&nope;` and what text does. */
+    /* An <img>'s attributes in mdy-docs' order: src, alt, title. `alt` is not
+     * known until the span closes, so its slot is claimed on the way in. B39. */
+    check("an image's attributes are src, alt, title",
+          "{{ $.markdown('![i](http://a?x \"cap\")') }}\n",
+          "<p><img src=\"http://a?x\" alt=\"i\" title=\"cap\"></p>");
+    check("...with no title, just src and alt",
+          "{{ $.markdown('![j](http://a)') }}\n",
+          "<p><img src=\"http://a\" alt=\"j\"></p>");
+    check("...and an empty alt still holds its place",
+          "{{ $.markdown('![](http://a \"t\")') }}\n",
+          "<p><img src=\"http://a\" alt=\"\" title=\"t\"></p>");
+
     check("an unknown entity is left as it was typed",
           "{{ $.markdown('[n](http://a?&nope;b)') }}\n",
           "<p><a href=\"http://a?&#x26;nope;b\">n</a></p>");

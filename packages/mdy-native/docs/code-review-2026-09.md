@@ -44,7 +44,7 @@ what those checks do not reach.
 | B18 | ~~Low~~ **fixed** | `watch.c` | The watcher's O(n²) scan cost 170 ms per poll on 8,000 files; a merge costs 0.1 |
 | B24 | Low **part fixed** | various | Unchecked allocations; `cache_put`'s dangling pointer fixed, the rest wants an error channel |
 | B26 | ~~Low~~ **fixed** | `cli.c` | The local bus marked an undeliverable message done where the remote one dead-lettered it |
-| B39 | Low | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
+| B39 | ~~Low~~ **fixed** | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
@@ -977,24 +977,22 @@ digits (always exact), seventy digits, seventy leading zeros, and hex/octal.
 Removing the conversion fails one of them, and the 440-block corpus stays
 identical.
 
-#### B39 — an `<img>`'s attributes come out in a different order (Low)
-
-Found while fixing B23, and present before it:
+#### B39 — an `<img>`'s attributes come out in a different order (Low) — FIXED
 
 ```
-$.markdown('![i](http://a?x&y "cap")')
-C     <img src="…" title="cap" alt="i">
-node  <img src="…" alt="i" title="cap">
+$.markdown('![i](http://a?x "cap")')
+before  <img src="http://a?x" title="cap" alt="i">
+after   <img src="http://a?x" alt="i" title="cap">      node the same
 ```
 
-Same three attributes, same values; `title` and `alt` swap. `enter_span`'s
-`MD_SPAN_IMG` sets them in the order md4c hands them over, and node's
-`hast-util-to-html` writes them in the order hast's `properties` object holds
-them, which is the order `mdast-util-to-hast` built it in.
+`alt` is not known until the span closes — it is the children, gathered — so
+it was set last. But `new_prop` replaces a repeated name **in place**, so
+claiming the slot between `src` and `title` on the way in and filling it on
+the way out is enough ([markdown.c:577](../src/parse/markdown.c#L577)).
 
-It costs nothing until something diffs the HTML, at which point every `<img>`
-with a title differs. No site in the tree has one, which is why `check-sites`
-and `check-golden` are green either way.
+Every `<img>` with a title differed before. Three checks: with a title, without
+one, and an empty `alt` that still holds its place. `check-html`'s 642
+documents are unchanged.
 
 #### B40 — a non-ASCII character in a URL is not percent-encoded (Low)
 

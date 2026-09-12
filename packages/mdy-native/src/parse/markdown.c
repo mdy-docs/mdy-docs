@@ -566,6 +566,15 @@ static int enter_span(MD_SPANTYPE type, void *detail, void *ud) {
             const MD_SPAN_IMG_DETAIL *d = detail;
             mdy_node *img = mdy_new_element(b->doc, "img", 3);
             set_attribute(b, img, "src", &d->src);
+            /*
+             * `alt` reserved HERE, between src and title, and filled on the
+             * way out once the children have been gathered. mdy-docs emits
+             * `src, alt, title` and this emitted `src, title, alt`, because
+             * alt is not known until the span closes — but new_prop replaces a
+             * repeated name in place, so claiming the slot early is enough.
+             * Every <img> with a title differed before. (B39.)
+             */
+            mdy_set_string(b->doc, img, "alt", "", 0);
             set_attribute(b, img, "title", &d->title);
             append(b, img);
             /* An image's children are its ALT text, which is an attribute
