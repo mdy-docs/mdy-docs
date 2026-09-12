@@ -36,37 +36,23 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
                 return bj_put_float(b, v);
 
             /*
-             * An integer too big to be one: a STRING, not an int. (B37.)
+             * Everything integral and in range goes in as an INT, including
+             * past 2^53 — binjson's encoder decides what that becomes.
              *
-             * At 2^53 a double stops being able to count integers one at a
-             * time, and a binjson INT of that magnitude makes the document it
-             * is in disappear — not the field, the whole document. Measured:
-             * `big: 9007199254740992` in front matter and `$.find({})` answers
-             * 0, every other key of that record included, with the insert
-             * returning success and nothing reported. 9007199254740991 is
-             * fine. A FLOAT of any magnitude is fine — `1e308` round-trips —
-             * so it is the INT path specifically, and the index built from it.
+             * It did not always: bj_put_int wrote BJ_TYPE_INT at any magnitude
+             * while both binjson decoders refuse an INT outside the JS safe
+             * range and abort the whole DECODE, so one such integer made the
+             * document it was in disappear from every query — every other key
+             * of that record with it, insert reporting success, nothing said.
+             * That was B37, and for one commit this function worked around it
+             * by storing the digits as a string.
              *
-             * Storing the digits as text keeps the document. What it does NOT
-             * keep is the exact value the file said: the number reached this
-             * function as a double, so `9007199254740993` was already
-             * `9007199254740992` before ingest had a say. Carrying the source
-             * text this far would mean a raw-text field on every YAML number
-             * node, which is the parser's public shape, and is not this.
-             *
-             * It diverges from mdy-docs, deliberately and on instruction:
-             * node stores the rounded NUMBER, so a query written
-             * `{big: 9007199254740992}` matches there and not here. The
-             * alternative was to store it as a float, which stays numeric and
-             * stays queryable but rounds silently; a string says what
-             * happened where a float would hide it.
+             * binjson falls back to FLOAT there now, which is what its JS
+             * reference always did, so the workaround is gone and the value
+             * comes back as the same NUMBER node has. Requires binjson at
+             * 07a5461 or later; the engine test's big_integer_checks is what
+             * says so.
              */
-            if (v >= 9007199254740992.0 || v <= -9007199254740992.0) {
-                char digits[32];
-                int n = snprintf(digits, sizeof digits, "%lld", (long long)v);
-                if (n <= 0) return -1;
-                return bj_put_string(b, (const uint8_t *)digits, (uint32_t)n);
-            }
             return bj_put_int(b, (int64_t)v);
         }
         case MDY_YAML_STRING: {

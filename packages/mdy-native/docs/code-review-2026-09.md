@@ -50,7 +50,8 @@ what those checks do not reach.
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
 | B35 | Low | `cli.c` dev server | The publish dedupe list grows for the life of the process and is never freed |
 | B36 | ~~Medium~~ **fixed** | `engine_value.c` | `.inf`/`.nan` crossed into a document as numbers; node sends `null` |
-| B37 | ~~High~~ **fixed** | `ingest.c` / nisaba | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
+| B37 | ~~High~~ **fixed** | **binjson** encoder | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
+| B38 | Low | `yaml.c` | `core_int` accumulates digits in a double: a 17-digit integer lands on the wrong one |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -860,10 +861,10 @@ the integer/float distinction a query depends on. Every expectation in it was
 read off `node bin/mdy.js` on the same input; three were wrong the first time,
 in the slug and the escaping rather than the number.
 
-#### B37 — a YAML integer at or above 2^53 drops the whole front matter (High) — FIXED
+#### B37 — a YAML integer at or above 2^53 drops the whole front matter (High) — FIXED, in binjson
 
-Found while regression-testing B36's change, and confirmed pre-existing against
-a worktree at the commit before it.
+Found while regression-testing B36, and confirmed pre-existing against a
+worktree at the commit before it.
 
 ```
 +++
@@ -873,61 +874,94 @@ also: Fine too
 +++
 = {{ res.data.title }}|{{ res.data.big }}|{{ res.data.also }}
 
-before  undefined|undefined|undefined        node  Fine|9007199254740992|Fine too
-after   Fine|9007199254740992|Fine too
+before  undefined|undefined|undefined
+after   Fine|9007199254740992|Fine too        node  Fine|9007199254740992|Fine too
 ```
 
 Not the one field — **the whole document**. `$.find({})` answered `0`, no query
 by any field found it, and `title` and `also` are ordinary strings that went
-with it. The insert returned *success* and nothing was reported.
+with it. The insert returned *success* and nothing was reported anywhere.
 
-**Where it is, which took three wrong guesses.** Not the YAML reader: fed on
-stdin as it expects, `yamlcat` reads every magnitude correctly and agrees with
-node — an earlier probe that said otherwise was passing a filename to a program
-that reads stdin, so it was parsing an empty document. Not the ingest returning
-an error either: `open_documents` checks that and says "document N could not be
-inserted", which never appeared. The insert *succeeds* and the document is then
-invisible, so it is the index built from the value. The boundary is exact:
+**Where it is — and this entry first said the wrong thing.** It was filed
+against `ingest.c` / nisaba, with the index named as the likely cause. That was
+a guess. Reproduced against nisaba's own API — insert, find, the secondary
+index, the index created before the insert as `open_documents` does — nisaba is
+correct at every magnitude. Instrumenting the engine showed `nis_find`
+returning **identical bytes** in both cases and the engine's own
+`binjson_to_js` refusing to decode them.
 
-| `big:` | before | after |
-| --- | --- | --- |
-| `9007199254740991` | found, number | unchanged |
-| `9007199254740992` (2^53) | **document gone** | found, string |
-| `1e17`, `0x20000000000000`, `-9007199254740992` | **document gone** | found, string |
-| `1e308` | found, number | unchanged |
+The defect is one line of contract in **binjson**
+([mdy-docs/binjson@e5d36e8](https://github.com/mdy-docs/binjson/commit/e5d36e8)):
 
-A **float** of any magnitude was always fine — `1e308` round-trips — so it is
-the binjson INT path specifically, at |v| >= 2^53, which is exactly where a
-double stops being able to count integers one at a time.
+- `bj_put_int` wrote `BJ_TYPE_INT` at any magnitude.
+- **Both** decoders — binjson's C one and its JS reference — refuse an INT
+  outside the JS safe-integer range and **abort the whole decode**
+  (`BJ_ERR_INT_RANGE`, and a throw).
+- The JS *encoder* cannot produce one:
+  `Number.isInteger(val) && Number.isSafeInteger(val)` picks INT and every
+  other number, an integer past 2^53 included, takes the FLOAT branch.
 
-**The fix, on instruction: such a value is ingested as a string**
-([ingest.c:64](../src/ingest.c#L64)). The document survives and the digits are
-readable. Three things it is worth being straight about:
+So a C producer could build a document no conformant reader would read, and
+because the refusal lands on the decode rather than on the value, one integer
+cost the document. `bj_put_int` now falls back to `bj_put_float`, which is the
+same narrowing the reference's `setFloat64` performs, so both encoders emit
+identical bytes for identical input. `bj_put_pointer` had the same asymmetry
+with a different correct answer — the reference *throws* there, because a
+rounded offset points elsewhere — so that one refuses.
 
-- **It diverges from mdy-docs, deliberately.** node stores the rounded
-  *number*, so `{big: 9007199254740992}` as a query matches there and not here,
-  and a document reading the field gets a string. The digits render the same;
-  only `typeof` differs. A vanished document was not a trade-off.
-- **The exact value the file said is already gone before ingest sees it.** The
-  number reaches `mdy_bj_put_yaml` as a `double` — `mdy_yaml_node` keeps no raw
-  text for a number — so `9007199254740993` was `...992` before this function
-  had a say. Carrying the source text this far means a raw-text field on every
-  YAML number node, which is the parser's public shape and a different change.
-- The string is printed with `%lld`, the double's **exact** value. node prints
-  the same double the way JS does, shortest-round-trip: `99999999999999999`
-  becomes `"100000000000000016"` here and `100000000000000000` there. Both are
-  the same double; one says what is stored and the other says the shortest
-  thing that reads back as it.
+**What this means for the engine.** Nothing. `ingest.c` is unchanged from
+before B37 was filed: an integral value inside ±9.2e18 still goes in as an INT
+and everything else as a FLOAT. The string workaround that was written for this
+([the first fix](https://github.com/mdy-docs/mdy-docs/commit/510ac8e)) is
+**removed**: with the encoder correct, the value comes back as the same
+*number* node has, which is strictly better than a string that matched node's
+digits but not its type. Full parity across `9007199254740992`,
+`9007199254740993`, `1e17`, `0x20000000000000`, `-9007199254740992`, `1e308`,
+`.inf` and `.nan`.
 
-The alternative considered was storing it as a float — stays numeric, stays
-queryable, and rounds silently. A string says what happened where a float
-would hide it.
+**Why no test could have caught it before.** Neither binjson's JS encoder nor
+its WASM binding can reach `bj_put_int` with an out-of-range value — both guard
+with `isSafeInteger` before the call — so it is reachable *only* from a direct C
+caller, and this engine is one. binjson's regression test drives its exported C
+builder for that reason; `big_integer_checks` here is the consumer-side half,
+and reverting binjson's fix fails six of these checks.
 
-`big_integer_checks` in `test/engine.c` covers the boundary either side, the
-negative, exponent and hex spellings, and the float that was never broken. The
-two number cases and the float were checked against `node bin/mdy.js` and are
-parity; the string cases are the divergence. Removing the string path makes
-four of them fail with `undefined`, which is the original symptom.
+#### B38 — `core_int` accumulates digits in a double, so long integers round differently from node (Low)
+
+The last number-parity gap, found while verifying B37's fix across magnitudes.
+
+```
+big: 99999999999999999
+
+C     100000000000000016
+node  100000000000000000
+```
+
+These are **different doubles**, not one double printed two ways — the nearest
+double to `99999999999999999` is exactly `100000000000000000`, and
+`100000000000000016` is the one after it. Confirmed by printing a
+guest-computed value through both engines, where they agree: the divergence is
+in the parse, not the formatting.
+
+`core_int` ([yaml.c:160–166](../src/parse/yaml.c#L160-L166)) builds the value a
+digit at a time, `v = v * 10 + (s[k] - '0')`, in a `double`. Each step rounds,
+and the errors accumulate:
+
+```
+digit-by-digit accumulation : 100000000000000016
+correctly rounded (strtod)  : 100000000000000000
+```
+
+`core_float` twenty lines below already reaches for `strtod`, which is
+correctly rounded once rather than seventeen times, and the same call would fix
+this. The reason to be slightly careful rather than to just do it: `core_int`
+also handles `0o` octal and `0x` hex, where `strtod` is not the right reader —
+so it is the decimal branch alone that should change, and the hex branch
+accumulates in a double too (`v * base + d`), with the same drift past 2^53.
+
+Low because it needs 17 significant digits to show at all, and a document that
+carries an integer that long is carrying an identifier rather than a number —
+which, as B37's fix now stores it as a float, is a thing to do in quotes.
 
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
