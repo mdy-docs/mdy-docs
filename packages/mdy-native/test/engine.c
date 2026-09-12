@@ -10,6 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include "engine.h"
 #include "httpd.h"
 #include "http.h"
@@ -1085,6 +1090,68 @@ static void url_checks(void) {
             strstr(r.error, "only http://") != NULL, r.error);
     http_response_free(&r);
 }
+
+
+#ifndef _WIN32
+/* ---- a directory that will not open ----------------------------------------
+ *
+ * `walk` answered `errno == ENOENT ? 0 : 0` — every opendir failure was an
+ * empty directory. A subtree whose permissions kept us out simply left the
+ * site: no warning, a page built, exit 0. node reports
+ * `EACCES: permission denied, scandir …` and exits 1. That was B25.
+ *
+ * POSIX only (chmod), and skipped when running as root, where 000 keeps
+ * nobody out.
+ */
+static void unreadable_dir_checks(void) {
+    printf("\n--- engine: a directory that will not open ---\n");
+
+    if (geteuid() == 0) {
+        printf("  (skipped: running as root, where a mode of 000 stops nothing)\n");
+        return;
+    }
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-perm", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "main.mdy", "= main\n");
+    write_file(root, "sub/page.mdy", "= hidden\n");
+
+    char sub[1200];
+    snprintf(sub, sizeof sub, "%s/sub", root);
+    if (chmod(sub, 0) != 0) {
+        printf("  (skipped: chmod would not take)\n");
+        free(root);
+        return;
+    }
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    err[0] = '\0';
+    int rc = mdy_engine_open_dir(e, root, err, sizeof err);
+    ok_("a subtree that cannot be read fails the open, rather than vanishing",
+        rc != 0, rc == 0 ? "it opened" : err);
+    ok_("...and says which directory it was",
+        rc != 0 && strstr(err, "cannot read") != NULL, err);
+    mdy_engine_free(e);
+
+    /* ...and a directory that is merely ABSENT is still an empty list, which
+     * a package with no static/ depends on. */
+    chmod(sub, 0755);
+    char gone[1200];
+    snprintf(gone, sizeof gone, "%s/not-there", root);
+    char *listing = fsx_list(gone, ".", NULL);
+    ok_("a missing directory is still an empty list, not an error",
+        listing != NULL && listing[0] == '\0', listing ? "(empty)" : "(NULL)");
+    free(listing);
+
+    free(root);
+}
+#endif
 
 
 /* ---- a package, imported ----------------------------------------------------
@@ -2353,6 +2420,9 @@ int main(void) {
     memo_key_checks();
     count_checks();
     import_checks();
+#ifndef _WIN32
+    unreadable_dir_checks();
+#endif
     token_checks();
     url_checks();
     nonfinite_checks();

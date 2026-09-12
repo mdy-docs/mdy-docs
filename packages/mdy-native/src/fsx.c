@@ -152,7 +152,16 @@ static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(wpattern, &fd);
     free(wpattern);
-    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (h == INVALID_HANDLE_VALUE) {
+        /* The same distinction as the POSIX half: not-there is empty, and
+         * anything else — a denied directory above all — is an error rather
+         * than a site quietly missing a subtree. (B25.) */
+        DWORD e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ||
+            e == ERROR_NO_MORE_FILES || e == ERROR_DIRECTORY)
+            return 0;
+        return -1;
+    }
 
     int rc = 0;
     do {
@@ -188,8 +197,14 @@ static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
     if (!dir) return -1;
     DIR *d = opendir(dir);
     free(dir);
-    /* Missing is empty, not an error — see fsx.h. */
-    if (!d) return errno == ENOENT ? 0 : 0;
+    /*
+     * Missing is empty, not an error — see fsx.h. Anything ELSE is an error,
+     * which this used to swallow with `errno == ENOENT ? 0 : 0`: a subtree
+     * whose permissions kept us out simply left the site, with no warning and
+     * a zero exit. node reports `EACCES: permission denied, scandir …` and
+     * exits 1; this built a page and said nothing. (B25.)
+     */
+    if (!d) return errno == ENOENT || errno == ENOTDIR ? 0 : -1;
 
     struct dirent *e;
     while ((e = readdir(d))) {

@@ -36,8 +36,9 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B18–B20, B23–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B18–B20, B23, B24, B26, B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
+| B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
@@ -1738,9 +1739,33 @@ end of the stream, and to stop the line walk there.
   partial failure and leaves `c->dirs` dangling ([engine_walk.c:655](../src/engine_walk.c#L655)).
   The parser's stated rule is that `mdy_alloc` can fail; sixteen call sites in
   block.c never look.
-- **B25 — `walk` treats every `opendir` failure as an empty directory**:
-  `return errno == ENOENT ? 0 : 0` ([fsx.c:192](../src/fsx.c#L192)) — a
-  permission error on a subtree silently drops it from the site.
+- **~~B25 — `walk` treats every `opendir` failure as an empty directory~~
+  FIXED.** `return errno == ENOENT ? 0 : 0` — both branches zero. A subtree
+  whose permissions kept us out simply left the site. Measured against node on
+  the same tree:
+
+  | | before | after / node |
+  | --- | --- | --- |
+  | a subtree with mode 000 | built a page, **exit 0**, nothing said | `cannot read <root>`, **exit 1** |
+  | an unreadable `static/` | exit 0 | exit 1 (both) |
+  | a *missing* directory | exit 0 | exit 0 (both) — the contract |
+
+  node says `EACCES: permission denied, scandir …` and exits 1; this said
+  nothing. Now not-there (`ENOENT`, `ENOTDIR`) is still an empty list and
+  anything else is an error ([fsx.c:207](../src/fsx.c#L207)), with the Windows
+  half given the same distinction — `ERROR_FILE_NOT_FOUND`,
+  `ERROR_PATH_NOT_FOUND`, `ERROR_NO_MORE_FILES`, `ERROR_DIRECTORY` are empty
+  and the rest are not. `fsx.h`'s contract said NULL meant allocation failure
+  and now says it means the directory cannot be read.
+
+  `copy_static` still ignores a NULL listing, and that is correct rather than
+  overlooked: `static/` lives under the root, so the engine's own walk reaches
+  it first and fails the build — which is why the unreadable-`static/` row
+  above already exits 1 without touching that function.
+
+  `unreadable_dir_checks` in `test/engine.c` covers the failure, the message,
+  and the missing-directory contract. POSIX only, and it skips itself as root,
+  where a mode of 000 stops nobody. Reverting fails two of the three.
 - **B26 — Local-bus and remote-bus disagree on an undeliverable subject**:
   `dev_drain` passes `target < 0` for *any* subject with no page into the
   "dead-letter channel with no page" branch, which marks every message done

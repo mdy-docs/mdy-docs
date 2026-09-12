@@ -37,8 +37,11 @@
  * `options.extensions: null` makes on the JS side.
  *
  * A missing directory is an empty list, not an error: the contract says so,
- * and a site that imports a package with no `static/` depends on it.
- * Returns NULL only on allocation failure. Caller frees.
+ * and a site that imports a package with no `static/` depends on it. A
+ * directory that is THERE and cannot be read is an error — NULL — because a
+ * subtree silently leaving the site is worse than a build that stops, and it
+ * is what node does (`EACCES: permission denied, scandir …`, exit 1).
+ * So NULL is "cannot be read", allocation failure included. Caller frees.
  */
 char *fsx_list(const char *root, const char *subdir, const char *exts);
 
