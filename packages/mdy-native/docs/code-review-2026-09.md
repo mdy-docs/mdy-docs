@@ -36,12 +36,13 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B19, B20, B24, B26 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B19, B20, B26 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
 | B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
 | B27 | ~~Low~~ **fixed** | `engine.c` | `wrap()` built the program with `snprintf`, whose `int` overflows past 2 GB |
 | B18 | ~~Low~~ **fixed** | `watch.c` | The watcher's O(n²) scan cost 170 ms per poll on 8,000 files; a merge costs 0.1 |
+| B24 | Low **part fixed** | various | Unchecked allocations; `cache_put`'s dangling pointer fixed, the rest wants an error channel |
 | B39 | Low | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
@@ -1811,17 +1812,37 @@ end of the stream, and to stop the line walk there.
 
   Two differences it uncovered and did NOT fix, both present before it and
   independent of entities — see B39 and B40.
-- **B24 — Unchecked allocations that dereference on failure**: `outputs_put`,
-  `collect_message`, `buf_put`, `seen_before`, `read_stdin`, `absolute` in
-  cli.c; `add`/`snapshot_changes` in watch.c; the `recv` buffer in http.c
-  ([155](../src/http.c#L155)); `broker_request` ([broker.c:104](../src/broker.c#L104));
-  `mdy_engine_encode_json` ([engine.c:721](../src/engine.c#L721)); the fence
-  body, list and paragraph joins in block.c ([1423](../src/parse/block.c#L1423),
-  [1623](../src/parse/block.c#L1623), [1710](../src/parse/block.c#L1710),
-  [1837](../src/parse/block.c#L1837)); `cache_put` frees the *new* array on a
-  partial failure and leaves `c->dirs` dangling ([engine_walk.c:655](../src/engine_walk.c#L655)).
-  The parser's stated rule is that `mdy_alloc` can fail; sixteen call sites in
-  block.c never look.
+- **B24 — Unchecked allocations that dereference on failure.** PART FIXED;
+  the rest is one deliberate pass and is described below rather than sprinkled.
+
+  **Fixed, because they are not only OOM.** `cache_put`
+  ([engine_walk.c:650](../src/engine_walk.c#L650)) did both reallocs and then
+  `free(d); free(s)` if either failed, which left `c->dirs` **dangling**
+  whichever way it went — if realloc moved the block it had already freed the
+  old pointer, and if it did not then `free(d)` freed the block `c->dirs` still
+  pointed at. It returned without adding, the caller carried on, and the next
+  `cache_get` read freed memory: a use-after-free reached *from* an allocation
+  failure rather than at it. Each realloc is taken as it succeeds now, and the
+  `strdup` is checked. Already done elsewhere: http.c's `recv` buffer with B16,
+  `snapshot_changes` with B18, `wrap()` with B27.
+
+  **Parked, with the reason.** The rest — `outputs_put`, `collect_message`,
+  `buf_put`, `seen_before`, `absolute` in cli.c, `add` in watch.c,
+  `broker_request`, `mdy_engine_encode_json`, and the sixteen `mdy_alloc` sites
+  in block.c — are all `void` or value-returning helpers with **no error
+  channel**. Checking the allocation is the easy half; deciding what a failure
+  *means* is the change. Dropping an emitted page silently would be worse than
+  the crash it replaces: the build would report success with files missing.
+  Doing it properly means an `ok` flag on `Outputs`, `Messages`, `Buf` and the
+  snapshot — which `yaml.c`'s own `Buf` already has, so the shape is settled —
+  and a check at each place that finishes a build.
+
+  It also wants a way to be *tested*. None of these paths can be reached
+  without an allocator that fails on demand; a shim the test binaries can arm
+  (fail the *n*th allocation) would turn sixteen unverifiable edits into
+  sixteen checks, and is most of the work's value.
+
+  `read_stdin` was already checked and is off the list.
 - **~~B25 — `walk` treats every `opendir` failure as an empty directory~~
   FIXED.** `return errno == ENOENT ? 0 : 0` — both branches zero. A subtree
   whose permissions kept us out simply left the site. Measured against node on

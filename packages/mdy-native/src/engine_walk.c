@@ -649,13 +649,32 @@ static mdy_engine *cache_get(ImportCache *c, const char *dir) {
 
 static void cache_put(ImportCache *c, const char *dir, mdy_engine *set) {
     if (c->count == c->cap) {
+        /*
+         * Each realloc taken as it succeeds.
+         *
+         * This used to do both and then `free(d); free(s)` if either failed,
+         * which left `c->dirs` DANGLING whichever way it went: if realloc
+         * moved the block it had already freed the old pointer, and if it did
+         * not then `free(d)` freed the block `c->dirs` still pointed at. The
+         * function returned without adding, the caller carried on, and the
+         * next cache_get read freed memory — a use-after-free reached from an
+         * allocation failure rather than at it. (B24.)
+         *
+         * If the second grow fails, `c->dirs` is simply larger than `c->cap`
+         * claims. That wastes a little and is otherwise nothing.
+         */
         size_t want = c->cap ? c->cap * 2 : 8;
         char **d = realloc(c->dirs, want * sizeof *d);
+        if (!d) return;
+        c->dirs = d;
         mdy_engine **s = realloc(c->sets, want * sizeof *s);
-        if (!d || !s) { free(d); free(s); return; }
-        c->dirs = d; c->sets = s; c->cap = want;
+        if (!s) return;
+        c->sets = s;
+        c->cap = want;
     }
-    c->dirs[c->count] = strdup(dir);
+    char *copy = strdup(dir);
+    if (!copy) return;
+    c->dirs[c->count] = copy;
     c->sets[c->count] = set;
     c->count++;
 }
