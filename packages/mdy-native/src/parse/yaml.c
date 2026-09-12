@@ -157,10 +157,36 @@ static int core_int(const char *s, size_t len, double *out) {
         return 1;
     }
     if (i >= len) return 0;
+    /*
+     * The loop validates; `strtod` decides the value.
+     *
+     * `v * 10 + digit` rounds once per digit, and seventeen of those do not
+     * land where one correctly-rounded conversion does:
+     * `99999999999999999` accumulated to 100000000000000016 where node — and
+     * strtod — answer 100000000000000000, which is the nearest double. Both
+     * are integers a document can plausibly carry (an id, a timestamp in
+     * nanoseconds), and the first seventeen significant digits are where it
+     * starts to show. That was B38.
+     *
+     * Leading zeros are skipped before the copy so `0000…0001` stays short,
+     * and a span too long for `tmp` keeps the accumulated value rather than a
+     * truncated conversion: at five hundred significant digits the accumulation
+     * is already the right infinity, and a truncated strtod would not be.
+     * core_float below does the same thing with a smaller buffer.
+     */
     double v = 0;
+    size_t zeros = i;
+    while (zeros < len && s[zeros] == '0') zeros++;
     for (size_t k = i; k < len; k++) {
         if (s[k] < '0' || s[k] > '9') return 0;
         v = v * 10 + (s[k] - '0');
+    }
+    char tmp[512];
+    size_t digits = len - zeros;
+    if (digits > 0 && digits < sizeof tmp) {
+        memcpy(tmp, s + zeros, digits);
+        tmp[digits] = '\0';
+        v = strtod(tmp, NULL);
     }
     *out = neg ? -v : v;
     return 1;

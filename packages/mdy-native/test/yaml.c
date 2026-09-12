@@ -68,6 +68,27 @@ int main(void) {
           "{\"a\":1.5,\"b\":0.5,\"c\":-0.25,\"d\":1000,\"e\":0.0015,\"f\":2}");
     check("underscores are not 1.2", "a: 1_000",
           "{\"a\":\"1_000\"}");
+    /*
+     * An integer wide enough that the rounding shows. `v * 10 + digit` rounds
+     * once per digit, and seventeen of those landed on 100000000000000016
+     * where the nearest double — and node, and strtod — is
+     * 100000000000000000. B38. The long and leading-zero cases are here
+     * because the fix copies into a fixed buffer and must not regress them.
+     */
+    check("seventeen digits round where one conversion rounds",
+          "a: 99999999999999999\nb: -99999999999999999",
+          "{\"a\":100000000000000000,\"b\":-100000000000000000}");
+    check("...sixteen were always exact",
+          "a: 1234567890123456", "{\"a\":1234567890123456}");
+    check("...seventy digits is still the right infinity-adjacent value",
+          "a: 9999999999999999999999999999999999999999999999999999999999999999999999",
+          "{\"a\":1e+70}");
+    check("...and leading zeros do not eat the buffer",
+          "a: 00000000000000000000000000000000000000000000000000000000000000000000001",
+          "{\"a\":1}");
+    check("...hex and octal are unchanged",
+          "a: 0x20000000000000\nb: 0o777", "{\"a\":9007199254740992,\"b\":511}");
+
     check("a date is a string", "a: 2024-01-01\nb: 12:30",
           "{\"a\":\"2024-01-01\",\"b\":\"12:30\"}");
     check("a colon inside a value", "a: x:y\nb: a#b",

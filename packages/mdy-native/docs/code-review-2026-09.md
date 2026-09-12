@@ -51,7 +51,7 @@ what those checks do not reach.
 | B35 | Low | `cli.c` dev server | The publish dedupe list grows for the life of the process and is never freed |
 | B36 | ~~Medium~~ **fixed** | `engine_value.c` | `.inf`/`.nan` crossed into a document as numbers; node sends `null` |
 | B37 | ~~High~~ **fixed** | **binjson** encoder | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
-| B38 | Low | `yaml.c` | `core_int` accumulates digits in a double: a 17-digit integer lands on the wrong one |
+| B38 | ~~Low~~ **fixed** | `yaml.c` | `core_int` accumulates digits in a double: a 17-digit integer lands on the wrong one |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -961,42 +961,38 @@ caller, and this engine is one. binjson's regression test drives its exported C
 builder for that reason; `big_integer_checks` here is the consumer-side half,
 and reverting binjson's fix fails six of these checks.
 
-#### B38 — `core_int` accumulates digits in a double, so long integers round differently from node (Low)
-
-The last number-parity gap, found while verifying B37's fix across magnitudes.
+#### B38 — `core_int` accumulated digits in a double (Low) — FIXED
 
 ```
 big: 99999999999999999
 
-C     100000000000000016
-node  100000000000000000
+before  100000000000000016
+after   100000000000000000      node  100000000000000000
 ```
 
-These are **different doubles**, not one double printed two ways — the nearest
-double to `99999999999999999` is exactly `100000000000000000`, and
-`100000000000000016` is the one after it. Confirmed by printing a
-guest-computed value through both engines, where they agree: the divergence is
-in the parse, not the formatting.
+Different **doubles**, not one printed two ways: the nearest double to
+`99999999999999999` is exactly `100000000000000000`. `core_int` built the value
+a digit at a time, `v = v * 10 + (s[k] - '0')`, and seventeen roundings do not
+land where one correctly-rounded conversion does.
 
-`core_int` ([yaml.c:160–166](../src/parse/yaml.c#L160-L166)) builds the value a
-digit at a time, `v = v * 10 + (s[k] - '0')`, in a `double`. Each step rounds,
-and the errors accumulate:
+The loop still validates; `strtod` now decides the value
+([yaml.c:179](../src/parse/yaml.c#L179)) — the same call `core_float` twenty
+lines below already made. Two things the fix has to not break, both of which
+the old accumulation got right and a naive `strtod` on a fixed buffer would
+not: leading zeros are skipped before the copy, so `0000…0001` stays short;
+and a span too long for the buffer keeps the accumulated value rather than a
+truncated conversion, because at five hundred significant digits the
+accumulation is already the right infinity.
 
-```
-digit-by-digit accumulation : 100000000000000016
-correctly rounded (strtod)  : 100000000000000000
-```
+Hex and octal are untouched. They accumulate the same way (`v * base + d`) and
+drift past 2^53 in principle, but `strtod` reads neither `0o` nor a
+length-delimited hex span, node agrees with this engine on both today, and
+inventing a reader for a case nothing produces is not worth the surface.
 
-`core_float` twenty lines below already reaches for `strtod`, which is
-correctly rounded once rather than seventeen times, and the same call would fix
-this. The reason to be slightly careful rather than to just do it: `core_int`
-also handles `0o` octal and `0x` hex, where `strtod` is not the right reader —
-so it is the decimal branch alone that should change, and the hex branch
-accumulates in a double too (`v * base + d`), with the same drift past 2^53.
-
-Low because it needs 17 significant digits to show at all, and a document that
-carries an integer that long is carrying an identifier rather than a number —
-which, as B37's fix now stores it as a float, is a thing to do in quotes.
+Five checks in `test/yaml.c`: the seventeen-digit value either sign, sixteen
+digits (always exact), seventy digits, seventy leading zeros, and hex/octal.
+Removing the conversion fails one of them, and the 440-block corpus stays
+identical.
 
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
