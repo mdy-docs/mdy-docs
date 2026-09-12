@@ -116,7 +116,15 @@ static void write_json(Out *o, const bjv *v) {
         case BJV_NULL: put(o, "null", 4); break;
         case BJV_BOOL: put(o, v->number ? "true" : "false", v->number ? 4 : 5); break;
         case BJV_NUMBER:
-            if (v->number == (double)(long long)v->number && v->number < 1e15 && v->number > -1e15)
+            /* `null` for a non-finite, which is what JSON.stringify writes and
+             * what yaml.c's json_number already did; and the range test ahead
+             * of the cast, since (long long) of an infinity is undefined
+             * behaviour (B21). */
+            if (v->number != v->number || v->number > 1.7976931348623157e308 ||
+                v->number < -1.7976931348623157e308)
+                snprintf(buf, sizeof buf, "null");
+            else if (v->number < 1e15 && v->number > -1e15 &&
+                     v->number == (double)(long long)v->number)
                 snprintf(buf, sizeof buf, "%lld", (long long)v->number);
             else snprintf(buf, sizeof buf, "%.17g", v->number);
             put(o, buf, strlen(buf));

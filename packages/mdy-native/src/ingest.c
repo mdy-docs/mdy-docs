@@ -19,7 +19,19 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
              * stored a float.
              */
             double v = mdy_yaml_number(node);
-            if (v == (double)(int64_t)v && v >= -9.2e18 && v <= 9.2e18)
+            /*
+             * The range test comes BEFORE the cast, which is the whole of B21
+             * here: `.inf` and `.nan` are legal YAML, they reach this line,
+             * and `(int64_t)v` of either is undefined behaviour. It happened
+             * to answer with a sentinel that failed the equality and fell
+             * through to the float, which is why nothing had noticed.
+             *
+             * A non-finite still goes in as a FLOAT and not as null: node's
+             * YAML reads `.inf` as a real Infinity and its store keeps one, so
+             * this is where the two engines agree. Where they differ is what
+             * the guest sees — see finite_or_null in engine_value.c.
+             */
+            if (v == v && v >= -9.2e18 && v <= 9.2e18 && v == (double)(int64_t)v)
                 return bj_put_int(b, (int64_t)v);
             return bj_put_float(b, v);
         }

@@ -849,6 +849,69 @@ static void token_checks(void) {
 }
 
 
+/* ---- numbers that are not numbers -------------------------------------------
+ *
+ * `.inf`, `-.inf` and `.nan` are legal YAML and node's parser reads them as
+ * real Infinity and NaN. What crosses into a document does not: mdy-docs puts
+ * the record into the program with JSON.stringify, and JSON cannot write
+ * either — `JSON.stringify({a: Infinity})` is `{"a":null}`.
+ *
+ * This engine handed the document the number itself, so `{{ res.data.big }}`
+ * was `Infinity` where node said `null`, `$.find({ big: 1/0 })` matched a
+ * record where node matched none, and a guest property of `1/0` came out as
+ * `data-x="inf"` where node omits the attribute. Three crossings, one rule:
+ * the STORE keeps the infinity, because node's does, and null is what crosses.
+ *
+ * And `(int64_t)` of either is undefined behaviour, which is B21 — UBSan on
+ * the first document below said so in as many words:
+ *     ingest.c:22:30: inf is outside the range of representable values
+ */
+static void nonfinite_checks(void) {
+    printf("\n--- engine: numbers that are not numbers ---\n");
+
+    check("an infinity in front matter reaches the document as null",
+          "+++\nbig: .inf\n+++\n= {{ res.data.big }}\n",
+          "<h1 id=\"null\">null</h1>");
+    check("...a negative one too",
+          "+++\nbig: -.inf\n+++\n= {{ res.data.big }}\n",
+          "<h1 id=\"null\">null</h1>");
+    check("...and a NaN",
+          "+++\nbig: .nan\n+++\n= {{ res.data.big }}\n",
+          "<h1 id=\"null\">null</h1>");
+
+    /* Ordinary numbers are untouched, including the integer/float distinction
+     * a query depends on: `{size: 4}` has to match a document that said 4. */
+    check("an integer is still an integer, and still matches a query",
+          "= {{ $.find({ size: 4 }).length }}\n---\n+++\nsize: 4\n+++\n= x\n",
+          "<h1 id=\"1\">1</h1>");
+    /* Every expectation in this block was read off `node bin/mdy.js` on the
+     * same input, not written from memory — three of them were wrong the
+     * first time, in the slug and in the escaping rather than in the number. */
+    check("a float is still a float",
+          "+++\nratio: 1.5\n+++\n= {{ res.data.ratio }}\n",
+          "<h1 id=\"1.5\">1.5</h1>");
+    check("...and negatives, zero and exponents are unchanged",
+          "+++\na: -42\nb: 0\nc: 1e3\n+++\n= {{ res.data.a }}|{{ res.data.b }}|{{ res.data.c }}\n",
+          "<h1 id=\"-4201000\">-42|0|1000</h1>");
+
+    /* The other direction: a guest's own infinity, written into a query. Under
+     * mdy-docs it is stringified to null, so it asks for null and matches
+     * nothing — not the record that holds an infinity. */
+    check("a query FOR an infinity matches nothing, as node's does",
+          "= {{ $.find({ big: 1/0 }).length }}\n---\n+++\nbig: .inf\n+++\n= x\n",
+          "<h1 id=\"0\">0</h1>");
+
+    /* And a guest's infinity as a tree property: node's null property is one
+     * the HTML writer leaves out, so the attribute is absent either way. */
+    check("a non-finite tree property is left out, not written as \"inf\"",
+          "% const t = { type: 'element', tagName: 'p',\n"
+          "%             properties: { id: 'z', 'data-x': 1/0 },\n"
+          "%             children: [{ type: 'text', value: 'hi' }] }\n"
+          "{{ $.html($.node(t)) }}\n",
+          "<p id=\"z\">hi&#x3C;/p></p>");
+}
+
+
 /* ---- the URL a broker is named by ---------------------------------------------
  *
  * `parse_url` split host from port on the first colon, so an IPv6 literal —
@@ -2165,6 +2228,7 @@ int main(void) {
     import_checks();
     token_checks();
     url_checks();
+    nonfinite_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

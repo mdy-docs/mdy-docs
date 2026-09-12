@@ -36,7 +36,8 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B18–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B18–B20, B22–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
 | B17 | ~~Low~~ **fixed** | `cli.c` / `httpd.c` | Dev server bound every interface, with a clock-seeded token, no request cap and a blocking write |
@@ -48,6 +49,8 @@ what those checks do not reach.
 | B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
 | B35 | Low | `cli.c` dev server | The publish dedupe list grows for the life of the process and is never freed |
+| B36 | ~~Medium~~ **fixed** | `engine_value.c` | `.inf`/`.nan` crossed into a document as numbers; node sends `null` |
+| B37 | High | `ingest.c` / nisaba | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -802,6 +805,103 @@ per save, with the data changing each time, accumulates a fingerprint per save.
 A bound (keep the last N, or key on the message name and let the newest win)
 changes delivery semantics, which is why it is a finding and not a fix.
 
+#### B36 — `.inf` and `.nan` crossed into a document as numbers (Medium) — FIXED
+
+Found by following B21 rather than by reading: the cast was undefined
+behaviour, and checking what the *value* should have been turned up three
+crossings where this engine and node disagreed about the page.
+
+`.inf`, `-.inf` and `.nan` are legal YAML, and node's parser reads them as a
+real `Infinity` and `NaN` — verified directly, not assumed:
+
+```
+node YAML gives: [["big","number","Infinity"],["nn","number","NaN"],["ok","number","1.5"]]
+```
+
+What crosses into a document does not. mdy-docs puts the record into the
+program with `JSON.stringify`, and JSON cannot write either:
+`JSON.stringify({a: Infinity})` is `{"a":null}`. So node's *store* holds an
+infinity and node's *document* sees null — and this engine handed the document
+the number.
+
+| | before | node |
+| --- | --- | --- |
+| `{{ res.data.big }}` with `big: .inf` | `Infinity` | `null` |
+| `{{ $.find({ big: 1/0 }).length }}` against that record | `1` | `0` |
+| `$.node({ properties: { "data-x": 1/0 } })` as HTML | `<p data-x="inf">` | `<p>` |
+
+Three crossings, one rule, and it is node's: **the store keeps the infinity,
+null is what crosses.** `finite_or_null`
+([engine_value.c:455](../src/engine_value.c#L455)) is the store-to-guest side,
+and it is on the int, date and pointer decoders as well as the float — none of
+those can carry a non-finite today, and a decoder that quietly starts to should
+not be the thing that reintroduces this. `js_to_binjson`
+([375](../src/engine_value.c#L375)) is the guest-to-store side, so a query for
+an infinity asks for null and matches nothing. And a guest's non-finite tree
+property is left unset ([339](../src/engine_value.c#L339)), which is the same
+attribute list node produces, since a null property is one the HTML writer
+leaves out.
+
+`ingest.c` deliberately does **not** change what it stores: a non-finite still
+goes in as a float, because that is what node's store holds, and matching node
+means agreeing about the record as well as about the page.
+
+What is *not* matched: node's tree has the property present-and-null where this
+one has it absent. Nothing in `mdy_node` can hold a null property, and adding
+`MDY_PROP_NULL` to the AST for this would be a change to the parser and the
+writer for a case whose rendered output is already identical. A transform that
+reads `tree.properties["data-x"]` back would see `null` there and `undefined`
+here; that is the one path where they still differ, and it is written down
+rather than fixed.
+
+`nonfinite_checks` in `test/engine.c` covers all three crossings plus the
+ordinary numbers around them — integer, float, negative, zero, exponent, and
+the integer/float distinction a query depends on. Every expectation in it was
+read off `node bin/mdy.js` on the same input; three were wrong the first time,
+in the slug and the escaping rather than the number.
+
+#### B37 — a YAML integer at or above 2^53 drops the whole front matter (High)
+
+Found while regression-testing B36's change, and **not** from it: the worktree
+at the previous commit does the same thing.
+
+```
++++
+title: Fine
+big: 9007199254740993
+also: Fine too
++++
+= {{ res.data.title }}|{{ res.data.big }}|{{ res.data.also }}
+
+C:    undefined|undefined|undefined
+node: Fine|9007199254740992|Fine too
+```
+
+Not the one field — **the entire record**. `title` and `also` are ordinary
+strings and they are gone too, which says the insert fails whole rather than
+the value being dropped. Nothing is reported: no warning, no non-zero exit, a
+page that renders with every front-matter value missing.
+
+The threshold is exactly 2^53:
+
+| `a:` | C | node |
+| --- | --- | --- |
+| `999999999999999` | same as node | |
+| `1000000000000000` | same as node | |
+| `9007199254740992` | `undefined` | `9007199254740992` |
+| `99999999999999999` | `undefined` | `100000000000000000` |
+
+2^53 is where a double stops being able to count integers one at a time, so
+`v == (double)(int64_t)v` still holds and the value goes to `bj_put_int` —
+which means the loss is below that, in binjson or in the insert, not in the
+cast B21 was about. It wants tracing from `mdy_bj_put_yaml`'s return value
+through `dc_insert_one`; the return is very likely already saying so and
+nobody is reading it.
+
+Severity High rather than Medium for the reason B1 and B2 were: it is silent,
+it is reachable from a plausible document (an id, a timestamp in nanoseconds,
+a file size), and what it produces is a page that looks fine.
+
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
 `mdy_yaml_parse` rejects any `...` line at indent 0 as "more than one document
@@ -1059,12 +1159,40 @@ end of the stream, and to stop the line walk there.
   ([engine_walk.c:767](../src/engine_walk.c#L767), where a truncated `ident_len` can
   also underflow the second `snprintf`'s size). Each is unlikely alone; none
   says anything when it happens.
-- **B21 — Undefined behaviour on double→integer casts** performed *before* the
-  range check: [engine_value.c:305](../src/engine_value.c#L305), [ingest.c:22](../src/ingest.c#L22),
-  [bjval.c:119](../src/bjval.c#L119), [html.c:210](../src/parse/html.c#L210),
-  [ast.c:262](../src/parse/ast.c#L262), [yaml.c:1213](../src/parse/yaml.c#L1213).
-  `.inf`/`.nan` from YAML reach `(int64_t)v` on the ingest path. Harmless on
-  x86-64 and arm64 today; reorder the test.
+- **~~B21 — Undefined behaviour on double→integer casts~~ FIXED — and it was
+  hiding B36, which is the part that mattered.** UBSan on a document whose
+  front matter says `big: .inf`, before:
+
+  ```
+  src/ingest.c:22:30: runtime error: inf is outside the range of
+                      representable values of type 'long long'
+  ```
+
+  and nothing after. Five sites, not six: two of the cited lines were stale
+  after the engine split, and **`yaml.c` already had the guard** —
+  `if (isnan(v) || isinf(v)) { buf_put(b, "null", 4); return; }` — which is
+  both the model for the others and the evidence that `null` is the answer.
+  The real sites were [ingest.c:34](../src/ingest.c#L34),
+  [engine_value.c:375](../src/engine_value.c#L375),
+  [bjval.c](../src/bjval.c#L119), [ast.c](../src/parse/ast.c#L261) and
+  [html.c](../src/parse/html.c#L210).
+
+  The reordering is not the same change at each. Where a double becomes JSON
+  text (`bjval.c`, `ast.c`) a non-finite is `null`, which is what
+  `JSON.stringify` writes. Where it becomes an attribute (`html.c`) it cannot
+  arrive any more — see B36 — so the test is there only so the cast is never
+  reached. And in `ingest.c` the value still goes to the **store as a float**,
+  because node's store holds a real Infinity; only the UB goes.
+
+  `%g` of an infinity was the old `else` branch's answer and is why nothing had
+  crashed: the cast produced a sentinel, the equality failed, and the fallback
+  printed something. Harmless on x86-64 and arm64, as filed — but it was also
+  the only reason the wrong *value* in B36 went unnoticed for as long as it did.
+
+  It is the seventh copy of `v == (double)(long long)v` in this tree, spread
+  across the engine and the parser, which share no private header. §2's
+  un-folded duplication, again, and now with a correctness argument attached:
+  five copies needed the same fix and one already had it.
 - **B22 — `match_port` calls `strtoul` on a length-delimited slice**
   ([linkify.c:156](../src/parse/linkify.c#L156)); it reads digits past the
   slice's end, so a port like `:12345` immediately followed by digits outside

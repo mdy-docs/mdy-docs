@@ -207,7 +207,15 @@ static void attr_info(const char *property, size_t len, AttrInfo *out) {
  * formatting; nothing produces one, and `%g` would be a guess. */
 static void put_number(Buf *b, double v) {
     char tmp[40];
-    if (v == (double)(long long)v) snprintf(tmp, sizeof tmp, "%lld", (long long)v);
+    /*
+     * A non-finite cannot arrive here any more — the two producers of a number
+     * property are a list's `start` and the guest, and the guest's is filtered
+     * where it crosses (engine_value.c). The test stays because `(long long)`
+     * of an infinity is undefined behaviour whether or not anything reaches
+     * it, and because %g says "inf" rather than invoking it (B21).
+     */
+    if (v == v && v >= -9.2e18 && v <= 9.2e18 && v == (double)(long long)v)
+        snprintf(tmp, sizeof tmp, "%lld", (long long)v);
     else snprintf(tmp, sizeof tmp, "%g", v);
     puts_(b, tmp);
 }

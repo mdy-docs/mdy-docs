@@ -258,7 +258,13 @@ static int out_json_string(Out *o, const char *s) {
 /** A number the way JSON.stringify writes one: an integer with no `.0`. */
 static int out_number(Out *o, double v) {
     char buf[40];
-    if (v == (double)(long long)v) snprintf(buf, sizeof buf, "%lld", (long long)v);
+    /* JSON cannot write an infinity or a NaN, so `null` — JSON.stringify's
+     * answer, and yaml.c's json_number's. The test is also what keeps
+     * (long long)v away from a non-finite, which is undefined (B21). */
+    if (v != v || v > 1.7976931348623157e308 || v < -1.7976931348623157e308)
+        snprintf(buf, sizeof buf, "null");
+    else if (v >= -9.2e18 && v <= 9.2e18 && v == (double)(long long)v)
+        snprintf(buf, sizeof buf, "%lld", (long long)v);
     else snprintf(buf, sizeof buf, "%.17g", v);
     return out_str(o, buf);
 }

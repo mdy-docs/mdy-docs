@@ -331,7 +331,13 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
                             free(item);
                         }
                     } else if (js_is_number(pv)) {
-                        mdy_set_number(doc, out, pname, js_get_number(pv));
+                        /* An infinity or a NaN is null under mdy-docs, and a
+                         * null property is one the HTML writer leaves out — so
+                         * it is left unset here, which is the same attribute
+                         * list. This used to emit `data-x="inf"`. */
+                        double pn = js_get_number(pv);
+                        if (pn == pn && pn <= 1.7976931348623157e308 && pn >= -1.7976931348623157e308)
+                            mdy_set_number(doc, out, pname, pn);
                     } else if (js_is_bool(pv)) {
                         mdy_set_bool(doc, out, pname, js_get_bool(pv));
                     } else {
@@ -358,7 +364,17 @@ int js_to_binjson(mdy_engine *e, bj_builder *b, JsValue v) {
     if (js_is_bool(v)) return bj_put_bool(b, js_get_bool(v));
     if (js_is_number(v)) {
         double d = js_get_number(v);
-        if (d == (double)(int64_t)d && d >= -9.2e18 && d <= 9.2e18)
+        /*
+         * Non-finite FIRST, for two reasons. It is what mdy-docs sends —
+         * `$.find({ big: 1/0 })` is stringified to `{"big":null}`, so it asks
+         * the store for null and matches nothing, where this used to ask for
+         * infinity and match a record that held one. And `(int64_t)d` of an
+         * infinity or a NaN is undefined behaviour, which is B21: the cast ran
+         * before anything had checked the range it was being checked against.
+         */
+        if (d != d || d > 1.7976931348623157e308 || d < -1.7976931348623157e308)
+            return bj_put_null(b);
+        if (d >= -9.2e18 && d <= 9.2e18 && d == (double)(int64_t)d)
             return bj_put_int(b, (int64_t)d);
         return bj_put_float(b, d);
     }
@@ -424,12 +440,29 @@ static void decode_put(Decode *d, JsValue v) {
     }
 }
 
+/*
+ * A number the guest can hold, or null.
+ *
+ * This is the crossing mdy-docs makes with JSON.stringify, and JSON has no
+ * way to write infinity or a NaN: `JSON.stringify({a: Infinity})` is
+ * `{"a":null}`. A store CAN hold one — `big: .inf` in front matter is legal
+ * YAML and node's parser reads it as a real Infinity — so the two engines
+ * agreed about the record and disagreed about what the document saw:
+ * `{{ res.data.big }}` rendered `Infinity` here and `null` there.
+ *
+ * Infinity is what the store keeps, on both sides. null is what crosses.
+ */
+static JsValue finite_or_null(double v) {
+    return (v != v || v > 1.7976931348623157e308 || v < -1.7976931348623157e308)
+               ? js_null() : js_number(v);
+}
+
 static void d_null(void *ctx) { decode_put(ctx, js_null()); }
 static void d_bool(void *ctx, int t) { decode_put(ctx, js_bool(t != 0)); }
-static void d_int(void *ctx, double v) { decode_put(ctx, js_number(v)); }
-static void d_float(void *ctx, double v) { decode_put(ctx, js_number(v)); }
-static void d_date(void *ctx, double v) { decode_put(ctx, js_number(v)); }
-static void d_pointer(void *ctx, double v) { decode_put(ctx, js_number(v)); }
+static void d_int(void *ctx, double v) { decode_put(ctx, finite_or_null(v)); }
+static void d_float(void *ctx, double v) { decode_put(ctx, finite_or_null(v)); }
+static void d_date(void *ctx, double v) { decode_put(ctx, finite_or_null(v)); }
+static void d_pointer(void *ctx, double v) { decode_put(ctx, finite_or_null(v)); }
 static void d_string(void *ctx, const uint8_t *s, uint32_t n) {
     Decode *d = ctx;
     decode_put(d, str(d->e->vm, (const char *)s, n));
