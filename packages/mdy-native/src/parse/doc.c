@@ -32,36 +32,63 @@ static int is_fence(const char *s, size_t len) {
     return 1;
 }
 
-static mdy_documents *build(const char *text, size_t len, int split);
+/*
+ * While a list is being built a chunk is an OFFSET, not a pointer: the buffer
+ * the chunks live in grows as sources are added, and a pointer taken before a
+ * realloc is not the one to keep. They become pointers once, at the end.
+ */
+typedef struct { size_t start, len; } Span;
 
-mdy_documents *mdy_split_documents(const char *text, size_t len) {
-    return build(text, len, 1);
+typedef struct {
+    Span *spans;
+    size_t count, cap;
+    char *joined;
+    size_t written, jcap;
+} Acc;
+
+static void acc_free(Acc *a) { free(a->spans); free(a->joined); }
+
+static int acc_room(Acc *a, size_t more) {
+    size_t need = a->written + more;
+    if (need <= a->jcap) return 0;
+    size_t want = a->jcap ? a->jcap : 64;
+    while (need > want) want *= 2;
+    char *grown = realloc(a->joined, want);
+    if (!grown) return -1;
+    a->joined = grown;
+    a->jcap = want;
+    return 0;
 }
 
-mdy_documents *mdy_one_document(const char *text, size_t len) {
-    return build(text, len, 0);
+static int acc_span(Acc *a, size_t start, size_t len) {
+    if (a->count == a->cap) {
+        size_t want = a->cap ? a->cap * 2 : 4;
+        Span *grown = realloc(a->spans, want * sizeof *grown);
+        if (!grown) return -1;
+        a->spans = grown;
+        a->cap = want;
+    }
+    a->spans[a->count].start = start;
+    a->spans[a->count].len = len;
+    a->count++;
+    return 0;
 }
 
-static mdy_documents *build(const char *text, size_t len, int split) {
-    if (!text) return NULL;
-    if (len == 0) len = strlen(text);
+/*
+ * One source's documents, appended to whatever is already there.
+ *
+ * `source.split('\n')` then rejoin per chunk, which is what mdy-docs does —
+ * so a chunk's own line endings are `\n` whatever the file used, and the
+ * boundaries land where the separators were.
+ */
+static int acc_source(Acc *a, const char *text, size_t len, int split) {
+    /* Never more than `len` bytes of content: a separator line gives up at
+     * least its three characters and writes one terminator back. Plus this
+     * source's own terminator. */
+    if (acc_room(a, len + 2) != 0) return -1;
 
-    mdy_documents *out = calloc(1, sizeof *out);
-    if (!out) return NULL;
-
-    /*
-     * `source.split('\n')` then rejoin per chunk, which is what mdy-docs
-     * does — so a chunk's own line endings are `\n` whatever the file used,
-     * and the boundaries land where the separators were.
-     */
-    size_t cap = 4;
-    mdy_chunk *chunks = malloc(cap * sizeof *chunks);
-    char *joined = malloc(len + 2);
-    if (!chunks || !joined) { free(chunks); free(joined); free(out); return NULL; }
-
-    size_t written = 0;
-    size_t chunk_start = 0;
-    size_t count = 0;
+    size_t first = a->count;
+    size_t chunk_start = a->written;
     size_t line_start = 0;
     int wrote_line = 0;
 
@@ -71,55 +98,92 @@ static mdy_documents *build(const char *text, size_t len, int split) {
         if (line_end > line_start && text[line_end - 1] == '\r') line_end--;
 
         if (split && is_separator(text + line_start, line_end - line_start)) {
-            if (count == cap) {
-                cap *= 2;
-                mdy_chunk *g = realloc(chunks, cap * sizeof *g);
-                if (!g) { free(chunks); free(joined); free(out); return NULL; }
-                chunks = g;
-            }
-            chunks[count].text = joined + chunk_start;
-            chunks[count].len = written - chunk_start;
-            count++;
-            joined[written++] = '\0';
-            chunk_start = written;
+            if (acc_span(a, chunk_start, a->written - chunk_start) != 0) return -1;
+            a->joined[a->written++] = '\0';
+            chunk_start = a->written;
             wrote_line = 0;
         } else {
-            if (wrote_line) joined[written++] = '\n';
-            memcpy(joined + written, text + line_start, line_end - line_start);
-            written += line_end - line_start;
+            if (wrote_line) a->joined[a->written++] = '\n';
+            memcpy(a->joined + a->written, text + line_start, line_end - line_start);
+            a->written += line_end - line_start;
             wrote_line = 1;
         }
         line_start = i + 1;
     }
-
-    if (count == cap) {
-        cap += 1;
-        mdy_chunk *g = realloc(chunks, cap * sizeof *g);
-        if (!g) { free(chunks); free(joined); free(out); return NULL; }
-        chunks = g;
-    }
-    chunks[count].text = joined + chunk_start;
-    chunks[count].len = written - chunk_start;
-    count++;
-    joined[written] = '\0';
+    if (acc_span(a, chunk_start, a->written - chunk_start) != 0) return -1;
+    a->joined[a->written++] = '\0';
 
     /* Whitespace-only chunks are not documents. */
-    size_t kept = 0;
-    for (size_t i = 0; i < count; i++)
-        if (!blank_run(chunks[i].text, chunks[i].len)) chunks[kept++] = chunks[i];
+    size_t kept = first;
+    for (size_t i = first; i < a->count; i++)
+        if (!blank_run(a->joined + a->spans[i].start, a->spans[i].len))
+            a->spans[kept++] = a->spans[i];
 
-    /* …unless nothing survives, in which case the source is ONE empty one. */
-    if (kept == 0) {
-        chunks[0].text = joined + written;
-        chunks[0].len = 0;
-        joined[written] = '\0';
-        kept = 1;
+    /*
+     * …unless nothing of THIS source survives, in which case the source is
+     * ONE empty one.
+     *
+     * The rule is per source, and that is the whole difference between an
+     * array of sources and the same files joined with `---`: joined, an empty
+     * file is a blank chunk between two separators and disappears, so a walk
+     * that counted one document for it and one identity handed every document
+     * after it the wrong one.
+     */
+    if (kept == first) {
+        a->spans[first].start = a->written - 1;      /* the terminator above */
+        a->spans[first].len = 0;
+        kept = first + 1;
     }
+    a->count = kept;
+    return 0;
+}
 
+static mdy_documents *acc_finish(Acc *a) {
+    mdy_chunk *chunks = malloc((a->count ? a->count : 1) * sizeof *chunks);
+    mdy_documents *out = calloc(1, sizeof *out);
+    if (!chunks || !out) { free(chunks); free(out); acc_free(a); return NULL; }
+    for (size_t i = 0; i < a->count; i++) {
+        chunks[i].text = a->joined + a->spans[i].start;
+        chunks[i].len = a->spans[i].len;
+    }
+    free(a->spans);
     out->chunks = chunks;
-    out->count = kept;
-    out->joined = joined;
+    out->count = a->count;
+    out->joined = a->joined;
     return out;
+}
+
+static mdy_documents *build(const char *text, size_t len, int split) {
+    if (!text) return NULL;
+    if (len == 0) len = strlen(text);
+
+    Acc a = { 0 };
+    if (acc_source(&a, text, len, split) != 0) { acc_free(&a); return NULL; }
+    return acc_finish(&a);
+}
+
+mdy_documents *mdy_split_documents(const char *text, size_t len) {
+    return build(text, len, 1);
+}
+
+mdy_documents *mdy_one_document(const char *text, size_t len) {
+    return build(text, len, 0);
+}
+
+mdy_documents *mdy_split_sources(const mdy_chunk *sources, size_t count,
+                                 size_t *per_source) {
+    if (count && !sources) return NULL;
+    Acc a = { 0 };
+    for (size_t i = 0; i < count; i++) {
+        if (!sources[i].text) { acc_free(&a); return NULL; }
+        size_t before = a.count;
+        if (acc_source(&a, sources[i].text, sources[i].len, 1) != 0) {
+            acc_free(&a);
+            return NULL;
+        }
+        if (per_source) per_source[i] = a.count - before;
+    }
+    return acc_finish(&a);
 }
 
 size_t mdy_documents_count(const mdy_documents *d) { return d ? d->count : 0; }

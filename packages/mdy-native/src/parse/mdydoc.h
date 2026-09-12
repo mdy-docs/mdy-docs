@@ -37,6 +37,25 @@ mdy_documents *mdy_split_documents(const char *text, size_t len);
  * a `---` in it is the parser's to read — mdy-docs/parse's default, where
  * `documents` is off and the line is a thematic break. */
 mdy_documents *mdy_one_document(const char *text, size_t len);
+
+/*
+ * Several sources as ONE list: each is split on its own and the documents are
+ * concatenated in order — mdy-docs' `parseDocuments` over an array, which is
+ * what a directory of files is.
+ *
+ * NOT the same as joining the sources with `---` and splitting once. The
+ * "when nothing survives, ONE empty document" rule is per source, so a file
+ * that is empty or all whitespace is a document here and vanishes there — and
+ * a caller that counted one for it, as a walk deriving identity must, then
+ * hands every document after it the wrong identity.
+ *
+ * `per_source`, when it is not NULL, is filled with how many documents each
+ * source became — that count being the whole point of asking once instead of
+ * twice. Each source's `len` is exact: a zero-length source is empty, not
+ * NUL-terminated.
+ */
+mdy_documents *mdy_split_sources(const mdy_chunk *sources, size_t count,
+                                 size_t *per_source);
 size_t mdy_documents_count(const mdy_documents *docs);
 mdy_chunk mdy_documents_at(const mdy_documents *docs, size_t index);
 void mdy_documents_free(mdy_documents *docs);

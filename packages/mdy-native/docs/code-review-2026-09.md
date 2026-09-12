@@ -23,7 +23,7 @@ what those checks do not reach.
 | # | Severity | Where | What |
 | --- | --- | --- | --- |
 | B1 | ~~High~~ **fixed** | `engine.c` directory walk | A `.yaml` file beginning with `---` desynchronised every document's identity |
-| B2 | High | `engine.c` directory walk | An empty or whitespace-only `.mdy` file shifts every later document's identity |
+| B2 | ~~High~~ **fixed** | `engine.c` directory walk | An empty or whitespace-only `.mdy` file shifted every later document's identity |
 | B3 | High | `engine.c` render memo | `$.render` of a `.md` document yields an empty or *wrong* token |
 | B4 | High | `engine.c` querying | `$.find` is cubic in the size of the set |
 | B5 | Medium | `engine.c` / `nis.c` | The nisaba collection is never closed: memory grows on every rebuild |
@@ -36,12 +36,15 @@ what those checks do not reach.
 | B12 | Medium | `engine.c` | Render-depth counter leaks on an out-of-range index |
 | B13–B27 | Low | various | Rooting fragility, portability, leaks on error paths, truncation, UB casts |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
+| B29 | Medium | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
+| B30 | Low | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
+| B31 | Low | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3), and
 the maintainability items in §4 — of which the most important is that the
 directory walk, the dev server and the HTTP layer have no tests that could
-have caught B1–B3, B5, B6 or B10. (B1's fix comes with the first of those —
-`data_file_checks` in `test/engine.c`.)
+have caught B1–B3, B5, B6 or B10. (B1's and B2's fixes come with the first
+two of those — `data_file_checks` and `blank_file_checks` in `test/engine.c`.)
 
 ---
 
@@ -52,11 +55,11 @@ have caught B1–B3, B5, B6 or B10. (B1's fix comes with the first of those —
 #### B1 — A `.yaml` file that begins with `---` corrupts the document set (High) — FIXED
 
 **Fixed.** A data file's bytes are no longer part of the concatenated source.
-`open_dir_inner` parses them once as YAML ([engine.c:1712](../src/engine.c#L1712))
+`open_dir_inner` parses them once as YAML ([engine.c:1723](../src/engine.c#L1723))
 and the mapping travels beside the document in a new `ident_data`
 ([engine.c:204](../src/engine.c#L204)), merged in `mdy_engine_open` after the
 document's own fields and before `path`
-([engine.c:2461](../src/engine.c#L2461)) — which is where mdy-docs puts a
+([engine.c:2532](../src/engine.c#L2532)) — which is where mdy-docs puts a
 source's `meta` (`parseDocuments`, `src/mdy.js`). The file's document is now
 the same placeholder every other non-MDY file gets, so a `---` or a `+++` line
 among its bytes can no longer be read as document structure, and the identity
@@ -99,33 +102,64 @@ Same mechanism, smaller effect: a line of exactly `+++` inside a `.yaml` file
 closes the synthetic front matter early, and the fields after it are silently
 dropped (node refuses that file with a warning and keeps its raw identity).
 
-#### B2 — An empty `.mdy` file shifts every later identity (High)
+#### B2 — An empty `.mdy` file shifts every later identity (High) — FIXED
+
+**Fixed.** The walk no longer joins the files into one text. Every file is its
+own source and is split on its own, which is what mdy-docs' `parseDocuments`
+does with an array: `mdy_split_sources`
+([doc.c:173](../src/parse/doc.c#L173)) appends each source's documents to one
+list and says how many each became, and the walk asks it once
+([engine.c:1787](../src/engine.c#L1787)) instead of counting beforehand and
+re-deriving afterwards. Identity is collected per FILE while the walk runs
+(`WalkedFile`, [engine.c:1552–1558](../src/engine.c#L1552-L1558)) and expanded
+to one entry per document once the count is known
+([engine.c:1810](../src/engine.c#L1810)). The two computations that had to
+agree are one computation, so there is nothing left to disagree.
+
+The "when nothing survives, ONE empty document" rule is now applied per source
+([doc.c:132](../src/parse/doc.c#L132)), which is the whole of the difference:
+joined, an empty file was a blank chunk between two separators and vanished.
+An empty `.mdy` is a document again, as it is under node.
+
+Two things fell out. A file's trailing newline is its own now — the joined
+text needed a `\n` folded into each separator to keep it, which is gone — and
+a directory with no source files in it is a set of zero documents rather than
+one empty one, which is also what node reports. `mdy_engine_open` splits and
+then hands the documents to a shared `open_documents`
+([engine.c:2387](../src/engine.c#L2387)), so both ways in run the same code.
+
+Regression test: `blank_file_checks`
+([test/engine.c:343](../test/engine.c#L343)), which fails on the old code in
+all four assertions. Byte-identical to node on a directory of empty, blank,
+`---`-only, multi-document and front-matter files, on the entry lookup, on
+`$.text` and `$.data` indices, and across all five `check-sites` sites.
+
+The original finding follows. Its line numbers are the file as it stood at
+`84f4bd4`, before the fix.
 
 For a `.mdy` file, the number of documents it contributes is computed by
-splitting the file *on its own* ([engine.c:1670–1675](../src/engine.c#L1670-L1675)),
-where an empty source is "ONE empty document" by the splitter's rule
-([doc.c:111–117](../src/parse/doc.c#L111-L117)). In the concatenated text the
-same file is a whitespace-only chunk between two separators, which the same
-rule *drops*. One identity too many is recorded, and every document after it
-is off by one.
+splitting the file *on its own* (`engine.c:1670–1675`), where an empty source
+is "ONE empty document" by the splitter's rule (`doc.c:111–117`). In the
+concatenated text the same file is a whitespace-only chunk between two
+separators, which the same rule *drops*. One identity too many is recorded,
+and every document after it is off by one.
 
 Repro (`a.mdy` empty, `main.mdy`, `zed.mdy`): the C engine renders `zed.mdy`'s
 body ("hello") when asked for `main.mdy`; node lists all three correctly.
 
 B1 and B2 were the same design flaw: identity is smuggled through the text
 splitter as synthesised YAML instead of being attached to each document as
-data. B1's fix took a data file's bytes out of that text altogether, which is
-the same move for one file kind; B2 and B8 still ride on the rest of it. The
-fix that removes the whole class is to open the set from an array of
-(text, identity) pairs, as mdy-docs does, rather than from one joined string.
+data. B1's fix took a data file's bytes out of that text; B2's took the text
+apart. What is left of the class is B8 — identity is still written as YAML
+source, it is just no longer at risk of being re-split.
 
 #### B3 — `$.render` of a `.md` document returns an empty or wrong token (High)
 
 `render_tree_out` returns early for a markdown document
-([engine.c:4746–4769](../src/engine.c#L4746-L4769)) without reaching the
+([engine.c:4817–4840](../src/engine.c#L4817-L4840)) without reaching the
 `done:` label, which is where `e->last_render_key` is written
-([4961](../src/engine.c#L4961)). `render_native` then parks the tree under
-that stale key ([2207](../src/engine.c#L2207)):
+([5032](../src/engine.c#L5032)). `render_native` then parks the tree under
+that stale key ([2267](../src/engine.c#L2267)):
 
 - if nothing rendered before, the key is `""`, `token_at` refuses an empty id,
   and the token is never spliced — the content silently disappears;
@@ -153,8 +187,8 @@ The five `check-sites` sites never render a `.md` through `$.render`
 `run_query_in` restores document order with a doubly nested loop — for every
 document position, every hit — and each inner step calls `index_of_id`, which
 itself formats and compares hex ids across the *whole* set
-([engine.c:2695–2704](../src/engine.c#L2695-L2704),
-[2646–2658](../src/engine.c#L2646-L2658)). It also converts each hit's `_id`
+([engine.c:2766–2775](../src/engine.c#L2766-L2775),
+[2717–2729](../src/engine.c#L2717-L2729)). It also converts each hit's `_id`
 to UTF-8 with a fresh allocation on every one of those inner steps.
 
 Measured on a site of N one-line documents whose entry runs one `$.find({})`:
@@ -171,7 +205,7 @@ hash map from oid to index) makes this O(N log N).
 #### B5 — The nisaba collection is never closed (Medium)
 
 `nis_close` has no callers anywhere in the package; `close_set`
-([engine.c:2302–2311](../src/engine.c#L2302-L2311)) and `mdy_engine_free` free
+([engine.c:2362–2371](../src/engine.c#L2362-L2371)) and `mdy_engine_free` free
 everything except the collection handle. Every `mdy_engine_new`+`open_dir`
 leaks the primary store, the `path` index store and a slot in the global
 table. `mdy dev` and `--watch` create a fresh engine per rebuild, so memory
@@ -191,9 +225,9 @@ need finishing too.
 The memo is documented as keeping two generations so "a rebuild may reuse the
 build before it" ([engine.h:193–200](../src/engine.h#L193-L200)). The key is
 `document_fingerprint`, which hashes the document's *record* as returned from
-nisaba ([engine.c:4642–4654](../src/engine.c#L4642-L4654)) — and the record
+nisaba ([engine.c:4713–4725](../src/engine.c#L4713-L4725)) — and the record
 includes `_id`, a fresh ObjectId minted at every open
-([2471](../src/engine.c#L2471)). Two builds of the same unchanged site never
+([2542](../src/engine.c#L2542)). Two builds of the same unchanged site never
 share a key.
 
 Measured with `MDY_MEMO_DEBUG=1` over three consecutive rotate+open+render
@@ -223,7 +257,7 @@ wasm `document()` API, which take arbitrary typed input, it is a crash.
 #### B8 — A file name containing `"` or `\` silently loses its identity (Medium)
 
 Identity is written as YAML text by `snprintf` with no escaping
-([engine.c:1608–1610](../src/engine.c#L1608-L1610), [1750](../src/engine.c#L1750)).
+([engine.c:1639–1641](../src/engine.c#L1639-L1641), [1742](../src/engine.c#L1742)).
 A name like `it"s.mdy` produces `name: "it"s.mdy"`, which the YAML reader
 reads as `it` (see B9) — so the document's `path`, `name` and `ext` are all
 truncated at the quote. Node reports `it"s.mdy`. A backslash in a name would
@@ -262,12 +296,69 @@ adding.
 #### B12 — Render depth leaks on an out-of-range index (Medium)
 
 `render_tree_out` increments `e->depth`, replaces `e->current` and zeroes
-`e->taint` ([engine.c:4697–4728](../src/engine.c#L4697-L4728)) *before* the
-index check at [4732–4735](../src/engine.c#L4732-L4735), which returns without
+`e->taint` ([engine.c:4768–4799](../src/engine.c#L4768-L4799)) *before* the
+index check at [4803–4806](../src/engine.c#L4803-L4806), which returns without
 restoring any of them. Demonstrated: 40 calls to `mdy_engine_render(e, 99, …)`
 followed by `mdy_engine_render(e, 0, …)` fails with "render depth exceeded
 (cyclic $.render?)". `test/engine.c:1114` exercises exactly this path and
 cannot notice. Move the check above the state changes.
+
+#### B29 — `$.count` is missing from `$` (Medium)
+
+mdy-docs gives a document `$.count`, the number of documents in the set — it
+is written into the generated program beside `$.data` and the rest
+(`src/mdy.js`, `buildProgram`). The C engine binds `$` as host natives and
+never sets it, so `{{ $.count }}` is `undefined` where node says `2`. Nothing
+reports it: it is a missing property, not a failed call.
+
+```
+printf '= {{ $.count }}\n---\n+++\na: 1\n+++\n' > c.mdy
+./build/mdy c.mdy --html      # <h1 id="undefined">undefined</h1>
+node ../../bin/mdy.js c.mdy --html   # <h1 id="2">2</h1>
+```
+
+Found while fixing B2; it has nothing to do with the walk. `$.find({}).length`
+is the workaround a site would have reached for, which is probably why no site
+in the tree has noticed.
+
+#### B30 — A CRLF source: the splitter normalises, node does not (Low)
+
+`acc_source` drops a `\r` before the line ending
+([doc.c:98](../src/parse/doc.c#L98)) — deliberately, so "a chunk's own line
+endings are `\n` whatever the file used". node's `splitDocuments` splits on
+`\n` and rejoins, so the `\r` stays in the chunk and the script layer then
+makes two line breaks of it. `$.text` of a CRLF document is
+`"crlf line\nsecond\n"` here and `"crlf line\n\nsecond\n\n"` there.
+
+Reproduces in document mode with one file, so it is nothing to do with the
+walk. The C behaviour is the more defensible of the two, which is why this is
+filed as a divergence to decide about rather than a bug to fix: matching node
+here means reproducing something that looks accidental.
+
+#### B31 — A record's keys are in a different order (Low)
+
+A document sees its own record as an object, and the order its keys come back
+in is not node's:
+
+```
+$.find({})  C: ["_id","title","name","ext","size","mtime","path"]
+         node: ["title","path","name","ext","size","mtime","_id"]
+$.data(0)   C: ["_id","title","name","ext","size","mtime","path"]
+         node: ["title","path","name","ext","size","mtime"]
+```
+
+Two differences. `_id` is first here and last there — and `$.data` does not
+carry it at all under node, while it does here. And the identity block is
+written `name, ext, size, mtime, path`
+([engine.c:1639–1641](../src/engine.c#L1639-L1641)), `path` last so that it
+wins over a data file's own; node reaches the same result with
+`{ ...meta, ...parsed, path }`, where re-assigning `path` leaves it in the
+position it was first written — first.
+
+It costs nothing until a document serialises a record or walks its keys, at
+which point the two engines disagree about the bytes. No site in the tree
+does, which is why `check-sites` is green. Found while fixing B2; it predates
+both fixes.
 
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
@@ -292,11 +383,11 @@ end of the stream, and to stop the line walk there.
   is that a value reachable only from the C stack must be rooted before
   anything allocates, and that building a key allocates. Four sites violate
   it: `js_object_get(e->vm, hit, key(e->vm, "_id"))` on an unrooted query
-  result in `mdy_engine_entry` ([1922](../src/engine.c#L1922)) and
-  `resolve_target` ([2168](../src/engine.c#L2168)), on an unrooted decode in
-  `lookup_import` ([2859](../src/engine.c#L2859)), and
+  result in `mdy_engine_entry` ([1982](../src/engine.c#L1982)) and
+  `resolve_target` ([2228](../src/engine.c#L2228)), on an unrooted decode in
+  `lookup_import` ([2930](../src/engine.c#L2930)), and
   `js_object_get(e->vm, document_record(e, i), key(…))` in `publish_native`
-  ([3641–3642](../src/engine.c#L3641-L3642)). They survive `MDY_GC_STRESS`
+  ([3712–3713](../src/engine.c#L3712-L3713)). They survive `MDY_GC_STRESS`
   only because the atom is already interned by the time they run. Root the
   value or build the key first.
 - **B14 — `report()` uses `strftime("%l")`** ([cli.c:1082](../src/cli.c#L1082))
@@ -340,8 +431,8 @@ end of the stream, and to stop the line walk there.
   paragraph ([inline.c:160](../src/parse/inline.c#L160)); tag hrefs
   ([inline.c:458](../src/parse/inline.c#L458)), footnote ids
   ([footnote.c:33](../src/parse/footnote.c#L33)), TOC hrefs
-  ([engine.c:3401](../src/engine.c#L3401)), identity records over 4 KB
-  ([engine.c:1607](../src/engine.c#L1607), where a truncated `ident_len` can
+  ([engine.c:3472](../src/engine.c#L3472)), identity records over 4 KB
+  ([engine.c:1638](../src/engine.c#L1638), where a truncated `ident_len` can
   also underflow the second `snprintf`'s size). Each is unlikely alone; none
   says anything when it happens.
 - **B21 — Undefined behaviour on double→integer casts** performed *before* the
@@ -364,7 +455,7 @@ end of the stream, and to stop the line walk there.
   `collect_message`, `buf_put`, `seen_before`, `read_stdin`, `absolute` in
   cli.c; `add`/`snapshot_changes` in watch.c; the `recv` buffer in http.c
   ([155](../src/http.c#L155)); `broker_request` ([broker.c:104](../src/broker.c#L104));
-  `mdy_engine_encode_json` ([engine.c:2602](../src/engine.c#L2602)); the fence
+  `mdy_engine_encode_json` ([engine.c:2673](../src/engine.c#L2673)); the fence
   body, list and paragraph joins in block.c ([1405](../src/parse/block.c#L1405),
   [1605](../src/parse/block.c#L1605), [1691](../src/parse/block.c#L1691),
   [1818](../src/parse/block.c#L1818)); `cache_put` frees the *new* array on a
@@ -380,7 +471,7 @@ end of the stream, and to stop the line walk there.
   ([cli.c:1555–1566](../src/cli.c#L1555-L1566)); `dev_deliver` returns 500 so
   the broker dead-letters them ([1700–1707](../src/cli.c#L1700-L1707)).
 - **B27 — `wrap()` assembles the document's source with `snprintf("%s…")`**
-  ([engine.c:4395–4398](../src/engine.c#L4395-L4398)); on a 3.6 GB input
+  ([engine.c:4466–4469](../src/engine.c#L4466-L4469)); on a 3.6 GB input
   AddressSanitizer reports `negative-size-param` from the `int` return value
   overflowing. Pathological, but `memcpy` is also simpler.
 
@@ -397,7 +488,7 @@ end of the stream, and to stop the line walk there.
 | [Makefile:128–134](../Makefile#L128-L134) | `build/libnisaba.a` | Nothing links it; every engine binary recompiles all 20 nisaba sources from scratch instead. The stale `build/libnisaba.a`, `build/mdy-build`, `build/mdy-build-asan` in the build tree are its fossils. |
 | [Makefile:245–246](../Makefile#L245-L246) and [249–250](../Makefile#L249-L250), `test/doccat.c`, `test/datacat.c` | Two drivers with build rules that no check target or script invokes | `md4cprobe` is in the same state but is at least mentioned in `docs/parser.md` as a manual baseline tool. |
 | [cli.c:1183–1208](../src/cli.c#L1183-L1208) | `is_help` | Set, then `(void)is_help`. |
-| [engine.c:3206](../src/engine.c#L3206) | `column_align`'s `e` parameter | Compiler warning in every build. |
+| [engine.c:3277](../src/engine.c#L3277) | `column_align`'s `e` parameter | Compiler warning in every build. |
 | [block.c:333](../src/parse/block.c#L333) | `(void)id_len` in `set_heading_id` | The variable is only computed to be discarded. |
 | [block.c:1605](../src/parse/block.c#L1605) | `mdy_alloc(doc ? &doc->arena : NULL, …)` | `doc` cannot be NULL there and `mdy_alloc(NULL)` would crash. |
 | [engine.h:22–30](../src/engine.h#L22-L30) | "WHAT THIS DOES NOT DO YET" | All three items are done; the list now misleads. Same for [block.c:1973](../src/parse/block.c#L1973) (`shims/parse.js`) and [docs/cli-plan.md:116–125](cli-plan.md) (`scripts-compare-cli.mjs`, "N/40 cases" — neither exists; `check-cli` runs `cli.test.js` directly, 34 cases). |
@@ -443,29 +534,30 @@ in the file's own section comments: the walk (`open_dir_inner`,
 be a file with a small internal header.
 
 **Long functions with several exits.** `render_tree_out`
-([4671–4975](../src/engine.c#L4671-L4975), ~300 lines) manages seven GC roots,
+([4742–5046](../src/engine.c#L4742-L5046), ~300 lines) manages seven GC roots,
 a `FAIL` macro that jumps to `done:`, and three early returns that *bypass*
 `done:` — one of which is B3 and another B12. `open_dir_inner`
-([1543–1822](../src/engine.c#L1543-L1822)) builds the synthetic source that
-caused B1 and still causes B2/B8. `mdy_parse_block` ([block.c:1280–1760](../src/parse/block.c#L1280-L1760),
+([1572–1882](../src/engine.c#L1572-L1882)) builds the synthetic source that
+caused B1 and B2; what is left of it is B8. `mdy_parse_block` ([block.c:1280–1760](../src/parse/block.c#L1280-L1760),
 480 lines) inlines the entire list grammar. `resize_in` defines a
 `RESIZE_FAIL` macro and then uses it for two of its eight failures.
 
-**Process-global state.** The memo tables ([engine.c:4543](../src/engine.c#L4543))
+**Process-global state.** The memo tables ([engine.c:4614](../src/engine.c#L4614))
 and `mdy_engine_rotate_memo(void)`, the nisaba slot table (`nis.c`),
-`lookup_import`'s `static char path[1024]` ([2841](../src/engine.c#L2841)),
+`lookup_import`'s `static char path[1024]` ([2912](../src/engine.c#L2912)),
 `seen_sources` in cli.c, the OID statics in ingest.c. These make the engine
 non-reentrant and are the reason `wasm/index.mjs` instantiates a fresh module
 per call. They also make the memo shared between unrelated engines in one
 process.
 
 **Identity as text.** The walk encodes a file's identity as YAML source,
-concatenates all files with `---`, and relies on the splitter to give the
-pieces back in the same order it counted them. It works for well-formed input
-and failed for B1, B2 and B8; the counting logic
-([1666–1683](../src/engine.c#L1666-L1683)) exists only to keep two independent
-computations in step. B1's fix removed one file kind from that text; the
-counting is still there for the rest.
+parses it back once per document, and relies on `snprintf` with no escaping to
+get it there — which is B8, and is what is left of a bigger problem. It used
+to concatenate every file with `---` and trust the splitter to hand the pieces
+back in the order it had counted them, which is what B1 and B2 were; the files
+are separate sources now and the counting is gone. Identity itself is still
+text: it could be built as values and handed to `mdy_bj_document` directly,
+and then there would be nothing to escape.
 
 **The `Dev` struct and the bus code in cli.c** carry fixed-size scratch
 (`done_ix[64]`, `done_list[4096]`, `char cand[3][4200]`), fake growable
@@ -516,8 +608,8 @@ against the checked-in headers would catch a `property-information` upgrade.
 
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`
-([engine.c:2207](../src/engine.c#L2207), [2817](../src/engine.c#L2817),
-[4924](../src/engine.c#L4924)), the unused parameter above, and two from stb
+([engine.c:2267](../src/engine.c#L2267), [2888](../src/engine.c#L2888),
+[4995](../src/engine.c#L4995)), the unused parameter above, and two from stb
 under `STBI_ONLY_PNG`. A non-const `mdy_root_mut` in `mdybuild.h` (or
 `-Wno-unused-function` around the stb include) makes the build silent, which
 is the only state in which a *new* warning is noticed.
@@ -525,12 +617,12 @@ is the only state in which a *new* warning is noticed.
 **Error reporting has four conventions.** `0/-1` with an error buffer
 (engine, fsx), `BJ_*` codes (memns, nis), `NULL` plus a static message buffer
 (cli), and `fprintf(stderr)` from inside the library
-([engine.c:4187](../src/engine.c#L4187), [4202](../src/engine.c#L4202)) even
+([engine.c:4258](../src/engine.c#L4258), [4273](../src/engine.c#L4273)) even
 though `on_message` exists for exactly that. Pick two.
 
 **Debug switches are read in hot paths.** `getenv("MDY_MEMO_DEBUG")` runs
 three times per render and `getenv("MDY_LINEMAP_DEBUG")` once per produced
-line ([engine.c:4487](../src/engine.c#L4487)); read them once in
+line ([engine.c:4558](../src/engine.c#L4558)); read them once in
 `mdy_engine_new`.
 
 **Fragile initialisers.** `bjval.c` fills `bj_visitor` positionally
@@ -548,10 +640,10 @@ accumulating.
 
 1. B3, B12 and B6 are one change: give `render_tree_out` a single exit and
    hash the record without `_id`. Small, high value, easy to test.
-2. ~~B1~~, B2, B8: stop building identity as text. Open the set from
-   (chunk, identity mapping) pairs; delete the counting logic. B1 is done —
-   a data file's bytes are out of the text — but a `.mdy` file's still are
-   not, which is what B2 and B8 are.
+2. ~~B1~~, ~~B2~~, B8: stop building identity as text. Done as far as the
+   document text goes — the files are separate sources and the counting logic
+   is gone. B8 is what remains: identity is still YAML written by `snprintf`,
+   and the fix is to build it as values rather than escape it.
 3. B4: sort hits by a decoded index. One function.
 4. B5: call `nis_close` from `close_set` and finish `nis_close` (`bpt_free`).
 5. B11, B7 (a depth cap in the walkers), B9, B10, B13 — each a few lines.
@@ -574,7 +666,8 @@ printf 'title: Bee\n' > /tmp/yd/zed.yaml
 printf '%% for (const d of $.find({})) {\n- {{ d.path }} | name={{ d.name }} | title={{ d.title ?? "" }}\n%% }\n' > /tmp/yd/main.mdy
 ./build/mdy /tmp/yd; node ../../bin/mdy.js /tmp/yd
 
-# B2 — an empty .mdy
+# B2 (fixed — the two now agree; before the fix C printed only `hello`)
+# an empty .mdy
 mkdir -p /tmp/em && : > /tmp/em/a.mdy && cp /tmp/yd/main.mdy /tmp/em/
 printf '+++\ntitle: Zed\n+++\nhello\n' > /tmp/em/zed.mdy
 ./build/mdy /tmp/em; node ../../bin/mdy.js /tmp/em

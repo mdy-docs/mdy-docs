@@ -323,6 +323,94 @@ static void data_file_checks(void) {
 }
 
 
+/* ---- a file that holds no document ------------------------------------------
+ *
+ * Every file under the root is its own SOURCE, split on its own, and the sets
+ * are laid end to end — which is what mdy-docs' parseDocuments does with an
+ * array. An empty .mdy, one that is nothing but blank lines, one that is
+ * nothing but a `---`: each is ONE empty document, because that is what the
+ * splitter says an empty source is.
+ *
+ * The files used to be joined into one text with `---` between them, where a
+ * file holding no document is a blank chunk between two separators and
+ * disappears. The walk had counted a document and an identity for it either
+ * way, so every document after it wore its neighbour's: asked for main.mdy
+ * this engine rendered zed.mdy, which is the whole of the bug.
+ *
+ * The roll call is the check, and `$.text` beside it — a file's trailing
+ * newline is its own, which a joined text made surprisingly easy to lose.
+ */
+static void blank_file_checks(void) {
+    printf("\n--- engine: a file that holds no document ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-blank", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "a.mdy", "");
+    write_file(root, "bare.mdy", "---\n");
+    write_file(root, "blank.mdy", "  \n\n");
+    /* Two documents from one file, with a blank one between them that is not
+     * a third — the count the walk must not guess at. */
+    write_file(root, "multi.mdy", "one\n---\n\n---\ntwo\n");
+    write_file(root, "zed.mdy", "+++\ntitle: Zed\n+++\nhello\n");
+    write_file(root, "main.mdy",
+        "% $.emit('roll.txt', $.find({}).map((d, i) => [i, d.path].join('|')).join('\\n'))\n"
+        "% $.emit('zed.txt', JSON.stringify($.text({ path: 'zed.mdy' })))\n"
+        "% $.emit('multi.txt', $.text(4) + '/' + $.text(5))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory with empty files in it\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    ok_("an empty file is one empty document, not none", mdy_engine_count(e) == 7, NULL);
+
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    const char *roll = emitted("roll.txt");
+    ok_("...so every later document keeps its own identity",
+        roll && strcmp(roll,
+            "0|a.mdy\n"
+            "1|bare.mdy\n"
+            "2|blank.mdy\n"
+            "3|main.mdy\n"
+            "4|multi.mdy\n"
+            "5|multi.mdy\n"
+            "6|zed.mdy") == 0,
+        roll);
+    ok_("...and one file's two documents are two, not three",
+        emitted("multi.txt") && strcmp(emitted("multi.txt"), "one/two\n") == 0,
+        emitted("multi.txt"));
+    ok_("a file's trailing newline is the document's",
+        emitted("zed.txt") && strcmp(emitted("zed.txt"), "\"hello\\n\"") == 0,
+        emitted("zed.txt"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1210,6 +1298,7 @@ int main(void) {
 
     site_checks();
     data_file_checks();
+    blank_file_checks();
     natives_checks();
     resize_checks();
     gc_checks();

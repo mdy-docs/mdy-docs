@@ -1540,6 +1540,35 @@ static int in_ancestors(const Ancestors *a, const char *dir) {
     return 0;
 }
 
+static int open_documents(mdy_engine *e, mdy_documents *docs,
+                          char *error, size_t error_len);
+
+/*
+ * What the walk learns about one file, before it knows how many documents the
+ * file is. Only the splitter knows that, and it is asked once — after the
+ * walk, when the set is opened — rather than counted here and re-derived
+ * there, which is how the two came to disagree.
+ */
+typedef struct {
+    size_t start, len;   /* the file's text, inside the staging buffer */
+    char *pre;           /* identity as a DEFAULT: a data file's, else NULL */
+    mdy_yaml *data;      /* a data file's own mapping */
+    char *post;          /* identity where it WINS */
+    int is_md;
+} WalkedFile;
+
+static void walked_free(WalkedFile *files, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        free(files[i].pre);
+        free(files[i].post);
+        mdy_yaml_free(files[i].data);
+    }
+    free(files);
+}
+
+/* Once, on an engine nobody has opened yet: the root, the import cache and
+ * the identity arrays are all taken to be empty here, and a site or a package
+ * is walked exactly once. A rebuild is a NEW engine (cli.c's dev_rebuild). */
 static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
                           const Ancestors *ancestors, char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
@@ -1553,14 +1582,25 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
     }
 
     /*
-     * One source, built by hand: every file becomes a document, separated by
-     * the `---` the splitter reads. Identity is written as front matter so it
-     * reaches the record the same way a document's own data does.
+     * One buffer for the whole walk, and a SPAN of it per file: every file is
+     * its own source, and the set is the files split one at a time, which is
+     * what mdy-docs' parseDocuments does with an array. One allocation rather
+     * than one per file, so a file is a span until the walk is over — the
+     * buffer moves under a pointer taken early.
+     *
+     * They used to be one source joined by the `---` the splitter reads,
+     * which looks the same until a file holds no document: joined, an empty
+     * .mdy is a blank chunk between two separators and the splitter drops it,
+     * while the walk had counted a document and an identity for it. Every
+     * identity after it then belonged to the wrong document.
      */
     size_t cap = 65536, len = 0;
     char *source = malloc(cap);
     if (!source) { free(listing); return -1; }
     source[0] = '\0';
+
+    WalkedFile *files = NULL;
+    size_t file_count = 0, file_cap = 0;
 
     for (char *rel = listing, *next; rel && *rel; rel = next) {
         char *nl = strchr(rel, '\n');
@@ -1592,15 +1632,6 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
          * own data unreachable — but `path` is structurally required to be
          * real, because everything resolves documents by it.
          */
-        /*
-         * The separator carries its OWN line break, and the first file gets
-         * none: the splitter joins LINES, so a file's trailing newline
-         * survives only as an empty final line before the `---`. Fold that
-         * newline into the file's text instead and a file with none gains
-         * one; leave it out and every file but the last loses one.
-         */
-        char head[2048];
-        int head_len = snprintf(head, sizeof head, "%s---\n", len ? "\n" : "");
         /* Identity, kept OUT of the text — see `identity` on the engine. */
         char when[40];
         iso8601_utc(mtime, when, sizeof when);
@@ -1622,15 +1653,15 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         }
         (void)ident_len;
 
-        size_t need = len + (size_t)head_len + body_len + 4096;
+        size_t need = len + body_len + 4096;
         if (need > cap) {
             while (need > cap) cap *= 2;
             char *grown = realloc(source, cap);
-            if (!grown) { free(bytes); free(source); free(listing); return -1; }
+            if (!grown) { free(bytes); free(source); free(listing);
+                          walked_free(files, file_count); return -1; }
             source = grown;
         }
-        memcpy(source + len, head, (size_t)head_len);
-        len += (size_t)head_len;
+        size_t file_start = len;
 
         /*
          * A built front-matter block, for the one kind that has no front
@@ -1655,7 +1686,6 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             len += (size_t)snprintf(source + len, cap - len, "+++\n");
         }
 
-        size_t doc_count = 1;
         if (is_mdy && bytes) {
             /* `% import` is rewritten before the compiler ever sees the text —
              * a real import statement is not legal inside a function body, and
@@ -1665,20 +1695,12 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             body = rewritten ? rewritten : (char *)bytes;
             size_t blen = rewritten ? rlen : body_len;
 
-            /* How many documents this file is: only a .mdy can hold more than
-             * one, and every one of them carries the same file identity. */
-            mdy_documents *split = mdy_split_documents(body, blen);
-            if (split) {
-                doc_count = mdy_documents_count(split);
-                mdy_documents_free(split);
-            }
-            if (doc_count == 0) doc_count = 1;
-
             size_t need2 = len + blen + 64;
             if (need2 > cap) {
                 while (need2 > cap) cap *= 2;
                 char *grown = realloc(source, cap);
-                if (!grown) { if (rewritten) free(rewritten); free(bytes); free(source); free(listing); return -1; }
+                if (!grown) { if (rewritten) free(rewritten); free(bytes); free(source);
+                              free(listing); walked_free(files, file_count); return -1; }
                 source = grown;
             }
             memcpy(source + len, body, blen);
@@ -1688,17 +1710,6 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             memcpy(source + len, PLACEHOLDER_BODY, strlen(PLACEHOLDER_BODY));
             len += strlen(PLACEHOLDER_BODY);
         }
-        /*
-         * A newline of its OWN before the next `---`.
-         *
-         * Every file becomes a document in one source, separated by `---`, and
-         * the splitter takes the newline immediately before a separator as
-         * part of it. Without a spare one here, every file but the last loses
-         * its final newline — so `$.text` on it came back a byte short, and a
-         * robots.txt or a sitemap ended without the newline it was written
-         * with. mdy-docs does not hit this because it opens an ARRAY of
-         * sources, one per file, and never concatenates them.
-         */
         source[len] = '\0';
 
         /*
@@ -1728,40 +1739,89 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             }
         }
 
-        /* One identity per document this file became. */
-        for (size_t k = 0; k < doc_count; k++) {
-            char **pre = realloc(e->ident_pre, (e->identity_count + 1) * sizeof *pre);
-            mdy_yaml **data = realloc(e->ident_data, (e->identity_count + 1) * sizeof *data);
-            char **post = realloc(e->ident_post, (e->identity_count + 1) * sizeof *post);
-            char *md = realloc(e->ident_is_md, e->identity_count + 1);
-            if (pre) e->ident_pre = pre;
-            if (data) e->ident_data = data;
-            if (post) e->ident_post = post;
-            if (md) e->ident_is_md = md;
-            if (!pre || !data || !post || !md) break;
-            e->ident_is_md[e->identity_count] = (char)(is_md ? 1 : 0);
-            /* The parsed mapping belongs to the FIRST document of the file —
-             * only a .mdy holds more than one, and a .mdy has no mapping. */
-            e->ident_data[e->identity_count] = own;
-            own = NULL;
-            if (is_yaml) {
-                /* A default: the file's own fields win, except `path`. */
-                char only_path[2048];
-                snprintf(only_path, sizeof only_path, "path: \"%s\"\n", rel);
-                e->ident_pre[e->identity_count] = strdup(ident);
-                e->ident_post[e->identity_count] = strdup(only_path);
-            } else {
-                e->ident_pre[e->identity_count] = NULL;
-                e->ident_post[e->identity_count] = strdup(ident);
-            }
-            e->identity_count++;
+        /* One entry per FILE, with its text as a span. How many documents
+         * that text is, the splitter says below. */
+        if (file_count == file_cap) {
+            size_t want = file_cap ? file_cap * 2 : 16;
+            WalkedFile *grown = realloc(files, want * sizeof *grown);
+            if (!grown) { mdy_yaml_free(own); free(bytes); free(source);
+                          free(listing); walked_free(files, file_count); return -1; }
+            files = grown;
+            file_cap = want;
         }
-        mdy_yaml_free(own);        /* only if no identity took it */
+        WalkedFile *f = &files[file_count++];
+        f->start = file_start;
+        f->len = len - file_start;
+        f->data = own;
+        f->is_md = is_md;
+        if (is_yaml) {
+            /* A default: the file's own fields win, except `path`. */
+            char only_path[2048];
+            snprintf(only_path, sizeof only_path, "path: \"%s\"\n", rel);
+            f->pre = strdup(ident);
+            f->post = strdup(only_path);
+        } else {
+            f->pre = NULL;
+            f->post = strdup(ident);
+        }
         free(bytes);
     }
 
     free(listing);
-    int rc = mdy_engine_open(e, source, len, error, error_len);
+
+    /*
+     * The set: every file split ON ITS OWN, in order. The spans become
+     * pointers only now, with the buffer done growing.
+     */
+    mdy_chunk *srcs = malloc((file_count ? file_count : 1) * sizeof *srcs);
+    size_t *per_file = malloc((file_count ? file_count : 1) * sizeof *per_file);
+    if (!srcs || !per_file) {
+        free(srcs); free(per_file); walked_free(files, file_count); free(source);
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
+    }
+    for (size_t i = 0; i < file_count; i++) {
+        srcs[i].text = source + files[i].start;
+        srcs[i].len = files[i].len;
+    }
+    mdy_documents *docs = mdy_split_sources(srcs, file_count, per_file);
+    free(srcs);
+    if (!docs) {
+        free(per_file); walked_free(files, file_count); free(source);
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
+    }
+
+    /* One identity per document the file became — the same one each time,
+     * because a file is what identity is derived from. */
+    size_t total = 0;
+    for (size_t i = 0; i < file_count; i++) total += per_file[i];
+    e->ident_pre = calloc(total ? total : 1, sizeof *e->ident_pre);
+    e->ident_data = calloc(total ? total : 1, sizeof *e->ident_data);
+    e->ident_post = calloc(total ? total : 1, sizeof *e->ident_post);
+    e->ident_is_md = calloc(total ? total : 1, 1);
+    if (!e->ident_pre || !e->ident_data || !e->ident_post || !e->ident_is_md) {
+        free(per_file); walked_free(files, file_count); free(source);
+        mdy_documents_free(docs);
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
+    }
+    e->identity_count = total;
+    for (size_t i = 0, at = 0; i < file_count; i++) {
+        for (size_t k = 0; k < per_file[i]; k++, at++) {
+            e->ident_is_md[at] = (char)(files[i].is_md ? 1 : 0);
+            e->ident_pre[at] = files[i].pre ? strdup(files[i].pre) : NULL;
+            e->ident_post[at] = files[i].post ? strdup(files[i].post) : NULL;
+            /* The parsed mapping goes to the FIRST document of the file —
+             * only a .mdy is ever more than one, and a .mdy has no mapping. */
+            e->ident_data[at] = k == 0 ? files[i].data : NULL;
+        }
+        if (per_file[i]) files[i].data = NULL;      /* the engine owns it now */
+    }
+    free(per_file);
+    walked_free(files, file_count);
+
+    int rc = open_documents(e, docs, error, error_len);
     free(source);
     if (rc != 0) return rc;
 
@@ -2313,10 +2373,21 @@ static void close_set(mdy_engine *e) {
 int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
                     char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
-    close_set(e);
+    mdy_documents *docs = e->split ? mdy_split_documents(source, len)
+                                   : mdy_one_document(source, len);
+    if (!docs) { close_set(e); return -1; }
+    return open_documents(e, docs, error, error_len);
+}
 
-    e->source_docs = e->split ? mdy_split_documents(source, len) : mdy_one_document(source, len);
-    if (!e->source_docs) return -1;
+/*
+ * The rest of opening a set, once the documents are in hand — however they
+ * were arrived at. One source split here; a file each, split on its own, when
+ * a directory is the set (open_dir_inner). Takes ownership of `docs`.
+ */
+static int open_documents(mdy_engine *e, mdy_documents *docs,
+                          char *error, size_t error_len) {
+    close_set(e);
+    e->source_docs = docs;
 
     size_t n = mdy_documents_count(e->source_docs);
     e->docs = calloc(n ? n : 1, sizeof *e->docs);
