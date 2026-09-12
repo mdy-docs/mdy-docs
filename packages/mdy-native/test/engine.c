@@ -753,6 +753,73 @@ static void deep_value_checks(void) {
     }
 }
 
+/* ---- a file name the identity writer has to carry --------------------------
+ *
+ * Identity is written as YAML and read back, and it was written with a bare
+ * `snprintf("%s")`. A file called `it"s.mdy` produced `name: "it"s.mdy"`,
+ * which the reader took as `it`: the document's name, ext and path all
+ * truncated at the quote, and nothing said so. A backslash began an escape.
+ *
+ * Not on Windows, where none of these characters is legal in a file name, so
+ * there is nothing there to carry. The expected line is what
+ * `node bin/mdy.js` writes for the same directory.
+ */
+#ifndef _WIN32
+static void odd_name_checks(void) {
+    printf("\n--- engine: a file name identity has to carry ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-name", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "it\"s.mdy", "+++\nk: quote\n+++\nbody\n");
+    write_file(root, "a\\b.mdy", "+++\nk: slash\n+++\nbody\n");
+    write_file(root, "bell\a.mdy", "+++\nk: bell\n+++\nbody\n");
+    write_file(root, "main.mdy",
+        "% $.emit('roll.txt', $.find({ k: { $exists: true } })"
+        ".map((x) => x.k + '=' + x.name + '|' + x.path).join(','))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of oddly named files\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    ok_("a quote, a backslash and a control character all reach the record",
+        emitted("roll.txt") &&
+            strcmp(emitted("roll.txt"),
+                   "slash=a\\b.mdy|a\\b.mdy,"
+                   "bell=bell\a.mdy|bell\a.mdy,"
+                   "quote=it\"s.mdy|it\"s.mdy") == 0,
+        emitted("roll.txt"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+#endif
+
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -1657,6 +1724,9 @@ int main(void) {
     reopen_checks();
     memo_key_checks();
     deep_value_checks();
+#ifndef _WIN32
+    odd_name_checks();
+#endif
     natives_checks();
     resize_checks();
     gc_checks();

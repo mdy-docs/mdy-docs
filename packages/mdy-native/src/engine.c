@@ -1152,6 +1152,80 @@ static int ends_with_ci(const char *s, const char *suffix) {
  * which are part of the text and must come back exactly — `-` strips, plain
  * clips to one, `+` keeps them all.
  */
+/*
+ * One identity field as YAML: `key: "value"`, escaped the way the reader
+ * unescapes it (read_quoted, yaml.c).
+ *
+ * It was an `snprintf("%s")` into a fixed array, which had two ways to go
+ * wrong and took both. A file called `it"s.mdy` produced `name: "it"s.mdy"`,
+ * which the reader took as `it` — the document's name, ext and path all
+ * truncated at the quote, and nothing said so — while a backslash in a name
+ * began an escape and a newline in one ended the line. A long enough path ran
+ * off the end of the array and left the whole mapping unreadable.
+ *
+ * None of this would need escaping if identity were built as VALUES and handed
+ * to mdy_bj_document, rather than written out and read back; that wants a way
+ * to make an mdy_yaml mapping from C, which there is not. Until there is, the
+ * writer and the reader have to agree, and this is the half that can be sure.
+ */
+static void put_quoted(char **buf, size_t *len, size_t *cap,
+                       const char *key, const char *value) {
+    static const char H[] = "0123456789abcdef";
+    size_t klen = strlen(key), vlen = strlen(value);
+    /* Four bytes out for one in is the worst an escape does (`\xNN`). */
+    size_t need = *len + klen + vlen * 4 + 16;
+    if (need > *cap) {
+        size_t want = *cap ? *cap : 256;
+        while (need > want) want *= 2;
+        char *grown = realloc(*buf, want);
+        if (!grown) return;
+        *buf = grown;
+        *cap = want;
+    }
+
+    char *out = *buf + *len;
+    memcpy(out, key, klen); out += klen;
+    *out++ = ':'; *out++ = ' '; *out++ = '"';
+    for (size_t i = 0; i < vlen; i++) {
+        unsigned char c = (unsigned char)value[i];
+        switch (c) {
+            case '\\': *out++ = '\\'; *out++ = '\\'; break;
+            case '"':  *out++ = '\\'; *out++ = '"';  break;
+            case '\n': *out++ = '\\'; *out++ = 'n';  break;
+            case '\t': *out++ = '\\'; *out++ = 't';  break;
+            case '\r': *out++ = '\\'; *out++ = 'r';  break;
+            default:
+                /* Everything else goes out as bytes, UTF-8 included: only what
+                 * the reader would take for something else has to be named. */
+                if (c < 0x20 || c == 0x7f) {
+                    *out++ = '\\'; *out++ = 'x'; *out++ = H[c >> 4]; *out++ = H[c & 15];
+                } else {
+                    *out++ = (char)c;
+                }
+        }
+    }
+    *out++ = '"';
+    *out++ = '\n';
+    *out = '\0';
+    *len = (size_t)(out - *buf);
+}
+
+/* The identity fields that are numbers. Whole ones — a size in bytes, a
+ * picture's width — so `%.0f` is the digits and nothing else. */
+static void put_number(char **buf, size_t *len, size_t *cap,
+                       const char *key, double value) {
+    size_t need = *len + strlen(key) + 48;
+    if (need > *cap) {
+        size_t want = *cap ? *cap : 256;
+        while (need > want) want *= 2;
+        char *grown = realloc(*buf, want);
+        if (!grown) return;
+        *buf = grown;
+        *cap = want;
+    }
+    *len += (size_t)snprintf(*buf + *len, *cap - *len, "%s: %.0f\n", key, value);
+}
+
 static void put_block_scalar(char **buf, size_t *len, size_t *cap,
                              const char *keyname, const char *text, size_t tlen) {
     size_t need = *len + tlen * 2 + strlen(keyname) + 64;
@@ -1665,10 +1739,13 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         /* Identity, kept OUT of the text — see `identity` on the engine. */
         char when[40];
         iso8601_utc(mtime, when, sizeof when);
-        char ident[4096];
-        int ident_len = snprintf(ident, sizeof ident,
-            "name: \"%s\"\next: \"%s\"\nsize: %.0f\nmtime: \"%s\"\npath: \"%s\"\n",
-            name, ext, size, when, rel);
+        char *ident = NULL;
+        size_t ilen = 0, icap = 0;
+        put_quoted(&ident, &ilen, &icap, "name", name);
+        put_quoted(&ident, &ilen, &icap, "ext", ext);
+        put_number(&ident, &ilen, &icap, "size", size);
+        put_quoted(&ident, &ilen, &icap, "mtime", when);
+        put_quoted(&ident, &ilen, &icap, "path", rel);
         /*
          * A picture's dimensions, read from its header. Not decodable —
          * corrupt, truncated, a variant this does not know — is not an error:
@@ -1677,11 +1754,11 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
          */
         if (is_image && bytes) {
             int iw = 0, ih = 0;
-            if (mdy_image_size(bytes, body_len, &iw, &ih) == 0 && ident_len > 0)
-                ident_len += snprintf(ident + ident_len, sizeof ident - (size_t)ident_len,
-                                      "width: %d\nheight: %d\n", iw, ih);
+            if (mdy_image_size(bytes, body_len, &iw, &ih) == 0) {
+                put_number(&ident, &ilen, &icap, "width", iw);
+                put_number(&ident, &ilen, &icap, "height", ih);
+            }
         }
-        (void)ident_len;
 
         size_t need = len + body_len + 4096;
         if (need > cap) {
@@ -1774,7 +1851,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         if (file_count == file_cap) {
             size_t want = file_cap ? file_cap * 2 : 16;
             WalkedFile *grown = realloc(files, want * sizeof *grown);
-            if (!grown) { mdy_yaml_free(own); free(bytes); free(source);
+            if (!grown) { mdy_yaml_free(own); free(ident); free(bytes); free(source);
                           free(listing); walked_free(files, file_count); return -1; }
             files = grown;
             file_cap = want;
@@ -1786,13 +1863,14 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         f->is_md = is_md;
         if (is_yaml) {
             /* A default: the file's own fields win, except `path`. */
-            char only_path[2048];
-            snprintf(only_path, sizeof only_path, "path: \"%s\"\n", rel);
-            f->pre = strdup(ident);
-            f->post = strdup(only_path);
+            char *only_path = NULL;
+            size_t plen = 0, pcap = 0;
+            put_quoted(&only_path, &plen, &pcap, "path", rel);
+            f->pre = ident;
+            f->post = only_path;
         } else {
             f->pre = NULL;
-            f->post = strdup(ident);
+            f->post = ident;
         }
         free(bytes);
     }
