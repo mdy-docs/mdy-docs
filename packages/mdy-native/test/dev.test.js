@@ -11,12 +11,17 @@
  * runs its own broker`); node's dev server has no delivery endpoint at all and
  * answers 404, so there is no shared behaviour to pin and test/cli.test.js is
  * the wrong place.
+ *
+ * The same reasoning has since made this the home for the rest of the
+ * broker-facing side — `mdy dead` talking to a wedged broker, below — for
+ * which node has no equivalent either.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { connect } from 'node:net';
+import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -221,5 +226,49 @@ test('a client that stops reading does not stall the server', async () => {
     stuck.destroy();
   } finally {
     dev.child.kill();
+  }
+});
+
+/*
+ * B16: nothing in http.c had a timeout. A broker that accepts the connection
+ * and then says nothing held `mdy build --publish`, `mdy dead` and the dev
+ * server's registration for as long as it cared to — measured at "still
+ * running after 25 seconds", and it would have been forever, because the recv
+ * loop's only exit was the peer closing.
+ *
+ * MDY_HTTP_TIMEOUT_MS moves the budget, which is what makes this testable in
+ * two seconds instead of fifteen — and is itself the thing being tested, since
+ * a hard limit with no way out is how a fix becomes somebody else's outage.
+ */
+test('a broker that accepts and never answers does not hang the command', async () => {
+  const wedged = createServer(() => { /* say nothing, hold the socket */ });
+  await new Promise((r) => wedged.listen(0, '127.0.0.1', r));
+  const { port } = wedged.address();
+  /* Hold every connection open past the end of the test rather than letting
+   * node close them, which would look like a peer close and not a timeout. */
+  const held = [];
+  wedged.on('connection', (c) => held.push(c));
+
+  try {
+    const started = Date.now();
+    const { code, err } = await new Promise((resolve, reject) => {
+      const child = spawn(bin, ['dead', 'somepage', '--broker', `http://127.0.0.1:${port}`],
+                          { env: { ...process.env, MDY_HTTP_TIMEOUT_MS: '2000' } });
+      let err = '';
+      child.stderr.on('data', (b) => { err += b; });
+      child.stdout.on('data', () => {});
+      child.on('error', reject);
+      child.on('exit', (code) => resolve({ code, err }));
+      setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`it hung:\n${err}`)); }, 30000);
+    });
+    const waited = Date.now() - started;
+
+    assert.notEqual(code, null, 'it exited rather than hanging');
+    assert.ok(waited < 15000, `and gave up on its own budget (${waited}ms)`);
+    assert.match(err, /did not answer within 2000ms/,
+                 'and said that is what happened, not that the answer was malformed');
+  } finally {
+    for (const c of held) c.destroy();
+    wedged.close();
   }
 });

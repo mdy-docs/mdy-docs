@@ -12,6 +12,7 @@
 
 #include "engine.h"
 #include "httpd.h"
+#include "http.h"
 #include "mdyast.h"
 #include "fsx.h"
 #include "binjson.h"
@@ -845,6 +846,54 @@ static void token_checks(void) {
     char even[10];
     ok_("an even-sized buffer is filled, not rejected",
         httpd_secret(even, sizeof even) == 0 && strlen(even) == 8, even);
+}
+
+
+/* ---- the URL a broker is named by ---------------------------------------------
+ *
+ * `parse_url` split host from port on the first colon, so an IPv6 literal —
+ * `http://[::1]:8080`, which is the only way to write one in a URL — asked
+ * the resolver for a host called "[". Half of B16.
+ *
+ * The parser is static, so this goes through http_request, which is the way a
+ * caller meets it anyway. Port 1 is nothing's port: every case here ends in a
+ * refused connection, immediately, and what is being read is the ERROR, which
+ * carries back the authority that was actually parsed.
+ */
+static void url_checks(void) {
+    printf("\n--- engine: the URL a broker is named by ---\n");
+
+    HttpResponse r;
+    struct { const char *url, *want, *what; } cases[] = {
+        { "http://[::1]:1/health",       "[::1]:1",
+          "an IPv6 literal keeps its address and its port" },
+        { "http://[::1]/health",         "[::1]:80",
+          "...and without a port, it is 80" },
+        { "http://127.0.0.1:1/health",   "127.0.0.1:1",
+          "an ordinary host is unchanged" },
+        { "http://127.0.0.1/health",     "127.0.0.1:80",
+          "...and it still defaults to 80" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        memset(&r, 0, sizeof r);
+        int rc = http_request("GET", cases[i].url, NULL, NULL, 0, &r);
+        ok_(cases[i].what, rc == -1 && strstr(r.error, cases[i].want) != NULL, r.error);
+        http_response_free(&r);
+    }
+
+    /* A bracket that never closes is a bad URL, not a host called "[::1:8080". */
+    memset(&r, 0, sizeof r);
+    ok_("an unclosed [ is refused by name",
+        http_request("GET", "http://[::1:8080/health", NULL, NULL, 0, &r) == -1 &&
+            strstr(r.error, "unclosed [") != NULL, r.error);
+    http_response_free(&r);
+
+    /* And the scheme check still stands in front of all of it. */
+    memset(&r, 0, sizeof r);
+    ok_("a URL that is not http:// is refused",
+        http_request("GET", "https://example.com/", NULL, NULL, 0, &r) == -1 &&
+            strstr(r.error, "only http://") != NULL, r.error);
+    http_response_free(&r);
 }
 
 
@@ -2115,6 +2164,7 @@ int main(void) {
     count_checks();
     import_checks();
     token_checks();
+    url_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

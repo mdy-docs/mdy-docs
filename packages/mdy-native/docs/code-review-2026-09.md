@@ -37,7 +37,7 @@ what those checks do not reach.
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14, B18–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B15 | Low | `cli.c` dev server | A refused publish's response is never freed |
-| B16 | Low | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
+| B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
 | B17 | ~~Low~~ **fixed** | `cli.c` / `httpd.c` | Dev server bound every interface, with a clock-seeded token, no request cap and a blocking write |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
 | B29 | ~~Medium~~ **fixed** | `engine.c` natives | `$.count` is missing: a document reading it gets `undefined` |
@@ -45,6 +45,7 @@ what those checks do not reach.
 | B31 | Low | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
 | B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
+| B34 | Low | `cli.c` | `mdy build` frees no collected message: every `$.publish` leaks its name and data |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -730,6 +731,30 @@ The fix in node is one term in one template string — the fingerprint wants
 `documents.length` in it, next to `setSignature`, for the reason the comment
 above `setSignature` already gives about two sets meeting in one process.
 
+#### B34 — `mdy build` frees no collected message (Low)
+
+Found while leak-checking B16's change, and it is not B16's: `leaks` reports
+the same 8 leaks for 416 total leaked bytes at the commit before it.
+
+`collect_message` ([cli.c:359](../src/cli.c#L359)) `strdup`s a name and a
+JSON body per `$.publish` into growable arrays. `cmd_build` never frees them:
+it returns at [cli.c:748](../src/cli.c#L748) — and at 707, 717 and 726 —
+straight past the cleanup. The `messages_clear(...); free(names); free(json)`
+pair that looks like it covers this belongs to document mode
+([974](../src/cli.c#L974), [1018](../src/cli.c#L1018)); `mdy dev` has its own
+([1689](../src/cli.c#L1689)). `cmd_build` has none.
+
+```
+./build/mdy build ../../examples/messaging --out /tmp/x
+  → 8 leaks for 416 total leaked bytes   (ROOT LEAK: malloc in collect_message)
+```
+
+It is bounded by the number of messages one build publishes and reclaimed by
+the process exiting, so it costs a `mdy build` nothing in practice. It is here
+because it is one line, because `mdy dev` shows what that line looks like, and
+because "the cleanup exists, just not on this path" is the shape that gets
+missed twice.
+
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
 `mdy_yaml_parse` rejects any `...` line at indent 0 as "more than one document
@@ -800,11 +825,61 @@ end of the stream, and to stop the line walk there.
 - **B15 — Dev server leaks a refused publish's response**: the
   `r.status < 200 || r.status >= 300` branch never calls
   `http_response_free` ([cli.c:1431–1434](../src/cli.c#L1431-L1434)).
-- **B16 — No socket timeouts** in `http.c` (connect, and a `recv` loop that
-  runs until the peer closes, [152–159](../src/http.c#L152-L159)). A broker
-  that accepts and never answers hangs `mdy build --publish`, `mdy dead` and
-  the dev server's registration forever. `parse_url` also cannot take an IPv6
-  literal (`http://[::1]:8080` → host `[`).
+- **~~B16 — No socket timeouts~~ FIXED.** Measured before: `mdy dead` against
+  a listener that accepts and says nothing was **still running after 25
+  seconds**, and its recv loop's only exit was the peer closing, so it would
+  have been forever. It gives up in 15s now, and says which happened.
+
+  Three waits, all of them unbounded, and each needed a different answer.
+
+  **connect.** There is no socket option for this; the portable way is to go
+  non-blocking, start the connect, wait for writability, then ask `SO_ERROR`
+  whether it actually arrived — a writable socket is not a connected one, and
+  `connect_timeout` ([http.c:130](../src/http.c#L130)) is written out longhand
+  to keep that straight. Reproduced with a listener whose accept queue is full,
+  so its SYNs are dropped: **20s before, 5s after**.
+
+  **recv.** `SO_RCVTIMEO` for each call, and a deadline across the whole
+  exchange, because per-call timeouts do not bound the total — the same lesson
+  as B17's write side, applied the first time here rather than the second.
+  `recv` returning -1 on timeout is also told apart from the peer closing, so
+  a broker that says nothing is not reported as one that said something
+  malformed.
+
+  **send.** The same deadline-on-the-whole-write as
+  [httpd.c](../src/httpd.c#L197), for the same reason
+  ([http.c:201](../src/http.c#L201)).
+
+  Budgets: 5s to connect ([http.c:71](../src/http.c#L71)) and 15s for the
+  exchange, with **`MDY_HTTP_TIMEOUT_MS`** to move the second — a broker across
+  a slow link is a real thing, and a hard limit with no way out is how a fix
+  becomes somebody else's outage. The dev server's poll loop is what sets the
+  ceiling, since registration and heartbeats go through here.
+
+  **The IPv6 literal**, which was the other half. `parse_url` split host from
+  port on the first colon, so `http://[::1]:8080` asked the resolver for a host
+  called `[`. Brackets are what tell an address's colons from a port's; they
+  are handled and stripped ([http.c:176](../src/http.c#L176)), since
+  `getaddrinfo` wants the address without them, and an unclosed `[` is now a
+  named error rather than a strange hostname. Error messages bracket the host
+  again on the way out, because `::1:8080` is not something a reader can parse.
+
+  While in the same loop: the response is capped at 64 MiB
+  ([http.c:69](../src/http.c#L69)) and `realloc`'s result is checked — it went
+  straight back into `buf`, so exhaustion arrived as a write through NULL. That
+  closes one line of B24, not B24.
+
+  Tests: `url_checks` in `test/engine.c` drives the parser through
+  `http_request` (IPv6 with and without a port, an ordinary host, the default
+  80, an unclosed bracket, a non-http scheme), and `test/dev.test.js` runs
+  `mdy dead` against a wedged broker. Both were run against the unfixed code:
+  the parser test fails three ways, and the wedged-broker test hits its 30s
+  kill.
+
+  Not covered by a test: that a hung *connect* gives up at 5s. It is
+  reproducible by hand, with the full-accept-queue trick above, but it needs a
+  listener whose backlog behaviour differs between platforms, and a flaky test
+  is worse than a stated gap.
 - **~~B17 — Dev server exposure.~~ FIXED — four separate things, each with a
   test that fails without it.**
 
