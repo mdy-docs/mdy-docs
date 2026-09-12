@@ -36,11 +36,12 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B18–B20, B24, B26 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B19, B20, B24, B26 | Low | various | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
 | B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
 | B27 | ~~Low~~ **fixed** | `engine.c` | `wrap()` built the program with `snprintf`, whose `int` overflows past 2 GB |
+| B18 | ~~Low~~ **fixed** | `watch.c` | The watcher's O(n²) scan cost 170 ms per poll on 8,000 files; a merge costs 0.1 |
 | B39 | Low | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
@@ -1684,9 +1685,27 @@ end of the stream, and to stop the line walk there.
   unfixed code — a 64 MiB request, where the client gets to write all of it
   without the cap, and a paused reader, where the answer takes 13.7s without
   the response deadline.
-- **B18 — Watcher scan is O(n²)**: `snapshot_changes` looks each file up with a
-  linear `find` ([watch.c:63–91](../src/watch.c#L63-L91)) every 120 ms. Both
-  snapshots come from `fsx_list`, which sorts, so a merge would be linear.
+- **~~B18 — Watcher scan is O(n²)~~ FIXED.** It is a merge now
+  ([watch.c:92](../src/watch.c#L92)). Both snapshots come from `fsx_list` in
+  the order it sorts them — `strcmp`, and `add` appends — so one pass over the
+  two finds every difference. Measured on 8,000 files with nothing changed,
+  which is the every-120-ms case:
+
+  ```
+  before  169.7 ms per scan
+  after     0.1 ms per scan
+  ```
+
+  The watcher polls every 120 ms, so the old scan could not keep up with
+  itself: one pass cost more than the interval it was called on.
+
+  The three cases are the three a merge has — on both sides and the size or
+  mtime moved; only in `after`, so new; only in `before`, so gone — and each
+  path is emitted once, which the old version needed a second lookup to be
+  sure of. Five shapes were compared against the old implementation and give
+  the same **set** of paths; what changed is the order, which is now sorted
+  rather than after-side-then-before-side. Nothing depends on it: the caller
+  prints the paths and rebuilds.
 - **B19 — `mdy build`/`dev`/`dead` accept anything as the positional**: an
   unknown flag or a flag with its value missing falls into `else root = a`
   ([cli.c:668](../src/cli.c#L668), [1914](../src/cli.c#L1914),

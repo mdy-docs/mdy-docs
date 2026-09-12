@@ -60,31 +60,67 @@ void snapshot_free(Snapshot *s) {
     s->count = s->cap = 0;
 }
 
-static const WatchedFile *find(const Snapshot *s, const char *path) {
-    for (size_t i = 0; i < s->count; i++) if (strcmp(s->files[i].path, path) == 0) return &s->files[i];
-    return NULL;
+/*
+ * A MERGE, not two nested scans.
+ *
+ * Both snapshots come from fsx_list in the order it sorts them — strcmp, and
+ * `add` appends — so walking the two together finds every difference in one
+ * pass. This used to look each file up with a linear search, twice: O(n²)
+ * every 120 ms, which on a site of a few thousand files is the watcher's whole
+ * budget spent on strcmp. (B18.)
+ *
+ * The three cases are the three a merge has. A path on both sides changed if
+ * its size or mtime did; one only in `after` is new; one only in `before` is
+ * gone. Each is emitted once, which the old version needed a second lookup to
+ * be sure of.
+ */
+static int emit_path(char **out, size_t *cap, size_t *len, const char *path) {
+    size_t n = strlen(path) + 1;
+    if (*len + n + 1 > *cap) {
+        size_t want = *cap;
+        while (*len + n + 1 > want) want *= 2;
+        char *grown = realloc(*out, want);
+        if (!grown) return -1;
+        *out = grown;
+        *cap = want;
+    }
+    memcpy(*out + *len, path, n);
+    *len += n;
+    return 0;
 }
 
 char *snapshot_changes(const Snapshot *before, const Snapshot *after) {
     size_t cap = 256, len = 0;
     char *out = malloc(cap);
+    if (!out) return NULL;
     int any = 0;
-    const Snapshot *sides[2] = { after, before };
-    for (int side = 0; side < 2; side++) {
-        const Snapshot *a = sides[side], *b = sides[1 - side];
-        for (size_t i = 0; i < a->count; i++) {
-            const WatchedFile *f = &a->files[i];
-            const WatchedFile *other = find(b, f->path);
-            int changed = !other || (side == 0 && (other->size != f->size || other->mtime != f->mtime));
-            if (!changed) continue;
-            if (side == 1 && find(after, f->path)) continue; /* counted from the other side */
-            size_t n = strlen(f->path) + 1;
-            if (len + n + 1 > cap) { while (len + n + 1 > cap) cap *= 2; out = realloc(out, cap); }
-            memcpy(out + len, f->path, n);
-            len += n;
+
+    size_t i = 0, j = 0;
+    while (i < after->count || j < before->count) {
+        int c;
+        if (i >= after->count) c = 1;             /* only in before: gone */
+        else if (j >= before->count) c = -1;      /* only in after: new */
+        else c = strcmp(after->files[i].path, before->files[j].path);
+
+        const char *path = NULL;
+        if (c == 0) {
+            if (after->files[i].size != before->files[j].size ||
+                after->files[i].mtime != before->files[j].mtime)
+                path = after->files[i].path;
+            i++; j++;
+        } else if (c < 0) {
+            path = after->files[i].path;
+            i++;
+        } else {
+            path = before->files[j].path;
+            j++;
+        }
+        if (path) {
+            if (emit_path(&out, &cap, &len, path) != 0) { free(out); return NULL; }
             any = 1;
         }
     }
+
     if (!any) { free(out); return NULL; }
     out[len] = '\0';
     return out;
