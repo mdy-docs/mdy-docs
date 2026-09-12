@@ -139,19 +139,30 @@ static int tiff_size(const uint8_t *b, size_t n, int *w, int *h) {
     else if (memcmp(b, "MM\x00\x2a", 4) == 0) little = 0;
     else return -1;
 
+    /*
+     * The offset is the file's to choose and nothing has checked it yet, so
+     * every sum it takes part in is done in 64 bits. `off + 2` was done in the
+     * width the file gave it: 0xFFFFFFFE wrapped to 0, walked past the bounds
+     * check, and `le16(b + off)` read four gigabytes past the buffer. An
+     * eight-byte .tif anywhere under a site was enough to end the build.
+     *
+     * uint64_t rather than size_t, which is 32 bits under emscripten and would
+     * wrap in exactly the same place.
+     */
     uint32_t off = little ? le32(b + 4) : be32(b + 4);
-    if (off + 2 > n) return -1;
+    if ((uint64_t)off + 2 > n) return -1;
     uint16_t count = little ? le16(b + off) : be16(b + off);
     int found = 0;
     for (uint16_t i = 0; i < count; i++) {
-        size_t e = off + 2 + (size_t)i * 12;
+        uint64_t e = (uint64_t)off + 2 + (uint64_t)i * 12;
         if (e + 12 > n) return -1;
-        uint16_t tag = little ? le16(b + e) : be16(b + e);
-        uint16_t type = little ? le16(b + e + 2) : be16(b + e + 2);
+        const uint8_t *at = b + (size_t)e;      /* e + 12 <= n, so it fits */
+        uint16_t tag = little ? le16(at) : be16(at);
+        uint16_t type = little ? le16(at + 2) : be16(at + 2);
         if (tag != 0x0100 && tag != 0x0101) continue;
         /* SHORT is 3, LONG is 4; either is stored inline in the value field. */
-        uint32_t v = type == 3 ? (little ? le16(b + e + 8) : be16(b + e + 8))
-                               : (little ? le32(b + e + 8) : be32(b + e + 8));
+        uint32_t v = type == 3 ? (little ? le16(at + 8) : be16(at + 8))
+                               : (little ? le32(at + 8) : be32(at + 8));
         if (tag == 0x0100) *w = (int)v; else *h = (int)v;
         if (++found == 2) return 0;
     }

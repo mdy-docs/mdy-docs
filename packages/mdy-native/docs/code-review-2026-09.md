@@ -32,7 +32,7 @@ what those checks do not reach.
 | B8 | ~~Medium~~ **fixed** | `engine.c` directory walk | A file name containing `"` or `\` silently lost its identity |
 | B9 | Medium | `yaml.c` | Text after a closing quote is silently dropped |
 | B10 | ~~Medium~~ **fixed** | `cli.c` dev server | NULL engine dereference on delivery after a failed first build |
-| B11 | Medium | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
+| B11 | ~~Medium~~ **fixed** | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13–B27 | Low | various | Rooting fragility, portability, leaks on error paths, truncation, UB casts |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
@@ -472,14 +472,37 @@ Native only, and not in `../../test/cli.test.js`: the in-process broker is
 this binary's, and `bin/mdy.js`'s dev server has no delivery endpoint at all —
 it answers 404 — so there is no shared behaviour to hold both to.
 
-#### B11 — TIFF dimension reader: 32-bit overflow → out-of-bounds read (Medium)
+#### B11 — TIFF dimension reader: 32-bit overflow → out-of-bounds read (Medium) — FIXED
 
-`tiff_size` checks `off + 2 > n` with `off` a `uint32_t`
-([images.c:142–148](../src/images.c#L142-L148)); `off = 0xFFFFFFFE` wraps the
-sum to 0, passes the check, and `le16(b + off)` reads 4 GB past the buffer.
-The same wrap is in `e = off + 2 + i * 12`. A corrupt or crafted `.tif`
-anywhere in a walked directory crashes the build. Promote to `size_t` before
-adding.
+**Reproduced**: eight bytes — `II*\0` and `0xFFFFFFFE` — in a `.tif` anywhere
+under a site, and `mdy` exits 139. AddressSanitizer calls it a `BUS` on an
+address four gigabytes out, reached from `open_dir_inner`.
+
+**Fixed.** The offset is the file's to choose and nothing has checked it when
+the sum is taken, so every sum it takes part in is done in 64 bits
+([images.c:153](../src/images.c#L153)) — the bounds check and the per-entry
+offset both. `uint64_t` rather than the `size_t` the finding suggested:
+`size_t` is 32 bits under emscripten, and `make wasm` is a real target, so the
+promotion would wrap in exactly the same place there.
+
+The rest of the file was read for the same shape and has none: `jpeg_size`
+does its arithmetic in `size_t` bounded by `n`, `webp_size` reads fixed
+offsets behind length guards, and `isobmff_size` walks with `i + 20 <= n`.
+
+Regression test: `bad_image_checks`
+([test/engine.c:858](../test/engine.c#L858)) — the wrapping offset in both
+byte orders, one just past the end, a directory count that would walk entries
+off it, a header cut short, an empty file, and a real PNG beside them so the
+reader is not merely refusing everything. Each broken one costs the file its
+size and not the build, which is what the walk already promises about a
+picture it cannot decode. On the old `images.c` the test segfaults the test
+binary.
+
+Beyond the test: two hundred `.tif` files of random bytes behind a valid magic
+number, clean under AddressSanitizer and all two hundred still documents. And
+on a real TIFF (`sips`-converted, 200×140) this engine and node agree, which
+they do not on a hand-made minimal one — node's reader wants more of a file
+than the eight bytes a header needs.
 
 #### B12 — Render depth leaks on an out-of-range index (Medium) — FIXED
 
@@ -892,8 +915,9 @@ accumulating.
 3. ~~B4~~: sort hits by a decoded index. Done.
 4. ~~B5~~: call `nis_close` from `close_set` and finish `nis_close`
    (`bpt_free`). Done.
-5. B11, ~~B7~~ (a depth cap — in what BUILDS the trees, not in the thirteen
-   things that walk them), B9, B10, B13 — each a few lines.
+5. ~~B11~~, ~~B7~~ (a depth cap — in what BUILDS the trees, not in the
+   thirteen things that walk them), B9, ~~B10~~, B13 — each a few lines. B9
+   and B13 are what is left.
 6. Delete §2's dead code; add the `check-sites` fixture and a
    `check-generated` target; make the default build warning-free.
 7. Then the structural work in §3, starting with splitting engine.c along its

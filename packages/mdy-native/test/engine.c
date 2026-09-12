@@ -103,6 +103,17 @@ static void write_file(const char *root, const char *rel, const char *text) {
     fclose(f);
 }
 
+static void write_bytes(const char *root, const char *rel, const uint8_t *bytes, size_t n) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s", root, rel);
+    char *slash = strrchr(path, '/');
+    if (slash) { *slash = '\0'; fsx_mkdirp(path); *slash = '/'; }
+    FILE *f = fopen(path, "wb");
+    if (!f) { printf("      cannot write %s\n", path); failures++; return; }
+    if (n) fwrite(bytes, 1, n, f);
+    fclose(f);
+}
+
 static void ok_(const char *what, int cond, const char *detail) {
     printf("  %s  %s\n", cond ? "ok  " : "FAIL", what);
     if (!cond) { printf("      actual %s\n", detail ? detail : "(null)"); failures++; }
@@ -826,6 +837,91 @@ static void odd_name_checks(void) {
     free(root);
 }
 #endif
+
+
+/* Defined further down, with the resize checks it was written for. */
+static void write_png(const char *root, const char *rel, int w, int h);
+
+/* ---- a picture the header reader cannot trust -------------------------------
+ *
+ * A file's dimensions come out of its header, and a header is whatever bytes
+ * are on disk. TIFF puts the offset of its first directory in the first eight
+ * of them, and the bounds check on that offset was `off + 2 > n` with `off` the
+ * width the FILE chose: 0xFFFFFFFE wrapped the sum to zero, walked past the
+ * check, and read four gigabytes beyond the buffer. Eight bytes in a .tif
+ * anywhere under a site ended the build.
+ *
+ * Not decodable is not an error — a corrupt or truncated picture is still a
+ * real file and still gets its record, just without width and height — so what
+ * these assert is that each of them arrives that way rather than not at all.
+ */
+static void bad_image_checks(void) {
+    printf("\n--- engine: a picture the header reader cannot trust ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-image", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    /* The offset that wraps, little- and big-endian; one just past the end;
+     * one directory count that would walk entries off it; and a header cut
+     * short. */
+    static const uint8_t wrap_le[]  = { 'I','I',0x2a,0x00, 0xFE,0xFF,0xFF,0xFF };
+    static const uint8_t wrap_be[]  = { 'M','M',0x00,0x2a, 0xFF,0xFF,0xFF,0xFE };
+    static const uint8_t past[]     = { 'I','I',0x2a,0x00, 0x00,0x00,0x00,0x10 };
+    static const uint8_t count[]    = { 'I','I',0x2a,0x00, 0x08,0x00,0x00,0x00, 0xFF,0xFF };
+    static const uint8_t cut[]      = { 'I','I',0x2a,0x00 };
+    write_bytes(root, "a-wrap.tif", wrap_le, sizeof wrap_le);
+    write_bytes(root, "b-wrap.tif", wrap_be, sizeof wrap_be);
+    write_bytes(root, "c-past.tif", past, sizeof past);
+    write_bytes(root, "d-count.tif", count, sizeof count);
+    write_bytes(root, "e-cut.tif", cut, sizeof cut);
+    write_bytes(root, "f-empty.tif", cut, 0);
+    /* A real one beside them, so the reader is not merely refusing everything. */
+    write_png(root, "g-good.png", 9, 4);
+
+    write_file(root, "main.mdy",
+        "% $.emit('roll.txt', $.find({ ext: { $exists: true } })\n"
+        "%   .filter((x) => x.ext === '.tif' || x.ext === '.png')\n"
+        "%   .map((x) => x.name + '=' + (x.width ?? '-') + 'x' + (x.height ?? '-')).join(','))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of broken pictures\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    ok_("a header the reader cannot trust costs the file its size, not the build",
+        emitted("roll.txt") &&
+            strcmp(emitted("roll.txt"),
+                   "a-wrap.tif=-x-,b-wrap.tif=-x-,c-past.tif=-x-,"
+                   "d-count.tif=-x-,e-cut.tif=-x-,f-empty.tif=-x-,"
+                   "g-good.png=9x4") == 0,
+        emitted("roll.txt"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
 
 
 /* ---- the collector, and values this engine has just built --------------------
@@ -1737,6 +1833,7 @@ int main(void) {
 #endif
     natives_checks();
     resize_checks();
+    bad_image_checks();
     gc_checks();
     broker_checks();
 
