@@ -45,7 +45,7 @@ what those checks do not reach.
 | B31 | Low | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
 | B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
-| B34 | Low | `cli.c` | `mdy build` frees no collected message: every `$.publish` leaks its name and data |
+| B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -731,29 +731,54 @@ The fix in node is one term in one template string — the fingerprint wants
 `documents.length` in it, next to `setSignature`, for the reason the comment
 above `setSignature` already gives about two sets meeting in one process.
 
-#### B34 — `mdy build` frees no collected message (Low)
+#### B34 — `mdy build` had five exits and no two freed the same things (Low) — FIXED
 
-Found while leak-checking B16's change, and it is not B16's: `leaks` reports
-the same 8 leaks for 416 total leaked bytes at the commit before it.
+Found while leak-checking B16's change, and not B16's: the numbers below are
+identical at the commit before it.
 
-`collect_message` ([cli.c:359](../src/cli.c#L359)) `strdup`s a name and a
-JSON body per `$.publish` into growable arrays. `cmd_build` never frees them:
-it returns at [cli.c:748](../src/cli.c#L748) — and at 707, 717 and 726 —
-straight past the cleanup. The `messages_clear(...); free(names); free(json)`
-pair that looks like it covers this belongs to document mode
-([974](../src/cli.c#L974), [1018](../src/cli.c#L1018)); `mdy dev` has its own
-([1689](../src/cli.c#L1689)). `cmd_build` has none.
+Filed as "every `$.publish` leaks its name and data", which was the 416 bytes
+that showed up on `examples/messaging`. Measuring the other exits first, rather
+than fixing the one, turned out to matter — **the failure paths leak the whole
+engine**:
 
-```
-./build/mdy build ../../examples/messaging --out /tmp/x
-  → 8 leaks for 416 total leaked bytes   (ROOT LEAK: malloc in collect_message)
-```
+| `mdy build` … | before | after |
+| --- | --- | --- |
+| a site that publishes (`examples/messaging`) | 8 leaks, 416 B | 0 |
+| a site that does not (`examples/blog`) | 0 | 0 |
+| a directory that is not there | 787 leaks, 69,248 B | 0 |
+| an entry document that is not there | 793 leaks, 70,656 B | 0 |
+| a render that throws | 1,082 leaks, 118,416 B | 0 |
 
-It is bounded by the number of messages one build publishes and reclaimed by
-the process exiting, so it costs a `mdy build` nothing in practice. It is here
-because it is one line, because `mdy dev` shows what that line looks like, and
-because "the cleanup exists, just not on this path" is the shape that gets
-missed twice.
+`cmd_build` had five exits. The engine survived two of them, `out_abs` four,
+and the messages all five:
+
+| exit | `e` | `out_abs` | `messages` |
+| --- | --- | --- | --- |
+| `open_dir` failed | leaked | leaked | (empty) |
+| entry not found | leaked | leaked | (empty) |
+| render failed | leaked | leaked | leaked |
+| an output could not be written | freed | leaked | leaked |
+| success | freed | freed | leaked |
+
+So the fix is not a `free` added to one path; it is the shape §3 names under
+*Long functions with several exits*, and the one `render_tree_out` was given
+for B3 and B12. `cmd_build` has one exit now
+([cli.c:760](../src/cli.c#L760)), `rc` carries the answer to it
+([697](../src/cli.c#L697)), and the cleanup is written once — the third copy
+in this file, after `mdy dev`'s ([1707](../src/cli.c#L1707)) and document
+mode's, and the first that runs on every path rather than some.
+
+Every message and exit code was compared before and after: identical.
+
+**A note on how this was measured**, because it went wrong once. The first
+before/after run reported 0 leaks at HEAD, which would have meant the leak was
+mine. It was a stale binary: `git stash` restored `cli.c` within the same
+second as the existing `build/mdy`, so `make` skipped the relink and the
+"HEAD" measurement was of the fixed code. `rm -f build/mdy` before each build
+is what the table above was produced with. This is the third time in this
+review that a same-second `make` has produced a result that described a
+different binary — see §3's Makefile note, where it cost a phantom FAIL and a
+phantom PASS.
 
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 

@@ -356,6 +356,7 @@ static void collect_binary(void *ud, const char *path, const uint8_t *bytes, siz
 /* ---- messages a build holds ---------------------------------------------------- */
 
 typedef struct { char **names; char **json; size_t count, cap; } Messages;
+static void messages_clear(Messages *m);   /* cmd_build is above its definition */
 static void collect_message(void *ud, const char *name, const char *data_json, size_t doc_index) {
     (void)doc_index;
     Messages *m = ud;
@@ -684,6 +685,17 @@ static int cmd_build(int argc, char **argv) {
     Progress progress = { .enabled = !quiet && on_terminal(stderr) };
     BuildSink sink = { out_abs, quiet, &progress, 0, 0, 0 };
     Messages messages = { 0 };
+    /*
+     * One exit, for the reason render_tree_out has one: this had five, and no
+     * two of them freed the same things. The engine survived two, `out_abs`
+     * survived four, and the messages a build collected survived ALL of them —
+     * so every `$.publish` leaked its name and its data, on the success path
+     * as much as on the failures (B34). `mdy dev` and document mode each
+     * already wrote this cleanup out; this is the third copy, and the first
+     * one that runs.
+     */
+    int rc = 1;
+    char *html = NULL;
 
     mdy_engine_rotate_memo();      /* a build is a memo generation */
     mdy_engine *e = mdy_engine_new();
@@ -694,7 +706,7 @@ static int cmd_build(int argc, char **argv) {
     if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
         progress_finish(&progress);
         fprintf(stderr, "%s%s%s\n", RED_OPEN(), err, RED_CLOSE());
-        return 1;
+        goto done;
     }
     mdy_engine_set_context_bool(e, "drafts", drafts);
     mdy_engine_set_context_bool(e, "future", future);
@@ -704,26 +716,27 @@ static int cmd_build(int argc, char **argv) {
         progress_finish(&progress);
         fprintf(stderr, "%sentry script not found at \"%s\" (looked among %zu document(s) under %s)%s\n",
                 RED_OPEN(), entry, mdy_engine_count(e), root, RED_CLOSE());
-        return 1;
+        goto done;
     }
     mdy_engine_on_emit(e, build_page, &sink);
     mdy_engine_on_binary(e, build_image, &sink);
     mdy_engine_on_publish(e, collect_message, &messages);
 
-    char *html = mdy_engine_render(e, (size_t)at, err, sizeof err);
+    html = mdy_engine_render(e, (size_t)at, err, sizeof err);
     if (!html) {
         progress_finish(&progress);
         fprintf(stderr, "%s%s%s\n", RED_OPEN(), err, RED_CLOSE());
-        return 1;
+        goto done;
     }
     free(html);
+    html = NULL;
 
     /* Every root's static/, imports first — so the site's own copy of a name
      * is the one that survives. */
     size_t roots = mdy_engine_root_count(e);
     for (size_t i = 0; i < roots; i++) copy_static(mdy_engine_root_at(e, i), &sink);
     progress_finish(&progress);
-    if (sink.failed) { mdy_engine_free(e); return 1; }
+    if (sink.failed) goto done;
 
     if (!quiet) {
         printf("%s✓%s built %s%d%s page(s) → %s%s%s %s(%dms)%s\n",
@@ -743,9 +756,15 @@ static int cmd_build(int argc, char **argv) {
                    DIM_OPEN(), messages.count, DIM_CLOSE());
         }
     }
+    rc = 0;
+done:
     mdy_engine_free(e);
+    messages_clear(&messages);
+    free(messages.names);
+    free(messages.json);
     free(out_abs);
-    return 0;
+    free(html);
+    return rc;
 }
 
 /* ---- mdy [path]: one document --------------------------------------------------- */
@@ -850,7 +869,6 @@ static char *load_context(mdy_engine *e, const DocOptions *o) {
 /* One render pass. Writes the output to *out (caller frees) or returns an
  * error message to fail with; never exits, so a watch can survive it. */
 static void publish_document(mdy_engine *e, Messages *m);
-static void messages_clear(Messages *m);
 
 /* A parser warning, as the JavaScript's vfile would carry it, to stderr:
  * `mdy: warning: line 12: <script> is not allowed, dropping it (sanitize)`. */
