@@ -37,7 +37,7 @@ what those checks do not reach.
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
 | B18–B27 | Low | various | Portability, leaks on error paths, truncation, UB casts |
-| B15 | Low | `cli.c` dev server | A refused publish's response is never freed |
+| B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
 | B17 | ~~Low~~ **fixed** | `cli.c` / `httpd.c` | Dev server bound every interface, with a clock-seeded token, no request cap and a blocking write |
 | B28 | Low | `yaml.c` | A trailing `...` document-end marker is refused as "more than one document" |
@@ -47,6 +47,7 @@ what those checks do not reach.
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
 | B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
+| B35 | Low | `cli.c` dev server | The publish dedupe list grows for the life of the process and is never freed |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -781,6 +782,26 @@ review that a same-second `make` has produced a result that described a
 different binary — see §3's Makefile note, where it cost a phantom FAIL and a
 phantom PASS.
 
+#### B35 — the dev server's dedupe list only grows (Low)
+
+Found while measuring B15, and left alone deliberately: the 24 blocks that are
+the same before and after that fix.
+
+`dev_send` fingerprints each message as `name\1json` and keeps it in `d->sent`
+([cli.c:1441](../src/cli.c#L1441)) so a rebuild does not re-send what it
+already sent. Nothing ever removes one, and `mdy dev` has no exit path that
+frees the array — it runs until it is killed. So the list grows by one entry
+per distinct message for as long as the server is up, and `leaks` counts every
+entry.
+
+This is retention, not a leak: dropping an entry means re-sending its message,
+which is the thing the list exists to prevent. It is on the list because
+"grows without bound in a process meant to run all day" is worth someone
+deciding about rather than discovering — a session that publishes a message
+per save, with the data changing each time, accumulates a fingerprint per save.
+A bound (keep the last N, or key on the message name and let the newest win)
+changes delivery semantics, which is why it is a finding and not a fix.
+
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
 `mdy_yaml_parse` rejects any `...` line at indent 0 as "more than one document
@@ -877,9 +898,41 @@ end of the stream, and to stop the line walk there.
   watching the suite fail.
 
   `strftime` now appears once in this codebase, with a format every libc has.
-- **B15 — Dev server leaks a refused publish's response**: the
-  `r.status < 200 || r.status >= 300` branch never calls
-  `http_response_free` ([cli.c:1431–1434](../src/cli.c#L1431-L1434)).
+- **~~B15 — Dev server leaks a refused publish's response.~~ FIXED.** The
+  refusal branch never called `http_response_free`, so a broker answering a
+  publish with anything but a 2xx kept its response body for the life of the
+  process. That is not one leak: it is one per refused message per rebuild, in
+  a server meant to run all day.
+
+  Reproduced against a broker that accepts, registers, and answers every
+  `POST /pub/*` with a 500 and a 4 KB body. Ten rebuilds, same binary but for
+  `cli.c`:
+
+  | | before | after |
+  | --- | --- | --- |
+  | total | 30 leaks, 47,360 B | 20 leaks, **1,280 B** |
+  | from `http_request` (the refused bodies) | 12 | **0** |
+  | from `dev_send` (see B35) | 24 | 24 |
+
+  The response is zeroed at its declaration and freed on every path
+  ([cli.c:1487](../src/cli.c#L1487)). The zeroing is what lets the free be
+  unconditional: the encode can fail before `http_request` has touched `r` at
+  all. The old expression avoided reading `r.error` in that case by testing
+  `bytes` first — which is sound, since `mdy_engine_encode_json` NULLs it
+  before anything else, but it is sound *somewhere else*, and a cleanup that
+  depends on a contract two files away is a cleanup waiting to be wrong.
+
+  The `mdy dev` health probe had the same shape one guard weaker —
+  `if (r.status) http_response_free(&r)` left behind the body of anything whose
+  status line did not parse. Also unconditional now
+  ([cli.c:1999](../src/cli.c#L1999)). The other four `http_request` callers are
+  fine: each either `exit`s or calls `broker_fail`, which exits.
+
+  `check-dev` had no coverage of the `--broker` path at all — every other test
+  there uses the in-process broker — which is how a missing `free` on it went
+  unnoticed. There is a refusing-broker test now. It cannot assert a leak, but
+  it exercises the path, which is what a deleted `free` needs in order to be
+  noticed at all.
 - **~~B16 — No socket timeouts~~ FIXED.** Measured before: `mdy dead` against
   a listener that accepts and says nothing was **still running after 25
   seconds**, and its recv loop's only exit was the peer closing, so it would

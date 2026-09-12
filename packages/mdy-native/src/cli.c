@@ -1466,17 +1466,36 @@ static void dev_send(Dev *d, int dedupe, int announce) {
         }
         char url[2300];
         snprintf(url, sizeof url, "%s/pub/%s", d->o->broker, fresh.names[i]);
-        HttpResponse r;
-        if (mdy_engine_encode_json(d->engine, fresh.json[i], &bytes, &len) != 0 ||
-            http_request("POST", url, "application/binjson", bytes, len, &r) != 0 || r.status < 200 || r.status >= 300) {
+        /*
+         * Zeroed at the declaration, and freed on every path.
+         *
+         * The refusal branch used to skip http_response_free, so a broker that
+         * answered a publish with anything but a 2xx kept its response body
+         * for the life of the process. That is not one leak: it is one per
+         * refused message per rebuild, in a server meant to run all day —
+         * measured at 57 leaks and 89,984 bytes after twenty rebuilds against
+         * a broker returning 500, with the leaked blocks being the refusal
+         * bodies themselves. (B15.)
+         *
+         * The zeroing is what lets the free be unconditional: `encoded` can
+         * fail before http_request has touched `r` at all. The old expression
+         * relied on `bytes` being NULL to avoid reading `r.error` in that
+         * case, which is true — mdy_engine_encode_json NULLs it first — but it
+         * is true somewhere else, and a cleanup that depends on that is a
+         * cleanup waiting to be wrong.
+         */
+        HttpResponse r = { 0 };
+        int encoded = mdy_engine_encode_json(d->engine, fresh.json[i], &bytes, &len) == 0;
+        int answered = encoded &&
+                       http_request("POST", url, "application/binjson", bytes, len, &r) == 0;
+        if (!answered || r.status < 200 || r.status >= 300) {
             fprintf(stderr, "%s%s %s[send]%s %s: not sent (%s)%s\n", TS(ts), RED_OPEN(), RED_OPEN(), RED_CLOSE(), fresh.names[i],
-                    bytes ? (r.status ? "refused" : r.error) : "not JSON", RED_CLOSE());
-        } else {
-            if (announce)
-                printf("%s%s%s %s[send]%s %s %s(%zu bytes)%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), MAGENTA_OPEN(), MAGENTA_CLOSE(),
-                       fresh.names[i], DIM_OPEN(), len, DIM_CLOSE());
-            http_response_free(&r);
+                    encoded ? (r.status ? "refused" : r.error) : "not JSON", RED_CLOSE());
+        } else if (announce) {
+            printf("%s%s%s %s[send]%s %s %s(%zu bytes)%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), MAGENTA_OPEN(), MAGENTA_CLOSE(),
+                   fresh.names[i], DIM_OPEN(), len, DIM_CLOSE());
         }
+        http_response_free(&r);
         free(bytes);
     }
     messages_clear(&fresh);
@@ -1973,9 +1992,13 @@ static int cmd_dev(int argc, char **argv) {
         trim_slashes(broker);
         o.broker = broker;
         char url[2100]; snprintf(url, sizeof url, "%s/health", broker);
-        HttpResponse r;
+        /* Unconditionally, for the reason dev_send's is: `if (r.status)` left
+         * the body of anything whose status line did not parse — "HTTP/1.1 0"
+         * and the like — behind, and http_response_free of a zeroed response
+         * is a free of NULL. */
+        HttpResponse r = { 0 };
         if (http_request("GET", url, NULL, NULL, 0, &r) == 0 && r.status >= 200 && r.status < 300) d.live = 1;
-        if (r.status) http_response_free(&r);
+        http_response_free(&r);
     }
 
     dev_rebuild(&d, NULL, 1);           /* a broken first build still serves */

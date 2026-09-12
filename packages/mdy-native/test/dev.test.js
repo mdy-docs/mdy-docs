@@ -295,3 +295,68 @@ test('a broker that accepts and never answers does not hang the command', async 
     wedged.close();
   }
 });
+
+/*
+ * A broker that refuses. Every test above uses the in-process broker, so the
+ * --broker path — registration, publish, refusal — had no coverage at all,
+ * which is where B15 lived: the refusal branch never freed the response, so a
+ * dev server kept every refused body for the life of the process. Measured at
+ * 47,360 bytes after ten rebuilds; 1,280 after, and what is left is the
+ * dedupe list, which is retained on purpose (B35).
+ *
+ * A leak is not something node can assert, so what this pins is the path: the
+ * refusal is reported, and the server goes on serving. Without the path being
+ * exercised at all, the free could be deleted again and nothing would notice.
+ */
+test('a broker that refuses a publish is reported, and the server goes on', async () => {
+  const refusals = [];
+  const broker = createServer((req, res) => {
+    req.resume();
+    if (req.url.startsWith('/health')) { res.writeHead(200); return res.end('ok'); }
+    if (req.method === 'PUT')          { res.writeHead(200); return res.end('ok'); }
+    if (req.url.startsWith('/pub/'))   {
+      refusals.push(req.url);
+      res.writeHead(500);
+      return res.end('x'.repeat(4096));   /* a body big enough to see if it is kept */
+    }
+    res.writeHead(404); res.end('no');
+  });
+  await new Promise((r) => broker.listen(0, '127.0.0.1', r));
+  const brokerPort = broker.address().port;
+
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'),
+    "% $.publish('handlers.thing', { n: 1 })\n= main\n");
+  writeFileSync(join(root, 'thing.mdy'),
+    '+++\nmessageName: handlers.thing\n+++\n= handler\n');
+
+  const child = spawn(bin, ['dev', root, '--port', '0', '--broker', `http://127.0.0.1:${brokerPort}`]);
+  let log = '';
+  child.stdout.on('data', (b) => { log += b; });
+  child.stderr.on('data', (b) => { log += b; });
+  const until = async (re, ms = 15000) => {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      if (re.test(log)) return;
+      if (child.exitCode !== null) throw new Error(`the server exited\n${log}`);
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${re}\n${log}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+
+  try {
+    await until(/not sent \(refused\)/);
+    assert.ok(refusals.length >= 1, 'the broker saw the publish');
+    assert.match(log, /handlers\.thing: not sent \(refused\)/,
+                 'and the refusal names the message and why');
+
+    /* Still alive, still rebuilding: a refused publish is not fatal. */
+    writeFileSync(join(root, 'main.mdy'),
+      "% $.publish('handlers.thing', { n: 2 })\n= main again\n");
+    await until(/rendered/);
+    assert.equal(child.exitCode, null, 'the server is still running');
+  } finally {
+    child.kill();
+    broker.close();
+  }
+});
