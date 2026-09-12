@@ -220,6 +220,28 @@ int main(void) {
      * walks the value afterwards. It is refused, like everything else this
      * reader will not guess at.
      */
+    /*
+     * A quoted scalar ends at its closing quote. `title: "Hello" world` came
+     * back as `Hello` with `world` dropped, and `name: "it"s.mdy"` as `it` —
+     * the one place this reader guessed, against its own contract. What may
+     * follow is nothing, or a comment, and the same question is asked of a
+     * quoted KEY against the `:` it was measured by. node's reader refuses
+     * every one of these too.
+     */
+    printf("--- mdyyaml: where a quoted scalar ends ---\n");
+    refuses("text after a quoted value", "title: \"Hello\" world",
+            "line 1: unexpected text after a quoted scalar");
+    refuses("...single-quoted too", "title: 'Hi' there",
+            "line 1: unexpected text after a quoted scalar");
+    refuses("...and on the line a multi-line one closes on", "title: \"multi\n  line\" tail",
+            "line 2: unexpected text after a quoted scalar");
+    refuses("text after a quoted key", "\"a\"x: v",
+            "line 1: unexpected text after a quoted key");
+    check("...but a comment after one is not text", "title: \"a\" # comment", "{\"title\":\"a\"}");
+    check("...nor is trailing space", "title: \"a\"   ", "{\"title\":\"a\"}");
+    check("...nor a space before a key's colon", "\"a\" : v", "{\"a\":\"v\"}");
+    check("...nor a colon inside the key itself", "\"a: b\": v", "{\"a: b\":\"v\"}");
+
     printf("--- how deep a flow collection gets ---\n");
     {
         size_t asked = 200000;

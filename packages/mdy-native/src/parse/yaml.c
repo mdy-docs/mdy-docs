@@ -730,6 +730,26 @@ static int is_seq_item(const Line *l) {
  * line, skipping over anything quoted or bracketed. Returns 0 when the line
  * does not open a mapping — `a:b` is a plain scalar, not a key.
  */
+/*
+ * A quoted scalar ENDS at its closing quote, and what may follow on that line
+ * is nothing, or a comment. `title: "Hello" world` used to come back as
+ * `Hello` with `world` dropped on the floor, and `name: "it"s.mdy"` as `it` —
+ * which is exactly what this file says it will not do: "a parser that
+ * silently mis-reads data is worse than one that refuses it". node's reader
+ * refuses both.
+ */
+static int nothing_after(const Line *l, size_t from) {
+    while (from < l->len && is_space(l->s[from])) from++;
+    return from >= l->len || l->s[from] == '#';
+}
+
+/* The same question between a quoted KEY and the `:` it was measured against,
+ * where a comment is not one of the answers — `key_end` stops at a `#`. */
+static int spaces_between(const Line *l, size_t from, size_t to) {
+    for (; from < to && from < l->len; from++) if (!is_space(l->s[from])) return 0;
+    return 1;
+}
+
 static size_t key_end(const Line *l) {
     size_t i = 0;
     int depth = 0;
@@ -798,6 +818,11 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
     if (c == '"' || c == '\'') {
         size_t end_line = 0, end_col = 0;
         mdy_yaml_node *n = read_quoted(p, line, col, c, &end_line, &end_col);
+        if (!n) return NULL;
+        if (!nothing_after(&p->lines[end_line], end_col)) {
+            fail(p, end_line, "unexpected text after a quoted scalar");
+            return NULL;
+        }
         p->at = end_line + 1;
         return n;
     }
@@ -860,6 +885,12 @@ static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
             size_t el = 0, ec = 0;
             kn = read_quoted(p, at, 0, l->s[0], &el, &ec);
             if (!kn) goto map_fail;
+            /* `"a"x: v` measured its key against a `:` that is not this
+             * scalar's — the same guess, one line up from the value. */
+            if (el != at || !spaces_between(l, ec, ke)) {
+                fail(p, at, "unexpected text after a quoted key");
+                goto map_fail;
+            }
             ks = kn->as.string.s;
             klen = kn->as.string.len;
         } else {

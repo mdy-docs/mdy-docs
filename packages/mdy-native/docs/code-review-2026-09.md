@@ -30,7 +30,7 @@ what those checks do not reach.
 | B6 | ~~Medium~~ **fixed** | `engine.c` render memo | The two-generation memo never hit across builds |
 | B7 | ~~Medium~~ **fixed** | parser, writer, engine, YAML | Unbounded recursion: crafted input crashed the process |
 | B8 | ~~Medium~~ **fixed** | `engine.c` directory walk | A file name containing `"` or `\` silently lost its identity |
-| B9 | Medium | `yaml.c` | Text after a closing quote is silently dropped |
+| B9 | ~~Medium~~ **fixed** | `yaml.c` | Text after a closing quote was silently dropped |
 | B10 | ~~Medium~~ **fixed** | `cli.c` dev server | NULL engine dereference on delivery after a failed first build |
 | B11 | ~~Medium~~ **fixed** | `images.c` | TIFF header reader: 32-bit overflow → out-of-bounds read |
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
@@ -93,7 +93,7 @@ are indexed by document position (`2357`, `2378`, `2419`), so every document
 after that file gets the identity of its neighbour.
 
 `---` at the top of a YAML file is a common convention, and the YAML reader
-itself accepts it ([yaml.c:1072–1075](../src/parse/yaml.c#L1072-L1075)).
+itself accepts it ([yaml.c:1103–1106](../src/parse/yaml.c#L1103-L1106)).
 
 Repro (site with `data.yaml` = `---\ntitle: Data file`, `zed.yaml`, and a
 `main.mdy` that lists `$.find({})`):
@@ -427,15 +427,33 @@ truncated at the quote. Node reports `it"s.mdy`. A backslash in a name would
 be read as an escape. Either escape the values or stop encoding identity as
 text (see §3, *Identity as text*).
 
-#### B9 — YAML: trailing text after a closing quote is dropped (Medium)
+#### B9 — YAML: trailing text after a closing quote is dropped (Medium) — FIXED
 
-After `read_quoted` returns, `parse_value_from` advances to the next line
-without checking what followed the quote
-([yaml.c:798–803](../src/parse/yaml.c#L798-L803)). `title: "Hello" world`
-parses as `Hello`; `name: "it"s.mdy"` as `it`. The file's own contract is
-"where a construct is not supported it says so … a parser that silently
-mis-reads data is worse than one that refuses it" — this is the one place it
-guesses.
+**Fixed.** A quoted scalar ends at its closing quote, and what may follow on
+that line is nothing, or a comment — `nothing_after`
+([yaml.c:741](../src/parse/yaml.c#L741)), checked where `parse_value_from`
+used to walk straight on to the next line. `title: "Hello" world` is refused
+with `unexpected text after a quoted scalar` rather than coming back as
+`Hello`, which is what this file says of itself: "a parser that silently
+mis-reads data is worse than one that refuses it".
+
+**The same hole was one line up, in the KEY.** `"a"x: v` came back as
+`{"a": "v"}`: `key_end` skips a quoted key and then scans on for a `:`, so the
+colon it measured against was not this scalar's. A quoted key now has to be
+followed by spaces and then that colon
+([yaml.c:891](../src/parse/yaml.c#L891)) — a comment is not one of the
+answers there, because `key_end` already stops at a `#`.
+
+Every case was put to node's reader as well, and it refuses all three.
+Regression tests in `test/yaml.c`
+([231](../test/yaml.c#L231)) cover both, the line a MULTI-line quoted scalar
+closes on, and what must keep working: a comment after a quoted scalar in
+either quote style, trailing space, a space before a key's colon, and a colon
+inside the key itself.
+
+The corpus harness is the evidence that this is a tightening and not a
+breakage: 440/440 YAML blocks across 8.4 MB still read identically to node,
+and `check-sites` is byte-identical on all five sites.
 
 #### B10 — `mdy dev`: crash on delivery after a failed first build (Medium) — FIXED
 
@@ -626,7 +644,7 @@ reach it.
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
 `mdy_yaml_parse` rejects any `...` line at indent 0 as "more than one document
-in a stream" ([yaml.c:1068–1069](../src/parse/yaml.c#L1068-L1069)), but a `...`
+in a stream" ([yaml.c:1099–1100](../src/parse/yaml.c#L1099-L1100)), but a `...`
 that CLOSES the one document — with nothing after it — is ordinary
 single-document YAML, and the line just below already makes the symmetric
 allowance for a leading `---`. So `a: 1\n...\n` is refused where node reads
@@ -701,7 +719,7 @@ end of the stream, and to stop the line walk there.
 - **B21 — Undefined behaviour on double→integer casts** performed *before* the
   range check: [engine.c:541](../src/engine.c#L541), [ingest.c:22](../src/ingest.c#L22),
   [bjval.c:119](../src/bjval.c#L119), [html.c:220](../src/parse/html.c#L220),
-  [ast.c:251](../src/parse/ast.c#L251), [yaml.c:1182](../src/parse/yaml.c#L1182).
+  [ast.c:251](../src/parse/ast.c#L251), [yaml.c:1213](../src/parse/yaml.c#L1213).
   `.inf`/`.nan` from YAML reach `(int64_t)v` on the ingest path. Harmless on
   x86-64 and arm64 today; reorder the test.
 - **B22 — `match_port` calls `strtoul` on a length-delimited slice**
@@ -916,8 +934,8 @@ accumulating.
 4. ~~B5~~: call `nis_close` from `close_set` and finish `nis_close`
    (`bpt_free`). Done.
 5. ~~B11~~, ~~B7~~ (a depth cap — in what BUILDS the trees, not in the
-   thirteen things that walk them), B9, ~~B10~~, B13 — each a few lines. B9
-   and B13 are what is left.
+   thirteen things that walk them), ~~B9~~, ~~B10~~, B13 — each a few lines.
+   B13 is what is left.
 6. Delete §2's dead code; add the `check-sites` fixture and a
    `check-generated` target; make the default build warning-free.
 7. Then the structural work in §3, starting with splitting engine.c along its
