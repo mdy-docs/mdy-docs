@@ -8,10 +8,9 @@
 # `real/` is not here: that group is whatever markdown is on the machine.
 #
 #   commonmark                 6
-#   ext-addendum               5
 #   ext-admonitions            5
 #   ext-footnotes              1
-#   ext-permissive-autolinks   5
+#   ext-permissive-autolinks   3
 #   ext-subscripts             4
 #   ext-superscripts           1
 #   ext-tables                 2
@@ -22,11 +21,6 @@ commonmark/0299.md
 commonmark/0601.md
 commonmark/0605.md
 commonmark/0626.md
-ext-addendum/0000.md
-ext-addendum/0002.md
-ext-addendum/0003.md
-ext-addendum/0004.md
-ext-addendum/0005.md
 ext-admonitions/0000.md
 ext-admonitions/0001.md
 ext-admonitions/0002.md
@@ -36,8 +30,6 @@ ext-footnotes/0011.md
 ext-permissive-autolinks/0002.md
 ext-permissive-autolinks/0004.md
 ext-permissive-autolinks/0007.md
-ext-permissive-autolinks/0008.md
-ext-permissive-autolinks/0012.md
 ext-subscripts/0000.md
 ext-subscripts/0001.md
 ext-subscripts/0002.md

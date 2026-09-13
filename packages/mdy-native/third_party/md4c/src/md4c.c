@@ -3510,10 +3510,13 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                     const CHAR* suffix;
                     SZ suffix_size;
                 } scheme_map[] = {
-                    /* In the order from the most frequently used, arguably. */
+                    /* GFM's extended autolink covers http and https, and
+                     * nothing else with a scheme; see the "Autolinks
+                     * (extension)" section of the GFM spec. `ftp` was here as
+                     * well and made MD_DIALECT_GITHUB link something GitHub
+                     * does not. */
                     { _T("http"), 4,    _T("//"), 2 },
-                    { _T("https"), 5,   _T("//"), 2 },
-                    { _T("ftp"), 3,     _T("//"), 2 }
+                    { _T("https"), 5,   _T("//"), 2 }
                 };
                 int scheme_index;
 
@@ -6283,7 +6286,6 @@ static const TAG s6[] = { X("search"), X("section"), X("summary"), Xend };
 static const TAG t6[] = { X("table"), X("tbody"), X("td"), X("tfoot"), X("th"),
                           X("thead"), X("title"), X("tr"), X("track"), Xend };
 static const TAG u6[] = { X("ul"), Xend };
-static const TAG v6[] = { X("video"), Xend };
 static const TAG xx[] = { Xend };
 
 #undef X
@@ -6299,7 +6301,7 @@ md_is_html_block_start_condition(MD_CTX* ctx, OFF beg)
      * tree to speed-up the search. */
     static const TAG* map6[26] = {
         a6, b6, c6, d6, xx, f6, xx, h6, i6, xx, xx, l6, m6,
-        n6, o6, p6, xx, xx, s6, t6, u6, v6, xx, xx, xx, xx
+        n6, o6, p6, xx, xx, s6, t6, u6, xx, xx, xx, xx, xx
     };
     OFF off = beg + 1;
     int i;
