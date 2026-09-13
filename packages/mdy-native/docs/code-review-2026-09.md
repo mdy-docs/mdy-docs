@@ -36,7 +36,7 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B20 | Low | parser | Silent truncation into fixed buffers: ids, headings, classes, hrefs, tables | Portability, leaks on error paths, truncation, UB casts |
+| B20 | ~~Low~~ **fixed** | parser | Silent truncation into fixed buffers: ids, headings, tables, URLs per paragraph | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
 | B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
@@ -1719,23 +1719,50 @@ end of the stream, and to stop the line walk there.
   Three tests in `test/dev.test.js` — the unknown option across all three
   commands, the missing value across four flags, and the valid usage plus `--`.
   Reverting fails five checks.
-- **B20 — Silent truncation into fixed buffers, all parity divergences with no
-  warning**: heading ids over 255 bytes (`unique[256]`,
-  [block.c:329](../src/parse/block.c#L329)) and heading text over 1 KB
-  ([1396](../src/parse/block.c#L1396)); class names over 127 bytes
-  ([549](../src/parse/block.c#L549)); attribute names over 255 (`lowered`,
-  [497](../src/parse/block.c#L497), which then skips the lowercasing
-  entirely); page hrefs over 1 KB, which skip normalisation *and* the
-  reference collection ([530–537](../src/parse/block.c#L530-L537),
-  [inline.c:707–714](../src/parse/inline.c#L707-L714)); tables with more than
-  64 columns ([1074](../src/parse/block.c#L1074)); more than 512 URLs in one
-  paragraph ([inline.c:160](../src/parse/inline.c#L160)); tag hrefs
-  ([inline.c:458](../src/parse/inline.c#L458)), footnote ids
-  ([footnote.c:33](../src/parse/footnote.c#L33)), TOC hrefs
-  ([engine.c:1590](../src/engine.c#L1590)), identity records over 4 KB
-  ([engine_walk.c:767](../src/engine_walk.c#L767), where a truncated `ident_len` can
-  also underflow the second `snprintf`'s size). Each is unlikely alone; none
-  says anything when it happens.
+- **B20 — Silent truncation into fixed buffers.** FOUR FIXED, the rest were
+  already fine or already gone. Each one was measured against `node
+  bin/mdy.js`, which has no such limits, rather than taken from the list:
+
+  | | limit | against node |
+  | --- | --- | --- |
+  | heading id | `char unique[256]` | **differed** — fixed |
+  | the slug's source | `char rendered[1024]` | **differed** — fixed |
+  | table columns | `starts`/`lens`/`align[64]` | **differed** — fixed |
+  | URLs per paragraph | `MDY_MAX_URLS 512` | **differed** — fixed |
+  | class name | `char one[128]` | same |
+  | page href | `char tidy[1024]` | same |
+  | footnote id | | same |
+  | identity record | was 4 KB | **already gone** — `ident` grows, with B8 |
+
+  **The id** ([block.c:345](../src/parse/block.c#L345)) was cut at 255 bytes,
+  so a long heading got an id this engine invented and node did not — and a
+  `[[ link ]]` written from the same text then pointed at nothing. Its slug
+  came from `rendered[1024]` ([1475](../src/parse/block.c#L1475)), so past a
+  kilobyte the id stopped mid-word as well. Both grow now, and both keep a
+  stack buffer for the ordinary case.
+
+  **Table columns** ([block.c:1085](../src/parse/block.c#L1085)): the 65th
+  column and everything after it left the document. One `Cells` buffer per
+  row, on the stack up to 64 and heap beyond — a row cannot hold more cells
+  than it has bytes, so one allocation sized from the line always fits. Four
+  call sites shared the ceiling and now share the buffer.
+
+  **URLs per paragraph** ([inline.c:533](../src/parse/inline.c#L533)) was the
+  ugliest: past the 512th link the rest were not merely unlinked but re-read as
+  ordinary text, where the `//` in `http://` opens the emphasis that list
+  exists to prevent. A 600-URL paragraph grew `<em>` nobody wrote. It grows by
+  retry — a full array is the only signal `mdy_find_links` gives that it had
+  more to say.
+
+  Six checks in `test/engine.c`, plus the three shapes that were already fine
+  so they stay that way. Reverting fails four. The corpora are unchanged:
+  642/642 markdown documents, 440/440 YAML blocks, 14,896/14,896 linkify
+  inputs, five sites byte-identical.
+
+  The `identity records over 4 KB … can also underflow` part of this finding
+  is **stale**: `ident` became a growable buffer with B8's escaping work, and
+  there is no fixed identity array left to underflow.
+
 - **~~B21 — Undefined behaviour on double→integer casts~~ FIXED — and it was
   hiding B36, which is the part that mattered.** UBSan on a document whose
   front matter says `big: .inf`, before:

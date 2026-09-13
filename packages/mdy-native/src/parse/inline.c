@@ -14,6 +14,7 @@
  * scanning cheap — two bytes decide, with no lookbehind.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "internal.h"
@@ -517,25 +518,56 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
 void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t len) {
     if (len == 0) return;
 
-    Span urls[MDY_MAX_URLS];
+    /*
+     * As many URLs as the paragraph has. MDY_MAX_URLS used to be the ceiling
+     * as well as the starting size, and a paragraph with more than 512 lost
+     * the rest — not merely unlinked, but re-read as ordinary text, where the
+     * `//` in `http://` opens the emphasis this list exists to prevent. Past
+     * the 512th link the output grew `<em>` node never wrote. (B20.)
+     *
+     * Grown by retry rather than by counting twice: a full array is the only
+     * sign mdy_find_links gives that it had more to say, so `n == cap` means
+     * ask again with room. It doubles from the old fixed size, so the common
+     * paragraph still does one pass over one allocation.
+     */
+    Span stack_urls[MDY_MAX_URLS];
+    Span *urls = stack_urls;
+    size_t urls_cap = MDY_MAX_URLS;
     size_t url_count = 0;
     if (doc->options.autolink) {
-        mdy_link found[MDY_MAX_URLS];
-        size_t n = mdy_find_links(text, len, found, MDY_MAX_URLS);
-        for (size_t k = 0; k < n; k++) {
+        mdy_link stack_found[MDY_MAX_URLS];
+        mdy_link *found = stack_found;
+        size_t cap = MDY_MAX_URLS;
+        size_t n = mdy_find_links(text, len, found, cap);
+        while (n == cap) {
+            size_t want = cap * 2;
+            mdy_link *grown = found == stack_found ? malloc(want * sizeof *grown)
+                                                   : realloc(found, want * sizeof *grown);
+            if (!grown) break;
+            found = grown;
+            cap = want;
+            n = mdy_find_links(text, len, found, cap);
+        }
+        if (n > urls_cap) {
+            Span *grown = malloc(n * sizeof *grown);
+            if (grown) { urls = grown; urls_cap = n; }
+            else n = urls_cap;
+        }
+        for (size_t k = 0; k < n && url_count < urls_cap; k++) {
             urls[url_count].start = found[k].start;
             urls[url_count].end = found[k].end;
             urls[url_count].mailto = found[k].mailto;
             url_count++;
         }
+        if (found != stack_found) free(found);
     }
 
     size_t cap = len * 4 + 8;   /* see push() */
     Ctx ctx = { .doc = doc, .parent = parent, .len = 0, .cap = cap,
                 .urls = urls, .url_count = url_count, .at_boundary = 1 };
     ctx.buf = mdy_alloc(&doc->arena, cap);
-    if (!ctx.buf) return;
-    scan(&ctx, text, len);
+    if (ctx.buf) scan(&ctx, text, len);
+    if (urls != stack_urls) free(urls);
 }
 
 /*

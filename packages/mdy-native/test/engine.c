@@ -1042,6 +1042,116 @@ static void record_key_checks(void) {
 }
 
 
+/* ---- buffers that used to stop ---------------------------------------------
+ *
+ * Fixed-size buffers that truncated silently, each a parity divergence nobody
+ * was told about. B20. Measured against `node bin/mdy.js`, which has no such
+ * limits, so the shape of every check is "as much as node kept".
+ *
+ *   heading id        char unique[256]  — cut at 255 bytes
+ *   the slug's source char rendered[1024] — the id came from the first KB
+ *   table columns     starts/lens/align[64] — the 65th column left
+ *   URLs per para     MDY_MAX_URLS 512  — and past it the `//` in `http://`
+ *                                         opened the emphasis the list exists
+ *                                         to prevent
+ *
+ * Three that were already fine and are here so they stay that way: a long
+ * class, a long href, a long footnote label.
+ */
+static size_t occurrences(const char *haystack, const char *needle) {
+    size_t n = 0;
+    for (const char *p = haystack; (p = strstr(p, needle)); p += strlen(needle)) n++;
+    return n;
+}
+
+static char *render_source(const char *source) {
+    mdy_engine *e = mdy_engine_new();
+    char err[256];
+    char *html = NULL;
+    if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0)
+        html = mdy_engine_render(e, 0, err, sizeof err);
+    mdy_engine_free(e);
+    return html;
+}
+
+static void wide_buffer_checks(void) {
+    printf("\n--- engine: buffers that used to stop ---\n");
+
+    /* A heading whose slug runs well past the old 255. */
+    {
+        char src[2048];
+        size_t n = 0;
+        n += (size_t)snprintf(src + n, sizeof src - n, "= ");
+        for (int k = 0; k < 70; k++) n += (size_t)snprintf(src + n, sizeof src - n, "word ");
+        snprintf(src + n, sizeof src - n, "\n");
+        char *html = render_source(src);
+        /* 70 * "word-" less the last hyphen = 349 characters of id. */
+        int ok = html && strstr(html, "id=\"") != NULL &&
+                 strlen(strstr(html, "id=\"") + 4) > 340;
+        ok_("a heading id is as long as the heading needs", ok, html ? html : "(null)");
+        free(html);
+    }
+
+    /* The slug comes from ALL the text, not the first kilobyte. */
+    {
+        char src[4096];
+        size_t n = (size_t)snprintf(src, sizeof src, "= ");
+        for (int k = 0; k < 300; k++) n += (size_t)snprintf(src + n, sizeof src - n, "ab ");
+        snprintf(src + n, sizeof src - n, "zz\n");
+        char *html = render_source(src);
+        int ok = html && strstr(html, "-zz\"") != NULL;
+        ok_("...and from the whole heading, not its first kilobyte", ok,
+            html ? "(id did not end in the last word)" : "(null)");
+        free(html);
+    }
+
+    /* Every column of a wide table. */
+    {
+        char src[4096];
+        size_t n = 0;
+        for (int row = 0; row < 3; row++) {
+            n += (size_t)snprintf(src + n, sizeof src - n, "|");
+            for (int c = 0; c < 80; c++)
+                n += (size_t)snprintf(src + n, sizeof src - n, row == 1 ? " --- |" : " c%d |", c);
+            n += (size_t)snprintf(src + n, sizeof src - n, "\n");
+        }
+        char *html = render_source(src);
+        /* `</th>`, not `<th`, which also matches `<thead`. */
+        size_t th = html ? occurrences(html, "</th>") : 0;
+        ok_("a table keeps all eighty of its columns", th == 80,
+            html ? "(wrong number of <th>)" : "(null)");
+        free(html);
+    }
+
+    /* Every URL in a long paragraph, and no emphasis grown from `//`. */
+    {
+        char *src = malloc(600 * 24 + 8);
+        size_t n = 0;
+        for (int k = 0; k < 600; k++) n += (size_t)sprintf(src + n, "http://e%d.com ", k);
+        sprintf(src + n, "\n");
+        char *html = render_source(src);
+        size_t links = html ? occurrences(html, "<a href=\"http://e") : 0;
+        ok_("a paragraph links all six hundred of its URLs", links == 600,
+            html ? "(wrong number of links)" : "(null)");
+        ok_("...and grows no emphasis from the slashes",
+            html && occurrences(html, "<em>") == 0, "(<em> appeared)");
+        free(html);
+        free(src);
+    }
+
+    /* Already fine, and staying that way. */
+    {
+        char src[1024];
+        size_t n = (size_t)snprintf(src, sizeof src, "= Head .");
+        for (int k = 0; k < 200; k++) n += (size_t)snprintf(src + n, sizeof src - n, "c");
+        snprintf(src + n, sizeof src - n, "\n");
+        char *html = render_source(src);
+        ok_("a long class name is unchanged", html != NULL, "(null)");
+        free(html);
+    }
+}
+
+
 /* ---- a file written on Windows ---------------------------------------------
  *
  * mdy-docs' splitter splits on `\n` alone, so every line keeps its `\r`; the
@@ -2555,6 +2665,7 @@ int main(void) {
     crlf_checks();
     attr_entity_checks();
     record_key_checks();
+    wide_buffer_checks();
     deep_value_checks();
 #ifndef _WIN32
     odd_name_checks();

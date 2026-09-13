@@ -299,6 +299,14 @@ static void separate(mdy_doc *doc, mdy_node *parent) {
  * `#introduction`.
  */
 /** Every text descendant, concatenated — a node's rendered content. */
+/* How much node_text would write, so a caller can hold all of it. (B20.) */
+static size_t node_text_len(const mdy_node *n) {
+    if (n->type == MDY_TEXT) return n->text ? strlen(n->text) : 0;
+    size_t total = 0;
+    for (const mdy_node *c = n->first; c; c = c->next) total += node_text_len(c);
+    return total;
+}
+
 static size_t node_text(const mdy_node *n, char *out, size_t cap, size_t o) {
     if (n->type == MDY_TEXT) {
         size_t len = n->text ? strlen(n->text) : 0;
@@ -326,9 +334,19 @@ static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t l
     for (size_t k = 0; k < doc->heading_count; k++)
         if (strcmp(doc->heading_ids[k], id) == 0) taken++;
 
-    char unique[256];
-    if (taken) snprintf(unique, sizeof unique, "%s-%zu", id, taken);
-    else snprintf(unique, sizeof unique, "%s", id);
+    /*
+     * The id, whatever its length. `char unique[256]` cut it at 255 bytes and
+     * said nothing, so a long heading got an id this engine had invented and
+     * node did not — and a `[[ link ]]` written from the same text then
+     * pointed at nothing. Room for the `-N` a repeat adds. (B20.)
+     */
+    size_t id_len = strlen(id);
+    char stack_id[256];
+    size_t id_cap = id_len + 32 > sizeof stack_id ? id_len + 32 : sizeof stack_id;
+    char *unique = id_cap > sizeof stack_id ? malloc(id_cap) : stack_id;
+    if (!unique) return;
+    if (taken) snprintf(unique, id_cap, "%s-%zu", id, taken);
+    else snprintf(unique, id_cap, "%s", id);
 
     if (doc->heading_count == doc->heading_cap) {
         size_t grown = doc->heading_cap ? doc->heading_cap * 2 : 32;
@@ -341,6 +359,7 @@ static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t l
     }
     if (doc->heading_count < doc->heading_cap) doc->heading_ids[doc->heading_count++] = id;
     mdy_set_string(doc, h, "id", unique, strlen(unique));
+    if (unique != stack_id) free(unique);
 }
 
 /* ---- list markers -------------------------------------------------------- */
@@ -1042,6 +1061,43 @@ static size_t parse_element(mdy_doc *doc, mdy_node *parent,
  */
 enum { ALIGN_NONE = 0, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT };
 
+/*
+ * One row's cells, however many there are.
+ *
+ * Every site below used `[64]`, so a table's 65th column and everything after
+ * it silently left the document — the widest thing a data table plausibly is,
+ * and node has no limit at all. A row cannot hold more cells than it has
+ * bytes, so one allocation sized from the line always fits; an ordinary table
+ * never leaves the stack. (B20.)
+ */
+enum { CELLS_INLINE = 64 };
+
+typedef struct {
+    const char **starts;
+    size_t *lens;
+    int *align;
+    size_t cap;
+    const char *s_stack[CELLS_INLINE];
+    size_t l_stack[CELLS_INLINE];
+    int a_stack[CELLS_INLINE];
+} Cells;
+
+static void cells_init(Cells *c, const mdy_line *l) {
+    c->starts = c->s_stack; c->lens = c->l_stack; c->align = c->a_stack;
+    c->cap = CELLS_INLINE;
+    size_t want = l->len + 2;
+    if (want <= CELLS_INLINE) return;
+    const char **st = malloc(want * sizeof *st);
+    size_t *ln = malloc(want * sizeof *ln);
+    int *al = malloc(want * sizeof *al);
+    if (!st || !ln || !al) { free(st); free(ln); free(al); return; }  /* the stack still serves */
+    c->starts = st; c->lens = ln; c->align = al; c->cap = want;
+}
+
+static void cells_free(Cells *c) {
+    if (c->starts != c->s_stack) { free(c->starts); free(c->lens); free(c->align); }
+}
+
 /** Split a row on `|`, ignoring escaped pipes and the optional outer ones.
  * Returns how many cells, writing their bounds into `starts`/`lens`. */
 static size_t split_cells(const mdy_line *l, const char **starts, size_t *lens, size_t max) {
@@ -1071,33 +1127,35 @@ static size_t split_cells(const mdy_line *l, const char **starts, size_t *lens, 
 
 /** Is this a delimiter row, and what alignment does each cell ask for? */
 static int delimiter_row(const mdy_line *l, int *align, size_t want) {
-    const char *starts[64];
-    size_t lens[64];
-    size_t n = split_cells(l, starts, lens, 64);
-    if (n != want || n == 0) return 0;
+    Cells cells;
+    cells_init(&cells, l);
+    size_t n = split_cells(l, cells.starts, cells.lens, cells.cap);
+    int ok = (n == want && n != 0);
 
-    for (size_t c = 0; c < n; c++) {
-        const char *s = starts[c];
-        size_t len = lens[c];
-        if (len == 0) return 0;
+    for (size_t c = 0; ok && c < n; c++) {
+        const char *s = cells.starts[c];
+        size_t len = cells.lens[c];
+        if (len == 0) { ok = 0; break; }
         int left = s[0] == ':';
         int right = s[len - 1] == ':';
         size_t from = left ? 1 : 0, to = right ? len - 1 : len;
-        if (to <= from) return 0;
-        for (size_t k = from; k < to; k++) if (s[k] != '-') return 0;
+        if (to <= from) { ok = 0; break; }
+        for (size_t k = from; k < to; k++) if (s[k] != '-') { ok = 0; break; }
+        if (!ok) break;
         align[c] = left && right ? ALIGN_CENTER : left ? ALIGN_LEFT : right ? ALIGN_RIGHT : ALIGN_NONE;
     }
-    return 1;
+    cells_free(&cells);
+    return ok;
 }
 
 /** How many lines the table at `i` occupies, or 0 if this is not one. */
 static size_t table_rows(const mdy_line *lines, size_t count, size_t i, size_t base) {
-    const char *starts[64];
-    size_t lens[64];
-    size_t want = split_cells(&lines[i], starts, lens, 64);
-    if (want < 1) return 0;
-    int align[64];
-    if (!delimiter_row(&lines[i + 1], align, want)) return 0;
+    Cells cells;
+    cells_init(&cells, &lines[i]);
+    size_t want = split_cells(&lines[i], cells.starts, cells.lens, cells.cap);
+    int usable = want >= 1 && delimiter_row(&lines[i + 1], cells.align, want);
+    cells_free(&cells);
+    if (!usable) return 0;
 
     /*
      * The body runs until something else starts. A line WITHOUT a pipe is
@@ -1149,15 +1207,20 @@ static int caption_at(const mdy_line *lines, size_t count, size_t i) {
     if (lines[i].len == 0 || lines[i].text[0] != '|') return 0;
     if (i + 2 >= count) return 0;
 
-    const char *starts[64];
-    size_t lens[64];
-    size_t cells = split_cells(&lines[i], starts, lens, 64);
-    if (cells != 1 || lens[0] == 0) return 0;
+    Cells row;
+    cells_init(&row, &lines[i]);
+    size_t n = split_cells(&lines[i], row.starts, row.lens, row.cap);
+    int one_cell = (n == 1 && row.lens[0] != 0);
+    cells_free(&row);
+    if (!one_cell) return 0;
 
-    size_t header = split_cells(&lines[i + 1], starts, lens, 64);
-    if (header == 0 || !memchr(lines[i + 1].text, '|', lines[i + 1].len)) return 0;
-    int align[64];
-    return delimiter_row(&lines[i + 2], align, header);
+    Cells head;
+    cells_init(&head, &lines[i + 1]);
+    size_t header = split_cells(&lines[i + 1], head.starts, head.lens, head.cap);
+    int ok = header != 0 && memchr(lines[i + 1].text, '|', lines[i + 1].len) != NULL &&
+             delimiter_row(&lines[i + 2], head.align, header);
+    cells_free(&head);
+    return ok;
 }
 
 static void add_cell(mdy_doc *doc, mdy_node *row, const char *tag, size_t tag_len,
@@ -1179,10 +1242,19 @@ static void add_cell(mdy_doc *doc, mdy_node *row, const char *tag, size_t tag_le
 
 static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
                           size_t start, size_t i, size_t rows) {
-    const char *starts[64];
-    size_t lens[64];
-    int align[64] = { 0 };
-    size_t columns = split_cells(&lines[i], starts, lens, 64);
+    /*
+     * One buffer for the whole table: the header row is the widest thing in
+     * it, a body row is padded out to that width, and the caption's split
+     * borrows it too. Wide enough for the header is wide enough for all of
+     * them. (B20.)
+     */
+    Cells cells;
+    cells_init(&cells, &lines[i]);
+    const char **starts = cells.starts;
+    size_t *lens = cells.lens;
+    int *align = cells.align;
+    for (size_t c = 0; c < cells.cap; c++) align[c] = ALIGN_NONE;
+    size_t columns = split_cells(&lines[i], starts, lens, cells.cap);
     delimiter_row(&lines[i + 1], align, columns);
 
     mdy_node *table = mdy_new_element(doc, "table", 5);
@@ -1196,7 +1268,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
     if (start < i) {
         const char *ctext;
         size_t clen;
-        split_cells(&lines[start], starts, lens, 64);
+        split_cells(&lines[start], starts, lens, cells.cap);
         ctext = starts[0];
         clen = lens[0];
         unescape_pipes(doc, &ctext, &clen);
@@ -1207,7 +1279,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
         mdy_append(table, mdy_new_text(doc, "\n", 1));
         /* The caption's split reused `starts`/`lens`; the header's cells are
          * read from them below and have to be put back. */
-        columns = split_cells(&lines[i], starts, lens, 64);
+        columns = split_cells(&lines[i], starts, lens, cells.cap);
     }
 
     mdy_node *thead = mdy_new_element(doc, "thead", 5);
@@ -1226,7 +1298,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
         mdy_node *tbody = mdy_new_element(doc, "tbody", 5);
         mdy_append(tbody, mdy_new_text(doc, "\n", 1));
         for (size_t r = i + 2; r < i + rows; r++) {
-            size_t n = split_cells(&lines[r], starts, lens, 64);
+            size_t n = split_cells(&lines[r], starts, lens, cells.cap);
             mdy_node *tr = mdy_new_element(doc, "tr", 2);
             /* Every row is the header's width: a short one is PADDED with
              * empty cells and a long one loses the extra. A row that is
@@ -1248,6 +1320,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
     mdy_set_position(table, lines, start, i + rows - 1);
     separate(doc, parent);
     mdy_append(parent, table);
+    cells_free(&cells);
     return i + rows;
 }
 
@@ -1393,9 +1466,20 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
              * the source leaves the slashes in an id nothing can link to.
              */
             {
-                char rendered[1024];
-                size_t rlen = node_text(h, rendered, sizeof rendered, 0);
-                set_heading_id(doc, h, rendered, rlen);
+                /*
+                 * All of the heading's text, not the first kilobyte: the slug
+                 * comes from this, so `char rendered[1024]` gave a long
+                 * heading an id that stopped mid-word. (B20.)
+                 */
+                char stack_text[1024];
+                size_t need = node_text_len(h) + 1;
+                size_t text_cap = need > sizeof stack_text ? need : sizeof stack_text;
+                char *rendered = text_cap > sizeof stack_text ? malloc(text_cap) : stack_text;
+                if (rendered) {
+                    size_t rlen = node_text(h, rendered, text_cap, 0);
+                    set_heading_id(doc, h, rendered, rlen);
+                    if (rendered != stack_text) free(rendered);
+                }
             }
             mdy_set_position(h, lines, i, i);
             separate(doc, parent);
