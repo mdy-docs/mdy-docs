@@ -688,6 +688,12 @@ static void footnote_checks(void) {
  * Both failure paths are here, because the mutation was before both: a label
  * with a space, and an empty one. So is a real footnote, which takes the
  * SUCCEEDING path and must still eat its `^`.
+ *
+ * And the neighbouring one, B50: a label ending in whitespace found no
+ * definition at all, because md4c's label HASH did not strip a trailing
+ * whitespace run where its label COMPARISON does — the hash is consulted
+ * first, so the entry was never reached. Both patches are in
+ * third_party/md4c; see its README.
  */
 static void caret_bracket_checks(void) {
     printf("\n--- engine: a bracket that is not a footnote after all ---\n");
@@ -702,10 +708,16 @@ static void caret_bracket_checks(void) {
     write_file(root, "space.md", "a[^a b]\n\n[^a b]: n\n");
     write_file(root, "empty.md", "a[^]\n\n[^]: n\n");
     write_file(root, "note.md",  "a[^1]\n\n[^1]: n\n");
+    write_file(root, "trail.md", "a[x ]\n\n[x ]: n\n");
+    write_file(root, "cross.md", "a[x ]\n\n[x]: n\n");
+    write_file(root, "inner.md", "a[p  q]\n\n[p q]: n\n");
     write_file(root, "main.mdy",
         "% $.emit('space.html', $.html($.render({ path: 'space.md' })))\n"
         "% $.emit('empty.html', $.html($.render({ path: 'empty.md' })))\n"
-        "% $.emit('note.html',  $.html($.render({ path: 'note.md' })))\n");
+        "% $.emit('note.html',  $.html($.render({ path: 'note.md' })))\n"
+        "% $.emit('trail.html', $.html($.render({ path: 'trail.md' })))\n"
+        "% $.emit('cross.html', $.html($.render({ path: 'cross.md' })))\n"
+        "% $.emit('inner.html', $.html($.render({ path: 'inner.md' })))\n");
 
     mdy_engine *e = mdy_engine_new();
     char err[512];
@@ -746,6 +758,23 @@ static void caret_bracket_checks(void) {
             strstr(emitted("note.html"), "data-footnote-ref") != NULL &&
             strstr(emitted("note.html"), "^") == NULL,
         emitted("note.html"));
+
+    /* B50: the label's TRAILING whitespace. Three shapes, because the hash
+     * and the comparison have to agree about all of them — and the third
+     * would fail a fix that stripped whitespace everywhere rather than at
+     * the end, since an inner run collapses to one space and stays. */
+    ok_("a label ending in whitespace finds its definition",
+        emitted("trail.html") &&
+            strcmp(emitted("trail.html"), "<p>a<a href=\"n\">x </a></p>") == 0,
+        emitted("trail.html"));
+    ok_("...and finds one written without the whitespace",
+        emitted("cross.html") &&
+            strcmp(emitted("cross.html"), "<p>a<a href=\"n\">x </a></p>") == 0,
+        emitted("cross.html"));
+    ok_("...while an INNER run still collapses to one space rather than going",
+        emitted("inner.html") &&
+            strcmp(emitted("inner.html"), "<p>a<a href=\"n\">p  q</a></p>") == 0,
+        emitted("inner.html"));
 
     mdy_engine_free(e);
     fsx_rm_rf(root);

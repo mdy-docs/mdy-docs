@@ -1623,9 +1623,16 @@ md_label_hash(const CHAR* label, SZ size)
         is_whitespace = ISUNICODEWHITESPACE_(codepoint) || ISNEWLINE_(label[off]);
 
         if(is_whitespace) {
+            /* LOCAL PATCH (mdy-native, B50). A TRAILING run of whitespace is
+             * not hashed, because md_label_cmp does not compare one: it treats
+             * the end of a label as whitespace, so `[x ]` and `[x]` are equal
+             * to it and were not equal to this. The hash is consulted first,
+             * so a reference written `[x ]` found no definition at all. */
+            off = md_skip_unicode_whitespace(label, off, size);
+            if(off >= size)
+                break;
             codepoint = ' ';
             hash = md_fnv1a(hash, &codepoint, sizeof(unsigned));
-            off = md_skip_unicode_whitespace(label, off, size);
         } else {
             MD_UNICODE_FOLD_INFO fold_info;
 

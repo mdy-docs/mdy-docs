@@ -71,7 +71,7 @@ what those checks do not reach.
 | B47 | ~~Medium~~ **fixed** | `engine.c` / md4c | The sweep never saw a `.md`: three unchecked `strdup`s, and an allocation failure md4c discards |
 | B48 | ~~Low~~ **fixed** | md4c | A bracket that is not a footnote after all lost its `^`: `[^a b]` rendered `a b`, not `^a b` |
 | B49 | ~~**High**~~ **fixed** | `.md` raw HTML | The `.md` tree kept `raw` nodes — no rehype-raw here — so no ill-formed tag was repaired and an unclosed one escaped its document |
-| B50 | Low | md4c | A link reference whose label ends in whitespace does not match its definition |
+| B50 | ~~Low~~ **fixed** | md4c | A link reference whose label ended in whitespace found no definition: its hash and its comparison disagreed |
 | B51 | ~~Medium~~ **fixed** | `raw.c` / lexbor | The HTML parse was outside `check-alloc`, and segfaulted on 490 refusals when put inside |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
@@ -1431,7 +1431,7 @@ Both failure paths are tested, because the mutation was before both: a label
 with a space, and an empty `[^]`. So is the SUCCEEDING path — a real footnote
 still has to eat its `^` — which is the assertion that would catch moving the
 mutation too far. `caret_bracket_checks`
-([test/engine.c:692](../test/engine.c#L692)); reverting the patch fails the
+([test/engine.c:698](../test/engine.c#L698)); reverting the patch fails the
 first two and leaves the third passing.
 
 The footnote differential is **15/15** now, where the entry was filed at
@@ -1487,10 +1487,7 @@ instrumented parse library without lexbor beside it, so the module did not
 link at all once raw.c referenced it. Both wasm targets carry it now:
 `check-alloc-wasm` is 3,744.
 
-#### B50 — a link reference whose label ends in whitespace does not match its definition (Low)
-
-Found while testing B48's fix and separate from it — the patch neither causes
-nor cures it, and it has nothing to do with footnotes.
+#### B50 — a link reference whose label ends in whitespace found no definition (Low) — FIXED
 
 ```
 a[x ]
@@ -1499,13 +1496,22 @@ a[x ]
 ```
 
 ```
-node   <p>a<a href="n">x </a></p>
-C      <p>a[x ]</p>          — literal text; no link at all
+before   <p>a[x ]</p>                  — literal text; no link at all
+after    <p>a<a href="n">x </a></p>    = node
 ```
 
-CommonMark normalizes a link label by stripping and collapsing its whitespace,
-so `[x ]` and `[x ]: n` are the same label and `[x ]` with `[x]: n` is too.
-Nine shapes, measured:
+Nothing to do with footnotes, and found while testing B48's fix — which
+neither caused it nor cured it.
+
+**md4c's hash and its comparison disagreed**, which is the classic way for a
+table lookup to fail on a key that is present. `md_label_cmp` treats the END
+of a label as whitespace, so `[x ]` and `[x]` are equal to it — that is
+CommonMark's rule, which strips a label's leading and trailing whitespace and
+collapses what is inside. `md_label_hash` skipped the LEADING run and hashed
+the trailing one, so the two labels landed in different buckets and the
+comparison that would have matched them was never reached.
+
+Nine shapes, measured, and it is the last three that name the bug:
 
 ```
 [x] / [x]:            both link          [a b] / [a b]:      both link
@@ -1516,16 +1522,22 @@ Nine shapes, measured:
 [x<TAB>] / [x<TAB>]:  node link, C text
 ```
 
-So the DEFINITION side normalizes correctly — `[x] / [x ]:` matches — and the
-REFERENCE side does not: a label ending in whitespace is looked up with that
-whitespace still on it and finds nothing. A leading space is fine, an inner
-run is collapsed fine; only the trailing one is kept.
+The DEFINITION side was already right — `[x] / [x ]:` matched — because a
+definition's label is trimmed before it is stored. It was a reference's label
+that kept its tail.
 
-Not folded into B48 because it is a different function and a different defect,
-and because a second patch to a pinned parser in the same change would spend
-the argument B48 just made for the first. It is also narrower than it looks: a
-label with a trailing space is a thing a document does by accident, not on
-purpose, and `check-sites` and the corpus contain none.
+**The second local patch to md4c**, and under the same rule as the first
+([md4c.c:1611](../third_party/md4c/src/md4c.c#L1611)): the information is
+destroyed inside the parser, so nothing outside can reach it. A trailing
+whitespace run is not hashed. Verified inert the same way B48 was — every one
+of the **1,774** corpus documents through `build/mdcat` with and without the
+patch, the outputs diffed, **zero lines differ**; every `check-markdown`
+category unchanged.
+
+`caret_bracket_checks` ([test/engine.c:698](../test/engine.c#L698)) covers it
+beside B48's, with three shapes rather than two: the third is an INNER run,
+which a fix that stripped whitespace everywhere rather than at the end would
+break, and which reverting the patch leaves passing while the other two fail.
 
 #### B43 — the allocation sweep covered one command (Low) — FIXED
 
@@ -3213,7 +3225,9 @@ date.
    ~~Compiling to object files~~ and ~~the `Dev` struct's fixed-size scratch~~
    are done too, the second of which was hiding three stack-buffer-overflows.
 
-**What is left, in the order it is worth doing.**
+**Every one of the fifty-one findings is fixed.** What follows is what is left
+that was never a finding: the structural items, and the one question the
+corpus leaves open.
 
 1. ~~**B49**, the missing rehype-raw.~~ **Done** — lexbor is vendored and
    `src/parse/raw.c` is the bridge. `check-markdown` went 1002/1774 to

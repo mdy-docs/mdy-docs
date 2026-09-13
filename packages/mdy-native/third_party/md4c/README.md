@@ -34,6 +34,15 @@ Check a patch before removing it: `grep -n "LOCAL PATCH" src/md4c.c`.
   it changes the tree of **none** of the 1,773 documents in
   `make corpus`, and `ext-footnotes` stays at 25/26.
 
+- **`md_label_hash`, a trailing space (B50).** The hash of a link label did
+  not strip a TRAILING run of whitespace where `md_label_cmp` does — that
+  function treats the end of a label as whitespace, so `[x ]` and `[x]` are
+  equal to it. The hash is consulted first, so a reference written `[x ]`
+  never reached the comparison and found no definition at all: it came out as
+  literal text where CommonMark and remark both give a link. The trailing run
+  is no longer hashed. Verified inert the same way: **none** of the 1,774
+  corpus documents' trees change.
+
 It is the markdown front end: `.md` documents arrive as hast through it the
 way `.mdy` ones do through the parser, and `make check-markdown` measures how
 far its tree agrees with remark's. See docs/parser.md.
