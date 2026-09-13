@@ -21,6 +21,9 @@
 #   6. `make check-golden`         — byte-for-byte against committed output
 #   7. `make check-highlight`      — the highlighter against lowlight (Linux)
 #   8. `make check-cli`            — bin/mdy.js's CLI tests, on this binary (Linux)
+#   9. `make check-alloc-all`      — every allocation of three whole builds
+#                                    refused in turn, each run either the same
+#                                    site or a reported failure (Linux)
 #
 # The last is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
@@ -185,6 +188,17 @@ jobs:
         working-directory: packages/mdy-native
         run: make check-dev
 
+      # Every allocation of three whole builds refused one at a time, each run
+      # asserted to have produced the same site or said it could not (B24).
+      # One platform: what it exercises is this C, and the allocator's own
+      # behaviour is not what is under test. It is parallel, so all three
+      # corpora are a few minutes rather than an hour (B41) — which is the
+      # difference between a check that runs here and one that never does.
+      - name: Check every allocation failure
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/mdy-native
+        run: make check-alloc-all
+
       # The binary, downloadable from the run. Only after every check has
       # passed, so what is there is what was proved; a release is a later
       # step and a workflow of its own.
@@ -228,6 +242,15 @@ jobs:
       - name: Check against the golden output, under node
         working-directory: packages/mdy-native
         run: make check-wasm
+
+      # The allocation sweep again, through emscripten. Not a duplicate of the
+      # native one: B24's fix ends a hopeless run with `_Exit(1)`, which here
+      # arrives at the host as a thrown ExitStatus while the files are still
+      # read out of MEMFS beside it — so what this proves is that a wasm caller
+      # is told, rather than handed a half-written site. See wasm/check-alloc.mjs.
+      - name: Check every allocation failure, through wasm
+        working-directory: packages/mdy-native
+        run: make check-alloc-wasm
 
       # The module with its wrapper, page and server, laid out as in the
       # tree, so the download runs as it is: `node wasm/serve.mjs`.

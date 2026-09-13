@@ -10,6 +10,8 @@
 #   make check-highlight          highlight.js in lamassu, against lowlight
 #   make check-cli                mdy-docs' CLI tests, run against build/mdy
 #   make check-alloc              a build with each allocation refused in turn
+#   make check-alloc-all          the same over all three corpora (~7 min)
+#   make check-alloc-wasm         and through the wasm engine
 #   make wasm                     the same engine as WebAssembly (needs emcc)
 #   make check-wasm               the golden sites through it, under node
 #   make serve-wasm               and a page that builds a site in a browser
@@ -456,7 +458,7 @@ check-golden: build/mdy$(EXE)
 	done; \
 	exit $$fail
 
-.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc clean
+.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc check-alloc-all clean
 
 # A document from text into a nisaba collection, with no JavaScript in it:
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
@@ -646,33 +648,30 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 #     interfered with; a run that could not must say so and exit non-zero.
 #
 # Silently dropping a page is worse than the crash it replaces, because the
-# build reports success with files missing -- and that is what nearly three
-# hundred of these ordinals used to do. The first sweep found 13 segfaults and
-# 306 wrong-but-successful builds; the ones that remain are all in nisaba-db,
-# which is a different repository (B41).
+# build reports success with files missing -- and that is what 306 of the
+# first sweep's 1,809 ordinals did. The first sweep found 13 segfaults and
+# those 306; every corpus below is clean now.
 #
-# ~1800 builds of `fixture`, about two minutes. Not in any other target.
+# SITE picks the corpus, because each larger one reached sites the one before
+# it could not -- the fixture has no hashtags, no `.yaml` data files and no
+# pictures, and the blog's sweep found eleven more because of it. The sweep
+# is parallel (B41): one ordinal is one process with its own output
+# directory, so serially-25-minutes becomes a minute, and a check somebody
+# runs is worth more than a thorough one they do not.
+#
+#     fixture 1,808 / 6s      blog 14,298 / 1m      docs-site 17,747 / 5m30
+ALLOC_SITE ?= fixture
+
 check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
-	@set -e; \
-	ref=build/alloc-ref; out=build/alloc-out; \
-	rm -rf $$ref $$out; ./build/mdy$(EXE) build fixture --out $$ref >/dev/null; \
-	n=$$(MDY_ALLOC_COUNT=1 ./build/mdy-af$(EXE) build fixture --out $$out 2>&1 >/dev/null \
-	     | sed -n 's/^mdy-af: \([0-9]*\) .*/\1/p'); \
-	echo "sweeping $$n allocations"; \
-	i=1; bad=; crash=; \
-	while [ $$i -le $$n ]; do \
-	  rm -rf $$out; \
-	  rc=0; \
-	  MDY_ALLOC_FAIL_NTH=$$i ./build/mdy-af$(EXE) build fixture --out $$out >/dev/null 2>&1 || rc=$$?; \
-	  if [ $$rc -ge 128 ]; then crash="$$crash $$i"; \
-	  elif [ $$rc -eq 0 ] && ! diff -rq $$ref $$out >/dev/null 2>&1; then bad="$$bad $$i"; fi; \
-	  i=$$((i+1)); \
-	done; \
-	rm -rf $$ref $$out; \
-	if [ -n "$$crash" ]; then echo "CRASHED at:$$crash"; fi; \
-	if [ -n "$$bad" ]; then echo "reported success with a DIFFERENT site at:$$bad"; fi; \
-	if [ -n "$$crash$$bad" ]; then echo "$$(echo $$crash $$bad | wc -w) of $$n allocations"; exit 1; fi; \
-	echo "$$n allocations: every refusal was either survived exactly or reported"
+	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	  --site "$(ALLOC_SITE)" $(if $(JOBS),--jobs $(JOBS),)
+
+# All three, which is what a pre-push or a nightly wants. About seven minutes.
+check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
+	@fail=0; for s in fixture ../../examples/blog ../../examples/docs-site; do \
+	  node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	    --site "$$s" $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
+	done; exit $$fail
 
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \
@@ -750,7 +749,58 @@ $(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build
 	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \
 	  -o $@
 
-.PHONY: wasm check-wasm serve-wasm
+# The same module with the failing allocator forced in, for check-alloc-wasm.
+# The parser gets its own instrumented archive for the reason the native sweep
+# needed one: block.c's arena is a third of B24's sites.
+WASM_AF_OUT := build/wasm/mdy-native-af.mjs
+
+build/wasm/libmdyparse-af.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS) src/allocfail.h
+	@mkdir -p build/wasm/parse-af
+	@for f in $(PARSE_SRCS) $(MD4C_SRCS); do \
+	  $(EMCC) $(PARSE_CFLAGS) -include src/allocfail.h -c $$f -o build/wasm/parse-af/`basename $$f .c`.o || exit 1; \
+	done
+	$(EMAR) rcs $@ build/wasm/parse-af/*.o
+
+# The shim itself is a separate object because -include applies to every
+# source on the command line, and it is the one file the macros must not
+# reach: it defines what they rename to.
+build/wasm/allocfail.o: src/allocfail.c src/allocfail.h
+	@mkdir -p build/wasm
+	$(EMCC) -O2 -std=gnu11 -Isrc -c $< -o $@
+
+# mdy_af_arm and mdy_af_total are exported because emscripten's getenv reads
+# its own ENV and cannot see the host's environment.
+$(WASM_AF_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o src/allocfail.h \
+                build/wasm/libmdyparse-af.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
+	@mkdir -p build/wasm
+	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
+	  -include src/allocfail.h \
+	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o \
+	  build/wasm/libmdyparse-af.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
+	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
+	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
+	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \
+	  -sEXPORTED_FUNCTIONS=_main,_mdy_af_arm,_mdy_af_total \
+	  -o $@
+
+# The same sweep through the wasm engine, which is a different question and
+# not a duplicate of check-alloc.
+#
+# B24's fix ends a hopeless run with `_Exit(1)`. Under emscripten main() is
+# reached through callMain with EXIT_RUNTIME=0, so an exit arrives at the host
+# as a thrown ExitStatus rather than a process that stopped -- and wasm/
+# index.mjs reads the files out of MEMFS AFTERWARDS and hands them back beside
+# the status. If that status were ever lost, a caller would be given a
+# half-written site with nothing saying it was half-written, which is the
+# exact failure B24 was about. This is what says it is not.
+#
+# Serial, and about a minute for the fixture: one module instance per ordinal,
+# because the memo and MEMFS both persist inside an instance and sharing one
+# would serve the next build the last one's renders.
+check-alloc-wasm: $(WASM_AF_OUT)
+	@node wasm/check-alloc.mjs --site "$(if $(ALLOC_WASM_SITE),$(ALLOC_WASM_SITE),fixture)"
+
+.PHONY: wasm check-wasm check-alloc-wasm serve-wasm
 wasm: $(WASM_OUT)
 
 serve-wasm: $(WASM_OUT)

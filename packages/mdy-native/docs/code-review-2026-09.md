@@ -47,7 +47,7 @@ what those checks do not reach.
 | B19 | ~~Low~~ **fixed** | `cli.c` | An unknown option became the site directory, and the error blamed the entry script |
 | B39 | ~~Low~~ **fixed** | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | ~~Low~~ **fixed** | `markdown.c` | A URL was written through unencoded: `normalizeUri` was missing, not just the non-ASCII half |
-| B41 | Low | wasm, `check-alloc` | The allocation sweep does not reach the wasm build, and covers one site by default |
+| B41 | ~~Low~~ **fixed** | wasm, `check-alloc` | The allocation sweep reached neither the wasm build nor any corpus but the smallest, and nothing re-ran it |
 | B42 | ~~Low~~ **fixed** | `markdown.c` | An empty link destination wrote no attribute where node writes `href=""` |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
@@ -505,7 +505,7 @@ convention `mdy_engine_count` already sets in that file.
 
 **The dev server has a test now** — its first, which is the real reason this
 went unnoticed. `test/dev.test.js` with a `check-dev` target
-([Makefile:271](../Makefile#L292)) and a CI step: it spawns the binary on a
+([Makefile:271](../Makefile#L294)) and a CI step: it spawns the binary on a
 site that does not compile, waits for the banner, POSTs a delivery, and
 asserts 500, the `[hold]` line, and that the process is still running. Then it
 fixes the site, waits for the rebuild and POSTs again, which is the half that
@@ -1090,27 +1090,70 @@ attribute is a destination, not on its name
 ([markdown.c:364](../src/parse/markdown.c#L364)). It showed for an inline
 link, an inline image and a reference definition alike.
 
-#### B41 — the allocation sweep does not reach everything it should (Low)
+#### B41 — the allocation sweep did not reach everything it should (Low) — FIXED
 
-B24 built `build/mdy-af` and `make check-alloc`, which refuse the *n*th
-allocation of a build and assert that the result is either the same site or a
-reported failure. Two gaps are left, and both are the tool's reach rather than
-a defect in the engine.
+B24 built `build/mdy-af` and `make check-alloc`. This is the two gaps that
+were left in its reach, and both are closed by making the sweep something
+that actually runs rather than something that could in principle be run.
 
-**The wasm build is not swept.** `build/mdy-af` is a native binary; the same
-engine compiled by `emcc` has emscripten's allocator underneath it and its own
-failure behaviour, and nothing here exercises that. The C sites B24 fixed are
-shared, so the wasm build has them fixed too — what is unverified is whether
-emscripten's own layer turns an exhausted heap into the same reported failure.
+**The wasm build is swept now, and it was the half worth doing.** B24's fix
+ends a hopeless run with `_Exit(1)`. Under emscripten `main()` is reached
+through `callMain` with `EXIT_RUNTIME=0`, so an exit arrives at the host as a
+**thrown `ExitStatus`** rather than a process that stopped — and
+`wasm/index.mjs` reads the output files out of MEMFS *afterwards* and hands
+them back beside the status. If that status were ever lost, a caller would be
+given a half-written site with nothing to say it was half-written, which is
+the exact failure B24 was about.
 
-**`check-alloc` sweeps `fixture` only.** That is 1,809 allocations and 54
-seconds, which is a target someone will actually run. It is also the smallest
-corpus here, and each larger one found sites it could not reach — the fixture
-has no hashtags, no `.yaml` data files and no pictures, and the blog's sweep
-found eleven more sites because of it. blog (14,298) and docs-site (17,747)
-were swept by hand for B24 and are clean, but they take 25 and 35 minutes, so
-they are not a target and nothing re-runs them. A nightly that sweeps all three
-would be the answer; a `check-alloc-all` nobody runs would not.
+`build/wasm/mdy-native-af.mjs` ([Makefile:773](../Makefile#L773)) is the wasm
+module built against the same shim, and `make check-alloc-wasm`
+([Makefile:800](../Makefile#L800)) sweeps it. Two things it needed that the
+native sweep did not:
+
+- **Arming from outside.** emscripten's `getenv` reads its own `ENV` object and
+  cannot see the host's environment, so `MDY_ALLOC_FAIL_NTH` reaches a native
+  run and nothing else. `mdy_af_arm` and `mdy_af_total`
+  ([allocfail.c:48](../src/allocfail.c#L48)) are exported from the module and
+  called between builds instead.
+- **A fresh module instance per ordinal.** The render memo and MEMFS both live
+  inside an instance, so reusing one would serve the next build the last one's
+  renders and read the last one's output directory.
+
+Result: **1,807 refusals through wasm, every one either survived exactly or
+reported.** `_Exit` does reach the wrapper as a non-zero status, which is what
+this existed to find out — measured rather than assumed.
+
+It also turned up a trap in the harness that is worth writing down, because
+anything driving emscripten under node will meet it: **emscripten sets
+`process.exitCode` to the module's exit status on every run.** A sweep whose
+last ordinal was a reported failure therefore exits 1 having found nothing
+wrong, and one whose last ordinal succeeded exits 0 — so the inherited code is
+noise in both directions. It is reset explicitly
+([check-alloc.mjs:158](../wasm/check-alloc.mjs#L158)).
+
+**`check-alloc` sweeps any corpus now, because it is parallel.** The entry
+said blog and docs-site take 25 and 35 minutes "so they are not a target and
+nothing re-runs them", and that a `check-alloc-all` nobody runs would not be
+the answer. One ordinal is one process with its own output directory, so the
+sweep is embarrassingly parallel; `scripts-alloc-sweep.mjs` runs it across the
+cores there are:
+
+| | serial | at -j12 |
+| --- | --- | --- |
+| fixture (1,808) | 54s | **5.8s** |
+| blog (14,298) | ~25m | **1m02** |
+| docs-site (17,747) | ~35m | **5m29** |
+
+All four corpora are clean, `fixture-pkg` (2,125) included — which had never
+been swept before and is the only one with an import graph.
+`make check-alloc ALLOC_SITE=<dir>` picks one; `make check-alloc-all`
+([Makefile:670](../Makefile#L670)) is all three at about seven minutes.
+
+**And they run.** Both are in `.github/workflows/native.yml` now —
+`check-alloc-all` on the Linux matrix leg, `check-alloc-wasm` in the wasm job.
+That is the part that makes this fixed rather than merely possible: the
+argument in the original entry was never about the sweeping, it was that
+nothing re-ran it.
 
 #### B28 — YAML: a trailing `...` is refused as a second document (Low) — FIXED
 
@@ -1589,7 +1632,7 @@ reach it.
   compiled against an allocator that refuses the *n*th request and only that
   one ([allocfail.c](../src/allocfail.c#L7)); a force-included header does the
   renaming, so no source file knows it exists and the real build is untouched.
-  `check-alloc` ([Makefile:655](../Makefile#L655)) sweeps *n* across a whole
+  `check-alloc` ([Makefile:655](../Makefile#L665)) sweeps *n* across a whole
   build of `fixture` — 1,809 of them, 54 seconds — against one invariant:
 
   > a run that exits 0 produced the **same site** as an uninterfered one; a run
@@ -1728,9 +1771,11 @@ reach it.
   freed, so **this fix cannot be what changed it**. The earlier figure was
   measured some other way and is withdrawn rather than claimed.
 
-  Still open, and filed as **B41**: the wasm build's own allocation sites are
-  not swept, because `build/mdy-af` is native. `check-alloc` sweeps `fixture`
-  only — blog and docs-site were swept by hand here and take 25 and 35 minutes.
+  Two gaps in the sweep's REACH were left and filed as **B41** — the wasm
+  build was not swept at all, and `check-alloc` covered `fixture` only because
+  blog and docs-site took 25 and 35 minutes serially. Both are closed there:
+  the sweep is parallel, all four corpora are clean, there is a wasm sweep,
+  and CI runs both.
 
 - **~~B25 — `walk` treats every `opendir` failure as an empty directory~~
   FIXED.** `return errno == ENOENT ? 0 : 0` — both branches zero. A subtree
@@ -2014,7 +2059,7 @@ prerequisite now.
 
 ~~What is still true: every engine binary compiles from source in one `cc`
 invocation, with no object files~~ — **also fixed, and it was the larger
-half.** One object per source ([Makefile:484](../Makefile#L505)), and three
+half.** One object per source ([Makefile:484](../Makefile#L507)), and three
 binaries that link them; `build/mdy` and `build/engine-test` share theirs,
 ASan has its own because its flags differ.
 
@@ -2033,7 +2078,7 @@ that was wrong in the safe direction is still wrong, and editing
 `fsx.h` exactly seven.
 
 Rules are generated per source with `$(eval)` rather than found by a `vpath`
-([Makefile:498](../Makefile#L526)): the sources come from four directories, two
+([Makefile:498](../Makefile#L528)): the sources come from four directories, two
 outside this tree, and a global `vpath %.c` would also be consulted for the
 parser's and the tests', which resolve by exact path and should keep doing so.
 Object names are basenames, so two sources may not share one — thirty-one are
@@ -2063,7 +2108,7 @@ self-inflicted. Each time the result described a different binary than the one
 named.
 
 There is nothing a Makefile can do about it, so the Makefile says so
-([Makefile:60](../Makefile#L61)) — and only when a `check-` target is what was
+([Makefile:60](../Makefile#L63)) — and only when a `check-` target is what was
 asked for, since that is where believing a stale result costs something.
 Ordinary builds stay quiet.
 

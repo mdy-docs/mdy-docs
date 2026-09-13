@@ -23,7 +23,9 @@
 #undef strdup
 
 #include <stdio.h>
+#if !defined(__EMSCRIPTEN__)
 #include <execinfo.h>
+#endif
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -35,6 +37,17 @@ static void af_report(void) {
     fprintf(stderr, "mdy-af: %ld allocations\n", af_seen);
 }
 
+/*
+ * Armed from OUTSIDE the process, for the wasm build.
+ *
+ * emscripten's getenv reads its own ENV object and not the host's
+ * environment, so the env vars below reach a native run and nothing else.
+ * These two are exported from the wasm module instead (see check-alloc-wasm),
+ * and are what the sweep there calls between builds.
+ */
+void mdy_af_arm(long nth) { af_nth = nth; af_seen = 0; }
+long mdy_af_total(void) { return af_seen; }
+
 static int af_should_fail(void) {
     if (af_nth == -2) {
         const char *s = getenv("MDY_ALLOC_FAIL_NTH");
@@ -43,6 +56,7 @@ static int af_should_fail(void) {
     }
     af_seen++;
     if (af_nth < 0 || af_seen != af_nth) return 0;
+#if !defined(__EMSCRIPTEN__)
     if (getenv("MDY_ALLOC_FAIL_TRACE")) {
         void *frames[160];
         int n = backtrace(frames, 160);
@@ -61,6 +75,7 @@ static int af_should_fail(void) {
         backtrace_symbols_fd(frames, n, 2);
 #endif
     }
+#endif
     return 1;
 }
 
