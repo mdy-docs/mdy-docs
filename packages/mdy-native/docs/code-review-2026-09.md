@@ -1860,15 +1860,23 @@ end of the stream, and to stop the line walk there.
   `[return]` line the remote path prints. `dev_deliver`'s own guard is now
   redundant and harmless.
 
-  Reachable without anything exotic — publish to a page, delete the page,
-  rebuild; the name was valid when the message was made. **Not covered by a
-  test**, and the reason is worth recording: `$.publish` validates the name at
-  publish time, so a message for a page that does not exist is never created,
-  and reaching the drain-time case means having one already queued when the
-  page disappears. Orchestrating that needs the drain stopped mid-flight.
-  What is checked is that the `.dead` channel still finishes rather than
-  returning — `[dead] handlers.thing.dead #1 no handlers.thing.dead page —
-  kept` — which is the half a wrong `is_dead` would have broken.
+  **Covered by two tests in `test/dev.test.js`.** It was filed as untestable
+  and that was wrong: `$.publish` does validate the name at publish time, so a
+  message for a page that does not exist is never made — but the case needs a
+  message already *queued* when its page disappears, and a **failed delivery
+  waiting on a backoff** is exactly that window. So: a handler that throws, a
+  `--backoff` of two seconds, and the page deleted inside it.
+
+  ```
+  before  [dead]   handlers.a #1 no handlers.a page — kept, see `mdy dead handlers.a`
+  after   [return] handlers.a (no page of that name here) — 1 message(s) returned
+  ```
+
+  The first test fails on the unfixed code by timing out — the `[return]` never
+  comes. The second pins the other half, that the `.dead` channel itself still
+  *finishes* rather than being returned, or a failed message would bounce
+  between the two forever; it passes either way by design, because it guards
+  against a wrong fix rather than testing this one.
 - **~~B27 — `wrap()` assembles the document's source with `snprintf("%s…")`~~
   FIXED.** `snprintf` returns `int`, so a document over two gigabytes overflows
   it and the cast to `size_t` makes `out + o` an address nowhere near the

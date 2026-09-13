@@ -22,7 +22,7 @@ import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,8 +60,8 @@ const deliver = (port) =>
 
 /* The server writes its banner to stderr and its per-build lines to stdout;
  * both matter here, so they are one stream. */
-function startDev(root) {
-  const child = spawn(bin, ['dev', root, '--port', '0']);
+function startDev(root, extra = []) {
+  const child = spawn(bin, ['dev', root, '--port', '0', ...extra]);
   let log = '';
   child.stdout.on('data', (b) => { log += b; });
   child.stderr.on('data', (b) => { log += b; });
@@ -358,5 +358,73 @@ test('a broker that refuses a publish is reported, and the server goes on', asyn
   } finally {
     child.kill();
     broker.close();
+  }
+});
+
+/*
+ * B26: the local bus and the remote one disagreed about a subject with no
+ * page. deliver_batch already took `is_dead` and its `target < 0` branch
+ * ignored it — dev_deliver guards before it calls, dev_drain does not — so
+ * in-process the messages were marked DONE and reported as kept, where over
+ * HTTP dev_deliver returns 500 and the broker's retry and dead-letter policy
+ * has them.
+ *
+ * Reaching it takes a window: $.publish validates the name at publish time, so
+ * a message for a page that does not exist is never made. The window is a
+ * message already QUEUED — one whose delivery failed and is waiting on a
+ * backoff — when its page disappears. Hence the throwing handler, the backoff,
+ * and the deletion in between.
+ *
+ * Before the fix this same sequence printed
+ *   [dead] handlers.a #1 no handlers.a page — kept, see `mdy dead handlers.a`
+ */
+test('a queued message whose page has gone is returned, not marked done', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'), "% $.publish('handlers.a', { n: 1 })\n= main\n");
+  writeFileSync(join(root, 'a.mdy'),
+    '+++\nmessageName: handlers.a\n+++\n% throw new Error("later")\n= handler\n');
+
+  /* Attempts to spare and a backoff long enough to delete the page inside. */
+  const dev = startDev(root, ['--max-attempts', '5', '--backoff', '2000']);
+  try {
+    await dev.until(/\[refuse\][^\n]*handlers\.a/);
+
+    /* The page goes, and main stops publishing — otherwise $.publish refuses
+     * at build time and no new message is made anyway. */
+    unlinkSync(join(root, 'a.mdy'));
+    writeFileSync(join(root, 'main.mdy'), '= main, no longer publishing\n');
+
+    await dev.until(/\[return\][^\n]*handlers\.a/, 25000);
+    assert.match(dev.log(), /\[return\][^\n]*no page of that name here[^\n]*returned/,
+                 'it says the messages were returned, and why');
+    assert.doesNotMatch(dev.log(), /\[dead\][^\n]*no handlers\.a page/,
+                        'and never reports them as kept, which marked them done');
+    assert.equal(dev.child.exitCode, null);
+  } finally {
+    dev.child.kill();
+  }
+});
+
+/*
+ * The other half, and the one a wrong `is_dead` would break: the dead-letter
+ * channel itself has no page and must still FINISH rather than be returned,
+ * or a message that failed would bounce between the two forever.
+ */
+test('the dead-letter channel with no page is still kept, not returned', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'), "% $.publish('handlers.b', { n: 1 })\n= main\n");
+  writeFileSync(join(root, 'b.mdy'),
+    '+++\nmessageName: handlers.b\n+++\n% throw new Error("nope")\n= handler\n');
+
+  const dev = startDev(root, ['--max-attempts', '1']);
+  try {
+    await dev.until(/\[dead\][^\n]*handlers\.b\.dead/, 25000);
+    assert.match(dev.log(), /\[dead\][^\n]*handlers\.b\.dead[^\n]*kept/,
+                 'the .dead channel is finished and kept for `mdy dead`');
+    assert.doesNotMatch(dev.log(), /\[return\][^\n]*handlers\.b\.dead/,
+                        'not returned, which would bounce it forever');
+    assert.equal(dev.child.exitCode, null);
+  } finally {
+    dev.child.kill();
   }
 });
