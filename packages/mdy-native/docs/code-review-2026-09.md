@@ -1225,13 +1225,36 @@ gfm             1 of  39      ext-tables      0 of  12
 Sixty per cent of real-world markdown. Every one of those has a tree that
 differs from node's.
 
-**Not fixed, and not a morning.** The fix is HTML5 tree construction — the
-algorithm, not a tag matcher — either by vendoring a parser (`docs/parser.md`
-names lexbor, and notes the writer for the round trip already exists here) or
-by writing one. A partial measure is worse than none: this file's own opening
-comment says a port that reasons the shapes out rather than taking them from
-the reference "gets them subtly wrong", and the five rows above are five
-different HTML5 rules, not one.
+**Not fixed, and not a morning.** It needs an HTML5 tokenizer and tree
+constructor — the algorithm, not a tag matcher. Measured, decomposed, on the
+526 real documents that keep a raw node:
+
+```
+112   a per-node fragment parse would be enough
+391   the tags STRADDLE markdown and no per-node parse can see both halves
+ 23   balanced, and the tree still differs — HTML5 repaired something
+```
+
+The dominant requirement is the middle row, and it is not exotic. It is
+`<div class="x">`, a blank line, some markdown, a blank line, `</div>` — which
+reaches the tree as raw, element, element, raw, so the opening tag and its
+closing tag are in different nodes with content between them. Nothing that
+parses one raw value at a time can pair those.
+
+On top of that the repair rules fire, which is the last row plus every one of
+the five above: an unclosed tag, crossed formatting elements, a block inside a
+`<p>`, a stray tag in a table. §4 hand-wrote the table one.
+
+And it has to agree with `parse5`, because that is what rehype-raw drives —
+its whole tree goes through parse5's incremental parser with the existing
+nodes injected as opaque "stitches", so they can be MOVED by tree construction
+without being re-tokenized. Matching it means matching a specification, which
+is the case for vendoring rather than writing: `docs/parser.md` already names
+lexbor, and the writer for the round trip exists here.
+
+A partial measure is worse than none. This file's own opening comment says a
+port that reasons the shapes out rather than taking them from the reference
+"gets them subtly wrong", and the rows above are separate rules, not one.
 
 What is cheap and worth doing first is the containment half on its own —
 closing at the document boundary what a document opened — because that is the
