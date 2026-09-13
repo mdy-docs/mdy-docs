@@ -60,7 +60,8 @@ what those checks do not reach.
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
 | B33 | ~~Medium~~ **fixed** | **mdy-docs** | The render memo served a stale `$.count`: a rebuild after a file was added kept the old number |
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
-| B35 | Low | `cli.c` dev server | The publish dedupe list grows for the life of the process and is never freed |
+| B35 | ~~Low~~ **fixed** | `cli.c` dev server | The publish dedupe list grew without bound — and silently dropped a value that changed back |
+| B43 | Low | `check-alloc` | The allocation sweep covers `mdy build` and no other command |
 | B36 | ~~Medium~~ **fixed** | `engine_value.c` | `.inf`/`.nan` crossed into a document as numbers; node sends `null` |
 | B37 | ~~High~~ **fixed** | **binjson** encoder | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
 | B38 | ~~Low~~ **fixed** | `yaml.c` | `core_int` accumulates digits in a double: a 17-digit integer lands on the wrong one |
@@ -492,13 +493,13 @@ process is gone: `curl` reports `http 000`, the connection closed with no
 response.
 
 **Fixed.** `dev_deliver` holds when there is no build
-([cli.c:1704](../src/cli.c#L1728)): 500 returns the messages to the broker,
+([cli.c:1704](../src/cli.c#L1763)): 500 returns the messages to the broker,
 which brings them back after a backoff, by which time a save may have fixed
 the build. Routing them with no engine would have found no page of that name,
 which is a different thing and settles them away — so the guard has to come
 before the routing, not be folded into it. `dev_drain`, the in-process path,
 does not take messages it cannot render either
-([cli.c:1500](../src/cli.c#L1524)); they stay queued for the drain after the
+([cli.c:1500](../src/cli.c#L1559)); they stay queued for the drain after the
 next good build. And `mdy_engine_page_index` and `mdy_engine_document_path`
 tolerate a NULL engine ([engine.c:3261](../src/engine.c#L3372)), which is the
 convention `mdy_engine_count` already sets in that file.
@@ -805,7 +806,7 @@ So the fix is not a `free` added to one path; it is the shape §3 names under
 for B3 and B12. `cmd_build` has one exit now
 ([cli.c:760](../src/cli.c#L784)), `rc` carries the answer to it
 ([697](../src/cli.c#L721)), and the cleanup is written once — the third copy
-in this file, after `mdy dev`'s ([1707](../src/cli.c#L1731)) and document
+in this file, after `mdy dev`'s ([1707](../src/cli.c#L1766)) and document
 mode's, and the first that runs on every path rather than some.
 
 Every message and exit code was compared before and after: identical.
@@ -820,25 +821,77 @@ review that a same-second `make` has produced a result that described a
 different binary — see §3's Makefile note, where it cost a phantom FAIL and a
 phantom PASS.
 
-#### B35 — the dev server's dedupe list only grows (Low)
+#### B35 — the dev server's dedupe list only grew (Low) — FIXED
 
-Found while measuring B15, and left alone deliberately: the 24 blocks that are
-the same before and after that fix.
+Filed as retention — "worth someone deciding about rather than discovering" —
+and the deciding turned up something that was not a decision at all.
 
-`dev_send` fingerprints each message as `name\1json` and keeps it in `d->sent`
-([cli.c:1441](../src/cli.c#L1465)) so a rebuild does not re-send what it
-already sent. Nothing ever removes one, and `mdy dev` has no exit path that
-frees the array — it runs until it is killed. So the list grows by one entry
-per distinct message for as long as the server is up, and `leaks` counts every
-entry.
+**The decision, as it actually stood.** `mdy dev` rebuilds the whole site on
+every save and every `$.publish` fires again, so something has to choose what
+reaches the broker. mdy-docs answers by **never publishing from its dev server
+at all** (`src/serve.js:177` — "a publish that went out would re-fire on every
+keystroke"), which means there is no node behaviour to match here: this server
+sends, so the rule is ours. It kept every `(name, value)` it had ever sent.
+That is bounded by nothing, and the lookup is a linear scan of the list, so a
+long session also paid for its own history on every rebuild.
 
-This is retention, not a leak: dropping an entry means re-sending its message,
-which is the thing the list exists to prevent. It is on the list because
-"grows without bound in a process meant to run all day" is worth someone
-deciding about rather than discovering — a session that publishes a message
-per save, with the data changing each time, accumulates a fingerprint per save.
-A bound (keep the last N, or key on the message name and let the newest win)
-changes delivery semantics, which is why it is a finding and not a fix.
+**And it dropped a value that changed back.** Not a consequence anyone chose —
+it falls out of keying on the value forever. Measured against a broker that
+counts what it is sent:
+
+```
+                                   publishes
+initial build (n: 1)                   1
+n: 1 -> 2                              2   sent
+n: 2 -> 1  (back to a seen value)      2   NOT SENT
+n: 1 -> 3                              3   sent
+```
+
+A consumer never learns the value returned to 1. For a thing whose whole
+purpose is to say "this changed", that is the one thing it must not do — which
+is the argument `serve.js` makes one step earlier about dropping messages
+silently.
+
+**So: one entry per NAME, holding that name's last value**
+([cli.c:1499](../src/cli.c#L1499)). What the list is for is not sending the
+*same* thing twice, and that is a question about what a name holds **now**. A
+name is found, compared, and replaced. The same run now gives 1, 2, **3**, 4 —
+every change delivered, in either direction — and a save that edits the page
+without changing the message still sends nothing, which is the property the
+list existed for. The list is bounded by the number of message names a site
+has, and so is the scan.
+
+The alternative bound the entry suggested — keep the last N of `(name, value)`
+— was not taken: an entry ageing out re-sends a value that has not changed, a
+duplicate with no event behind it. Keying on the name is bounded *and* removes
+the dropped revert, which is strictly better than bounded alone.
+
+**Two unchecked allocations went with it.** `fp`'s `malloc` and the array's
+`realloc` were both unchecked in the same function, and both are B24's class:
+`fp` is written through immediately, and a failed `realloc` returned the old
+pointer with the count already advanced. They are `mdy_xmalloc`/`mdy_xrealloc`
+now. They survived B24 because **`check-alloc` sweeps `mdy build`** — `dev`,
+`dead` and document mode are not swept by it, which is filed as **B43**.
+
+A test in `test/dev.test.js` ([399](../test/dev.test.js#L399)) drives a real
+dev server against a real broker and asserts both halves, because either alone
+is satisfied by a broken implementation: "always send" passes the first,
+"never send" the second. Against the old rule it fails on exactly the
+changed-back assertion.
+
+#### B43 — the allocation sweep covers one command (Low)
+
+`check-alloc` and `check-alloc-wasm` both run `mdy build`. `mdy dev`, `mdy
+dead`, `mdy publish` and document mode (`mdy <file>`) allocate down paths no
+sweep reaches — which is how the two unchecked allocations in `dev_send`
+survived B24's pass over the same file (B35).
+
+`dev` is the one worth reaching and the one that resists: the sweep's
+invariant is "the same site, or a reported failure", and a server that does not
+exit has neither. It wants a different assertion — that the server stays up and
+says what failed — which is `test/dev.test.js`'s shape rather than the sweep's.
+Document mode is the easy half: it is one process, one output, and the existing
+invariant fits it unchanged.
 
 #### B36 — `.inf` and `.nan` crossed into a document as numbers (Medium) — FIXED
 
@@ -1129,7 +1182,7 @@ anything driving emscripten under node will meet it: **emscripten sets
 last ordinal was a reported failure therefore exits 1 having found nothing
 wrong, and one whose last ordinal succeeded exits 0 — so the inherited code is
 noise in both directions. It is reset explicitly
-([check-alloc.mjs:158](../wasm/check-alloc.mjs#L158)).
+([check-alloc.mjs:158](../wasm/check-alloc.mjs#L165)).
 
 **`check-alloc` sweeps any corpus now, because it is parallel.** The entry
 said blog and docs-site take 25 and 35 minutes "so they are not a target and
@@ -1319,7 +1372,7 @@ reach it.
   | from `dev_send` (see B35) | 24 | 24 |
 
   The response is zeroed at its declaration and freed on every path
-  ([cli.c:1487](../src/cli.c#L1511)). The zeroing is what lets the free be
+  ([cli.c:1487](../src/cli.c#L1546)). The zeroing is what lets the free be
   unconditional: the encode can fail before `http_request` has touched `r` at
   all. The old expression avoided reading `r.error` in that case by testing
   `bytes` first — which is sound, since `mdy_engine_encode_json` NULLs it
@@ -1329,7 +1382,7 @@ reach it.
   The `mdy dev` health probe had the same shape one guard weaker —
   `if (r.status) http_response_free(&r)` left behind the body of anything whose
   status line did not parse. Also unconditional now
-  ([cli.c:1999](../src/cli.c#L2023)). The other four `http_request` callers are
+  ([cli.c:1999](../src/cli.c#L2058)). The other four `http_request` callers are
   fine: each either `exit`s or calls `broker_fail`, which exits.
 
   `check-dev` had no coverage of the `--broker` path at all — every other test
@@ -1398,7 +1451,7 @@ reach it.
   **The bind.** It bound `0.0.0.0`, so every machine on the network could reach
   a server that rebuilds a directory on disk and, with a broker, renders
   whatever a POST tells it to. It binds `127.0.0.1` now, and `--host`
-  ([cli.c:1960](../src/cli.c#L1984)) opts back in and says so on stderr when it
+  ([cli.c:1960](../src/cli.c#L2019)) opts back in and says so on stderr when it
   does. This is a deliberate divergence: node's `server.listen(port)` binds
   everything too, but node has no delivery endpoint to reach — the bus is
   native-only. Verified with `lsof`: `127.0.0.1:45311 (LISTEN)` by default,
@@ -1411,7 +1464,7 @@ reach it.
   ([httpd.c:141](../src/httpd.c#L141)), 19 bytes from `/dev/urandom` or
   `BCryptGenRandom`, and **there is no fallback**: if the OS will not supply
   randomness the server says so and serves without the bus
-  ([cli.c:1976](../src/cli.c#L2000)), because a token that looks random and is
+  ([cli.c:1976](../src/cli.c#L2035)), because a token that looks random and is
   not is worse than a refusal. `srand`/`rand` are gone from the program.
 
   **The request cap.** There was none: `recv` appended and the buffer doubled,
@@ -1816,7 +1869,7 @@ reach it.
   500 and lets the broker's retry and dead-letter policy have them.
 
   The guard is now one call deeper
-  ([cli.c:1610](../src/cli.c#L1634)), where both paths reach it: no page and
+  ([cli.c:1610](../src/cli.c#L1669)), where both paths reach it: no page and
   not the dead-letter channel means the batch is **returned**, with the same
   `[return]` line the remote path prints. `dev_deliver`'s own guard is now
   redundant and harmless.
@@ -2042,9 +2095,9 @@ and then there would be nothing to escape.
 **The `Dev` struct and the bus code in cli.c** carry fixed-size scratch
 (`done_ix[64]`, `done_list[4096]`, `char cand[3][4200]`), fake growable
 arrays by passing a compound literal as the capacity
-([1472](../src/cli.c#L1496), [1883](../src/cli.c#L1907)), and reuse the drain
+([1623](../src/cli.c#L1623), [2058](../src/cli.c#L2058)), and reuse the drain
 loop for document mode by constructing a fake `Dev`
-([1646–1679](../src/cli.c#L1670-L1703)). Five functions return pointers to
+([1646–1679](../src/cli.c#L1705-L1738)). Five functions return pointers to
 `static char msg[4096]`.
 
 **The Makefile** ~~repeats the twelve-file engine source list four times~~

@@ -378,6 +378,95 @@ test('a broker that refuses a publish is reported, and the server goes on', asyn
  * Before the fix this same sequence printed
  *   [dead] handlers.a #1 no handlers.a page — kept, see `mdy dead handlers.a`
  */
+/*
+ * What a rebuild re-publishes, and what it does not. (B35.)
+ *
+ * `mdy dev` rebuilds the whole site on every save and every `$.publish` fires
+ * again, so something has to decide what reaches the broker. mdy-docs answers
+ * that by never publishing from its dev server at all (src/serve.js: "a
+ * publish that went out would re-fire on every keystroke"); this one sends, so
+ * it keeps a list — and what that list is KEYED ON is the behaviour here.
+ *
+ * It used to hold every (name, value) it had ever sent, which dropped a value
+ * that changed BACK: 1 -> 2 -> 1 sent twice, and a consumer never learned it
+ * had returned to 1. One entry per NAME, holding that name's last value,
+ * sends on every change in either direction and still sends nothing for a
+ * rebuild that changed no message.
+ *
+ * Both halves are asserted, because either alone is satisfied by a broken
+ * implementation: "always send" passes the first, "never send" the second.
+ */
+test('a rebuild re-publishes a value that changed, and only one that changed', async () => {
+  const published = [];
+  const broker = createServer((req, res) => {
+    req.resume();
+    if (req.url.startsWith('/health')) { res.writeHead(200); return res.end('ok'); }
+    if (req.method === 'PUT') { res.writeHead(200); return res.end('ok'); }
+    if (req.url.startsWith('/pub/')) {
+      published.push(req.url);
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      return res.end(Buffer.from([0]));
+    }
+    res.writeHead(404); res.end('no');
+  });
+  await new Promise((r) => broker.listen(0, '127.0.0.1', r));
+  const brokerPort = broker.address().port;
+
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  let body = 0;
+  const write = (n) =>
+    writeFileSync(join(root, 'main.mdy'),
+      `% $.publish('handlers.thing', { n: ${n} })\n= main ${n} body ${body}\n`);
+  writeFileSync(join(root, 'thing.mdy'),
+    '+++\nmessageName: handlers.thing\n+++\n= handler\n');
+  write(1);
+
+  const child = spawn(bin, ['dev', root, '--port', '0', '--broker', `http://127.0.0.1:${brokerPort}`]);
+  let log = '';
+  child.stdout.on('data', (b) => { log += b; });
+  child.stderr.on('data', (b) => { log += b; });
+
+  /* A save either publishes or it does not, and "does not" cannot be waited
+   * for — so a change that SHOULD publish is waited for, and one that should
+   * not is given the same budget before the count is read. */
+  const settle = async (n, expect) => {
+    const before = published.length;
+    write(n);
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (expect && published.length > before) break;
+      if (child.exitCode !== null) throw new Error(`the server exited\n${log}`);
+      await new Promise((r) => setTimeout(r, 100));
+      if (!expect && Date.now() > before + 3000) break;
+    }
+    return published.length - before;
+  };
+
+  try {
+    const deadline = Date.now() + 15000;
+    while (published.length === 0 && Date.now() < deadline) {
+      if (child.exitCode !== null) throw new Error(`the server exited\n${log}`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(published.length, 1, 'the first build publishes');
+
+    assert.equal(await settle(2, true), 1, 'a changed value is published');
+    assert.equal(await settle(1, true), 1,
+                 'and one that changed BACK is published — it is a change too');
+
+    body = 1;
+    assert.equal(await settle(1, false), 0,
+                 'a save that edits the page but not the message publishes nothing');
+    body = 2;
+    assert.equal(await settle(1, false), 0, '...and still nothing on the next save');
+
+    assert.equal(child.exitCode, null, 'the server is still running');
+  } finally {
+    child.kill();
+    broker.close();
+  }
+});
+
 test('a queued message whose page has gone is returned, not marked done', async () => {
   const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
   writeFileSync(join(root, 'main.mdy'), "% $.publish('handlers.a', { n: 1 })\n= main\n");

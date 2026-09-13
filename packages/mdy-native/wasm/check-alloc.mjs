@@ -85,13 +85,20 @@ for (const dir of chosen.mounts) {
   for (const [rel, path] of filesUnder(dir)) input.set(`${top}/${rel}`, readFileSync(path));
 }
 
-const factoryFor = async () =>
-  (await import(`../build/wasm/mdy-native-af.mjs?${Math.random()}`)).default;
+/*
+ * ONE import, many instances. A MODULARIZE=1 factory hands back an
+ * independent Module every call — its own linear memory, its own MEMFS, its
+ * own copy of the engine's statics — which is all "a fresh instance" needs.
+ *
+ * This was a cache-busting `import(...?${Math.random()})` first, out of
+ * caution, and that is a leak: node keeps every distinct specifier in the
+ * module registry with its compiled wasm attached. It survives the fixture's
+ * 1,807 and kills the process somewhere in the blog's 14,298.
+ */
+const createModule = (await import('../build/wasm/mdy-native-af.mjs')).default;
 
-/* A fresh instance every time — see the file comment. `arm` runs before
- * main(), so the count is of that build alone. */
+/* `arm` runs before main(), so the count is of that build alone. */
 async function once(nth) {
-  const createModule = await factoryFor();
   let armed;
   const out = await build(input, {
     site: chosen.site,

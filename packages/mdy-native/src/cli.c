@@ -1431,7 +1431,7 @@ typedef struct {
     char token[40];
     char callback[512];
     char **policied; size_t policied_count;
-    char **sent; size_t sent_count;             /* name\0data fingerprints already sent */
+    char **sent; size_t sent_count;             /* one `name\1data` per NAME: see dev_send */
     double last_heartbeat;
 } Dev;
 
@@ -1489,15 +1489,50 @@ static void dev_send(Dev *d, int dedupe, int announce) {
     Messages fresh = { 0 };
     for (size_t i = 0; i < d->messages.count; i++) {
         if (!dedupe) { collect_message(&fresh, d->messages.names[i], d->messages.json[i], 0); continue; }
-        size_t n = strlen(d->messages.names[i]) + 1 + strlen(d->messages.json[i]) + 1;
-        char *fp = malloc(n);
-        snprintf(fp, n, "%s%c%s", d->messages.names[i], 1, d->messages.json[i]);
-        int dup = 0;
-        for (size_t k = 0; k < d->sent_count; k++) if (strcmp(d->sent[k], fp) == 0) { dup = 1; break; }
-        if (dup) { free(fp); continue; }
-        d->sent = realloc(d->sent, (d->sent_count + 1) * sizeof *d->sent);
-        d->sent[d->sent_count++] = fp;
-        collect_message(&fresh, d->messages.names[i], d->messages.json[i], 0);
+        const char *name = d->messages.names[i];
+        size_t name_len = strlen(name);
+        size_t n = name_len + 1 + strlen(d->messages.json[i]) + 1;
+        char *fp = mdy_xmalloc(n);
+        snprintf(fp, n, "%s%c%s", name, 1, d->messages.json[i]);
+
+        /*
+         * ONE ENTRY PER NAME, holding that name's LAST value. (B35.)
+         *
+         * This kept every (name, value) it had ever sent, which did two
+         * things nobody chose. It grew by an entry per distinct value for as
+         * long as the server was up -- and the lookup is this loop, so a
+         * session paid for its own history on every rebuild. And a value that
+         * changed BACK was silently dropped: publishing n:1, then n:2, then
+         * n:1 again sent twice, and a consumer never learned it had returned.
+         * Measured, before this: `1 -> 2 -> 1 -> 3` produced three sends, not
+         * four.
+         *
+         * What the list is for is not sending the SAME thing twice, and that
+         * is a question about the value a name has NOW. So a name is found,
+         * compared, and replaced. A rebuild that changes nothing still sends
+         * nothing; a rebuild that changes a value sends it, whichever
+         * direction it moved; and the list is bounded by the number of
+         * message names a site has.
+         *
+         * There is no node behaviour to match here: mdy-docs' dev server
+         * never publishes at all (src/serve.js -- "a publish that went out
+         * would re-fire on every keystroke"), which is the same problem
+         * answered by declining the feature. This server sends, so it needs
+         * the rule.
+         */
+        size_t at = d->sent_count;
+        for (size_t k = 0; k < d->sent_count; k++) {
+            if (strncmp(d->sent[k], name, name_len) == 0 && d->sent[k][name_len] == 1) { at = k; break; }
+        }
+        if (at < d->sent_count) {
+            if (strcmp(d->sent[at], fp) == 0) { free(fp); continue; }   /* unchanged */
+            free(d->sent[at]);
+            d->sent[at] = fp;
+        } else {
+            d->sent = mdy_xrealloc(d->sent, (d->sent_count + 1) * sizeof *d->sent);
+            d->sent[d->sent_count++] = fp;
+        }
+        collect_message(&fresh, name, d->messages.json[i], 0);
     }
     messages_clear(&d->messages);
     char ts[32];
