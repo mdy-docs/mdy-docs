@@ -2548,32 +2548,86 @@ is the only state in which a *new* warning is noticed.
 
 ## 5. Suggested order
 
+The order as it was proposed, and what became of it. Items 1 to 7 are done;
+what is left is at the bottom, with the reason each is waiting rather than a
+date.
+
 1. ~~B3~~, ~~B12~~, ~~B6~~ were one change: give `render_tree_out` a single
    exit and hash the record without `_id`. Both halves done.
 2. ~~B1~~, ~~B2~~, ~~B8~~: stop building identity as text. The document text
    is done — the files are separate sources and the counting logic is gone —
    and identity is escaped rather than pasted. What is left of the idea is
-   that identity still goes out as YAML and comes back parsed at all; building
-   it as values would need a way to make an `mdy_yaml` mapping from C.
+   that identity still goes out as YAML and comes back parsed at all; see
+   below.
 3. ~~B4~~: sort hits by a decoded index. Done.
 4. ~~B5~~: call `nis_close` from `close_set` and finish `nis_close`
    (`bpt_free`). Done.
 5. ~~B11~~, ~~B7~~ (a depth cap — in what BUILDS the trees, not in the
-   thirteen things that walk them), ~~B9~~, ~~B10~~, ~~B29~~, B13 — each a few
-   lines, except B29, which was three: the binding, the value, and the memo
-   key that has to know the set's size now that a document can read it, and
-   ~~B13~~, which was one function — plus the stress mode that had to be able
-   to see it first.
-6. Delete §2's dead code; add the `check-sites` fixture and a
-   `check-generated` target; make the default build warning-free.
-7. ~~Then the structural work in §3, starting with splitting engine.c along its
-   existing section boundaries.~~ The split is done — four files along the
+   thirteen things that walk them), ~~B9~~, ~~B10~~, ~~B29~~, ~~B13~~ — each
+   a few lines, except B29, which was three: the binding, the value, and the
+   memo key that has to know the set's size now that a document can read it,
+   and B13, which was one function plus the stress mode that had to be able to
+   see it first.
+6. ~~Delete §2's dead code; add the `check-sites` fixture and a
+   `check-generated` target; make the default build warning-free.~~ **All
+   three done.** The fixture is `fixture-awkward` and found a bug on its first
+   run (§4); `check-generated` also had to fix two generators that had never
+   run as their own instructions said; the build has been silent since §2.
+7. ~~Then the structural work in §3, starting with splitting engine.c along
+   its existing section boundaries.~~ The split is done — four files along the
    call graph's seams rather than the section comments', and the Makefile's
-   duplicated source list and missing header prerequisites with it. What is
-   left of §3 is the part the split exposed rather than solved: `struct
-   mdy_engine`'s 56 fields, the process-global memo and `static` buffers,
-   `render_tree_out`'s length, identity as text, the `Dev` struct, and
-   compiling to object files.
+   duplicated source list and missing header prerequisites with it.
+   ~~Compiling to object files~~ and ~~the `Dev` struct's fixed-size scratch~~
+   are done too, the second of which was hiding three stack-buffer-overflows.
+
+**What is left, in the order it is worth doing.**
+
+1. **B44**, the only open finding: a list item holding one non-paragraph block
+   is tight here and loose in node. Small, local to `markdown.c`'s
+   `list_tight`, and the rule is written down in the finding.
+2. **The public API that `test/engine.c` never calls** — `render_text`,
+   `render_json`, `page_index`, `document_path`, `set_scope_json`,
+   `set_response`, `set_split`/`sanitize`/`tasks`, `encode_json`,
+   `root_count`/`root_at`. They are exercised only by the 34 CLI cases, on one
+   platform. This is the cheapest remaining thing with real value: each is a
+   few lines of `test/engine.c`, and the surface is the one an embedder
+   actually holds.
+3. **`struct mdy_engine`'s 56 fields** ([engine_internal.h:97](../src/engine_internal.h#L97)),
+   still 56. It is grouped and commented — the VM, the open set, composition,
+   the callbacks, the knobs, identity, the walk — so what is wanted is those
+   groups made into structs, which is a mechanical rename across four files
+   that changes no behaviour. Worth doing when something else needs those
+   files open.
+4. **The process-global memo**, which wants a session object that owns it and
+   is passed to `mdy_engine_new` — a public API change reaching cli.c, the
+   tests, the wasm wrapper and mdy-live-preview-native. §3 has the argument
+   for why the globality is load-bearing rather than careless.
+5. **`render_tree_out`'s length** and **identity as text**, both in §3 with
+   the trade written out: each is a rewrite of code that three findings lived
+   in, for no behavioural gain, checked by nothing but the parity suite.
+
+**One item is withdrawn rather than deferred.** §4 said the four
+error-reporting conventions should be two, and that `fprintf(stderr)` from
+inside the library is the defect part because "`on_message` exists for exactly
+that". Measured, that is wrong twice over:
+
+- `mdy_engine_on_message` is registered in **one** place in the whole CLI
+  ([cli.c:983](../src/cli.c#L983)), and it is document mode. The messages in
+  question come from the directory walk
+  ([engine_walk.c:917](../src/engine_walk.c#L917)), which only runs under
+  `mdy build` and `mdy dev` — neither of which registers it. Routing them
+  through the callback would make them vanish exactly where they can fire.
+- The text is **parity**. `mdy build` over a `.yaml` holding a sequence prints
+  `mdy: list.yaml must be a YAML mapping — list.yaml keeps its raw identity,
+  no parsed fields`, and `node bin/mdy.js` prints the same bytes: mdy-docs
+  prints it from inside its own library too. Going through `doc_message` would
+  print `mdy: warning: … (…)` instead, which is a divergence introduced by a
+  tidying change.
+
+So the real change, if it is ever wanted, is to register `on_message` in build
+and dev first and decide what each should print — which is a decision about
+the CLI's output, not a cleanup of the library. The highlighter's two
+([engine.c:2565](../src/engine.c#L2565)) are the same shape.
 
 ---
 
