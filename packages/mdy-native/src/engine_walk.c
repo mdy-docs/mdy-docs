@@ -14,6 +14,7 @@
  * different clothes: something about a file encoded as text and read back.
  */
 #include "engine_internal.h"
+#include "xalloc.h"
 
 /* ---- a directory as a document set -------------------------------------------
  *
@@ -156,16 +157,22 @@ int ends_with_ci(const char *s, const char *suffix) {
  * writer and the reader have to agree, and this is the half that can be sure.
  */
 /* Room for `more` bytes, growing from nothing. 0 when there is none. */
-static int put_room(char **buf, size_t *len, size_t *cap, size_t more) {
+/*
+ * Room for `more` bytes of the identity block being built.
+ *
+ * This returned 0 on failure and every caller answered by returning quietly,
+ * which truncated the block mid-line: a document whose `path` or `mtime` was
+ * simply not there, written into the set and built as though that were the
+ * file. There is no error channel through a chain of void put_* helpers, so
+ * it does not fail. See xalloc.h.
+ */
+static void put_room(char **buf, size_t *len, size_t *cap, size_t more) {
     size_t need = *len + more;
-    if (need <= *cap) return 1;
+    if (need <= *cap) return;
     size_t want = *cap ? *cap : 256;
     while (need > want) want *= 2;
-    char *grown = realloc(*buf, want);
-    if (!grown) return 0;
-    *buf = grown;
+    *buf = mdy_xrealloc(*buf, want);
     *cap = want;
-    return 1;
 }
 
 /*
@@ -185,7 +192,7 @@ static void put_scalar(char **buf, size_t *len, size_t *cap, const char *value) 
     static const char H[] = "0123456789abcdef";
     size_t vlen = strlen(value);
     /* Four bytes out for one in is the worst an escape does (`\xNN`). */
-    if (!put_room(buf, len, cap, vlen * 4 + 8)) return;
+    put_room(buf, len, cap, vlen * 4 + 8);
 
     char *out = *buf + *len;
     *out++ = '"';
@@ -214,13 +221,13 @@ static void put_scalar(char **buf, size_t *len, size_t *cap, const char *value) 
 static void put_quoted(char **buf, size_t *len, size_t *cap,
                        const char *key, const char *value) {
     size_t klen = strlen(key);
-    if (!put_room(buf, len, cap, klen + 4)) return;
+    put_room(buf, len, cap, klen + 4);
     memcpy(*buf + *len, key, klen);
     *len += klen;
     (*buf)[(*len)++] = ':';
     (*buf)[(*len)++] = ' ';
     put_scalar(buf, len, cap, value);
-    if (!put_room(buf, len, cap, 2)) return;
+    put_room(buf, len, cap, 2);
     (*buf)[(*len)++] = '\n';
     (*buf)[*len] = '\0';
 }
@@ -232,20 +239,20 @@ static void put_quoted(char **buf, size_t *len, size_t *cap,
 static void put_tag_list(char **buf, size_t *len, size_t *cap,
                          const char (*tags)[128], size_t count) {
     if (count == 0) {
-        if (!put_room(buf, len, cap, 16)) return;
+        put_room(buf, len, cap, 16);
         *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags: []\n");
         return;
     }
-    if (!put_room(buf, len, cap, 8)) return;
+    put_room(buf, len, cap, 8);
     *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags:\n");
     for (size_t k = 0; k < count; k++) {
-        if (!put_room(buf, len, cap, 8)) return;
+        put_room(buf, len, cap, 8);
         (*buf)[(*len)++] = ' ';
         (*buf)[(*len)++] = ' ';
         (*buf)[(*len)++] = '-';
         (*buf)[(*len)++] = ' ';
         put_scalar(buf, len, cap, tags[k]);
-        if (!put_room(buf, len, cap, 2)) return;
+        put_room(buf, len, cap, 2);
         (*buf)[(*len)++] = '\n';
         (*buf)[*len] = '\0';
     }
@@ -333,9 +340,9 @@ static size_t add_tag(char (**tags)[128], size_t *count, size_t *cap,
         if (strcmp((*tags)[i], lowered) == 0) return *count;
     if (*count == *cap) {
         size_t want = *cap ? *cap * 2 : 8;
-        void *grown = realloc(*tags, want * sizeof **tags);
-        if (!grown) return *count;
-        *tags = grown;
+        /* Returning the old count here dropped the tag and said nothing: the
+         * document left every index that tag names. See xalloc.h. */
+        *tags = mdy_xrealloc(*tags, want * sizeof **tags);
         *cap = want;
     }
     memcpy((*tags)[(*count)++], lowered, name_len + 1);
@@ -346,8 +353,7 @@ static void scan_hashtags(const char *text, size_t tlen,
                           char (**out)[128], size_t *count, size_t *cap) {
     mdy_script *script = mdy_script_compile(text, tlen);
 
-    char *prose = malloc(tlen + 1);
-    if (!prose) { mdy_script_free(script); return; }
+    char *prose = mdy_xmalloc(tlen + 1);
     size_t plen = 0;
     size_t at = 0, line_no = 0;
     int in_fence = 0;
@@ -594,9 +600,15 @@ static char *rewrite_imports(mdy_engine *e, const char *source_path,
                 e->imports = grown;
                 e->import_cap = want;
             }
+            /* Written before the count moves: an import whose fields could
+             * not be copied is not an import with NULL for a spec, which is
+             * what every later reader dereferenced. */
+            char *isrc = strdup(source_path);
+            char *ispec = strdup(spec);
+            if (!isrc || !ispec) { free(isrc); free(ispec); free(out); return NULL; }
             Import *imp = &e->imports[e->import_count++];
-            imp->source_path = strdup(source_path);
-            imp->spec = strdup(spec);
+            imp->source_path = isrc;
+            imp->spec = ispec;
             imp->set = NULL;
 
             char rewritten[4096];
@@ -660,20 +672,18 @@ static void cache_put(ImportCache *c, const char *dir, mdy_engine *set) {
          * next cache_get read freed memory — a use-after-free reached from an
          * allocation failure rather than at it. (B24.)
          *
-         * If the second grow fails, `c->dirs` is simply larger than `c->cap`
-         * claims. That wastes a little and is otherwise nothing.
+         * Each grow is still taken as it succeeds, for that reason. What has
+         * gone is the failure itself: returning without adding left the
+         * import uncached, and an import resolved twice is a second engine,
+         * a different render count and different composition-token ids --
+         * a different site, built quietly. See xalloc.h.
          */
         size_t want = c->cap ? c->cap * 2 : 8;
-        char **d = realloc(c->dirs, want * sizeof *d);
-        if (!d) return;
-        c->dirs = d;
-        mdy_engine **s = realloc(c->sets, want * sizeof *s);
-        if (!s) return;
-        c->sets = s;
+        c->dirs = mdy_xrealloc(c->dirs, want * sizeof *c->dirs);
+        c->sets = mdy_xrealloc(c->sets, want * sizeof *c->sets);
         c->cap = want;
     }
-    char *copy = strdup(dir);
-    if (!copy) return;
+    char *copy = mdy_xstrdup(dir);
     c->dirs[c->count] = copy;
     c->sets[c->count] = set;
     c->count++;
@@ -724,6 +734,10 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
                           const Ancestors *ancestors, char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
     e->root = strdup(root);
+    if (!e->root) {
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
+    }
     e->cache = cache;
 
     char *listing = fsx_list(root, ".", NULL);
@@ -760,8 +774,18 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         const char *name = basename_of(rel);
         const char *ext = extension_of(name);
 
+        /*
+         * The walk has just listed this file, so a stat that fails is a real
+         * failure -- and ignoring it left `size` and `mtime` at zero, which
+         * is a record claiming an empty file last written in 1970. The
+         * document was then built and written from it.
+         */
         double size = 0, mtime = 0;
-        fsx_stat(root, rel, &size, &mtime);
+        if (fsx_stat(root, rel, &size, &mtime) != 0) {
+            if (error && error_len) snprintf(error, error_len, "cannot stat %s/%s", root, rel);
+            free(source); free(listing); walked_free(files, file_count);
+            return -1;
+        }
 
         size_t body_len = 0;
         char *body = NULL;
@@ -771,7 +795,20 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
 
         int is_image = is_image_ext(ext);
         uint8_t *bytes = NULL;
-        if (is_mdy || is_md || is_yaml || is_image) bytes = fsx_read(root, rel, &body_len);
+        if (is_mdy || is_md || is_yaml || is_image) {
+            bytes = fsx_read(root, rel, &body_len);
+            /*
+             * A file the listing named and the read could not deliver. Letting
+             * it through as no bytes drops a page from the site and still
+             * reports success -- B25 settled what an unreadable DIRECTORY
+             * means, and a file is the same answer.
+             */
+            if (!bytes) {
+                if (error && error_len) snprintf(error, error_len, "cannot read %s/%s", root, rel);
+                free(source); free(listing); walked_free(files, file_count);
+                return -1;
+            }
+        }
 
         /*
          * The record. `path` is written LAST of the identity fields for the
@@ -884,6 +921,16 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             char yerr[256];
             yerr[0] = '\0';
             own = mdy_yaml_parse((const char *)bytes, body_len, yerr, sizeof yerr);
+            /* A .yaml this cannot READ keeps its raw identity and says so,
+             * which is a real outcome. One it could not ALLOCATE for is not:
+             * the file would lose every parsed field on a build that
+             * succeeded. MDY_YAML_OOM is what tells them apart. */
+            if (!own && strcmp(yerr, MDY_YAML_OOM) == 0) {
+                if (error && error_len) snprintf(error, error_len, "out of memory");
+                free(bytes); free(source); free(listing);
+                walked_free(files, file_count);
+                return -1;
+            }
             mdy_yaml_type kind = own ? mdy_yaml_type_of(mdy_yaml_root(own)) : MDY_YAML_NULL;
             if (!own)
                 fprintf(stderr, "mdy: %s — %s keeps its raw identity, no parsed fields\n",
@@ -970,13 +1017,33 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
     for (size_t i = 0, at = 0; i < file_count; i++) {
         for (size_t k = 0; k < per_file[i]; k++, at++) {
             e->ident_is_md[at] = (char)(files[i].is_md ? 1 : 0);
-            e->ident_pre[at] = files[i].pre ? strdup(files[i].pre) : NULL;
-            e->ident_post[at] = files[i].post ? strdup(files[i].post) : NULL;
+            /*
+             * NULL here is a real value -- it is what a file with no identity
+             * block has -- so a failed copy could not be told from one, and
+             * the document quietly lost its defaults and its overrides. A
+             * page came out changed, or did not come out at all, on a build
+             * that reported success.
+             */
+            if (files[i].pre) {
+                e->ident_pre[at] = strdup(files[i].pre);
+                if (!e->ident_pre[at]) goto ident_oom;
+            }
+            if (files[i].post) {
+                e->ident_post[at] = strdup(files[i].post);
+                if (!e->ident_post[at]) goto ident_oom;
+            }
             /* The parsed mapping goes to the FIRST document of the file —
              * only a .mdy is ever more than one, and a .mdy has no mapping. */
             e->ident_data[at] = k == 0 ? files[i].data : NULL;
         }
         if (per_file[i]) files[i].data = NULL;      /* the engine owns it now */
+    }
+    if (0) {
+    ident_oom:
+        free(per_file); walked_free(files, file_count); free(source);
+        mdy_documents_free(docs);
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
     }
     free(per_file);
     walked_free(files, file_count);
@@ -1030,14 +1097,30 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         imp->set = child;
     }
 
-    /* After its own imports: post-order. */
+    /*
+     * After its own imports: post-order.
+     *
+     * A root that fails to be recorded is not a smaller list -- it is a
+     * package the rebuild watcher never watches and the CLI never reports,
+     * on a build that says it succeeded. Both halves are checked now; the
+     * strdup was not checked at all, so the array could hold a NULL that
+     * every later reader dereferenced.
+     */
     if (cache->root_count == cache->root_cap) {
         size_t want = cache->root_cap ? cache->root_cap * 2 : 8;
         char **grown = realloc(cache->roots, want * sizeof *grown);
-        if (grown) { cache->roots = grown; cache->root_cap = want; }
+        if (!grown) {
+            if (error && error_len) snprintf(error, error_len, "out of memory");
+            return -1;
+        }
+        cache->roots = grown; cache->root_cap = want;
     }
-    if (cache->root_count < cache->root_cap)
-        cache->roots[cache->root_count++] = strdup(e->root);
+    char *root_copy = strdup(e->root);
+    if (!root_copy) {
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
+    }
+    cache->roots[cache->root_count++] = root_copy;
     return 0;
 }
 
@@ -1119,7 +1202,9 @@ int mdy_engine_entry(mdy_engine *e, const char *entry) {
     JsValue query = js_object_new(e->ctx);
     js_gc_protect(e->vm, &query);
     set_val(e, query, "path", str(e->vm, entry, strlen(entry)));
-    JsValue hit = run_query(e, query, 1);
+    /* NULL: this returns an index, and -1 is already reported as "entry
+     * script not found" and exits the build. */
+    JsValue hit = run_query(e, query, 1, NULL);
     js_gc_unprotect(e->vm, &query);
     if (!js_is_object(hit)) return -1;
     char *id = js_string_utf8(get_val(e, hit, "_id"));

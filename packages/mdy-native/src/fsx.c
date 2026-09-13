@@ -269,18 +269,28 @@ char *fsx_list(const char *root, const char *subdir, const char *exts) {
     for (size_t i = 0; i < out.len; i++) if (out.s[i] == '\0') entries++;
     if (entries < 2) return out.s;
 
+    /*
+     * NOT "unsorted beats nothing", which is what this said. The contract is
+     * that the listing is sorted, and readdir order is the filesystem's: an
+     * unsorted listing builds the site's documents in a different order, which
+     * changes every `find` result and every index the site writes. It is a
+     * different build reported as a successful one. NULL is the channel this
+     * function already has, and B25 gave it a meaning the caller acts on.
+     */
     char **v = malloc(entries * sizeof *v);
-    if (!v) return out.s; /* unsorted beats nothing */
+    if (!v) { free(out.s); return NULL; }
     size_t n = 0;
     for (char *p = out.s; p < out.s + out.len; p += strlen(p) + 1) v[n++] = p;
     qsort(v, n, sizeof *v, by_name);
 
     Buf sorted = { 0 };
+    int ok = 1;
     for (size_t i = 0; i < n; i++) {
-        if (buf_put(&sorted, v[i], strlen(v[i]) + 1) < 0) break;
+        if (buf_put(&sorted, v[i], strlen(v[i]) + 1) < 0) { ok = 0; break; }
     }
     free(v);
     free(out.s);
+    if (!ok) { free(sorted.s); return NULL; }
     return sorted.s ? sorted.s : calloc(1, 1);
 }
 

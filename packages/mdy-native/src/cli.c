@@ -38,6 +38,7 @@
 #include "fsx.h"
 #include "http.h"
 #include "mdydoc.h"
+#include "xalloc.h"
 #include "mdyscript.h"
 #include "mdyyaml.h"
 #include "watch.h"
@@ -271,13 +272,16 @@ static char *absolute(const char *path) {
     int rooted = joined[0] == '/';
     char *segs[512];
     size_t depth = 0;
-    char *work = strdup(joined);
+    /* Both of these were unchecked and both are written through immediately;
+     * there is no char* that means "could not build this path", and every
+     * caller dereferences what comes back. See xalloc.h. */
+    char *work = mdy_xstrdup(joined);
     for (char *seg = strtok(work, "/"); seg; seg = strtok(NULL, "/")) {
         if (strcmp(seg, ".") == 0) continue;
         if (strcmp(seg, "..") == 0) { if (depth > (rooted ? 0u : 1u)) depth--; continue; }
         if (depth < 512) segs[depth++] = seg;
     }
-    char *out = malloc(strlen(joined) + 2);
+    char *out = mdy_xmalloc(strlen(joined) + 2);
     size_t at = 0;
     if (rooted) out[at++] = '/';
     for (size_t i = 0; i < depth; i++) {
@@ -667,8 +671,18 @@ static void build_image(void *ud, const char *path, const uint8_t *bytes, size_t
 static int copy_static(const char *root, BuildSink *s) {
     char dir[4096];
     snprintf(dir, sizeof dir, "%s/static", root);
+    /*
+     * NULL means the directory cannot be READ -- one that is not there comes
+     * back as an empty listing (fsx.h's contract, B25). Returning 0 for both
+     * meant an unreadable or unallocatable static/ produced a site missing
+     * every asset, reported as a successful build.
+     */
     char *listing = fsx_list(dir, ".", NULL);
-    if (!listing) return 0;
+    if (!listing) {
+        fprintf(stderr, "cannot read %s\n", dir);
+        s->failed++;
+        return 0;
+    }
     int n = 0;
     for (const char *rel = listing; *rel; rel += strlen(rel) + 1) {
         /*
@@ -681,8 +695,18 @@ static int copy_static(const char *root, BuildSink *s) {
         if (rlen >= 4 && strcmp(rel + rlen - 4, ".mdy") == 0) continue;
         size_t len = 0;
         uint8_t *bytes = fsx_read(dir, rel, &len);
-        if (!bytes) continue;
+        if (!bytes) {
+            fprintf(stderr, "cannot read %s/%s\n", dir, rel);
+            s->failed++;
+            continue;
+        }
         if (fsx_write(s->out, rel, bytes, len) == 0) { n++; build_log(s, GREEN, "[write]", rel); }
+        else {
+            /* The page writers say so and count it; this one dropped the
+             * asset and let the build report success. */
+            fprintf(stderr, "cannot write %s/%s\n", s->out, rel);
+            s->failed++;
+        }
         free(bytes);
     }
     free(listing);

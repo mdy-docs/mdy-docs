@@ -116,6 +116,14 @@ static void fail(P *p, size_t line, const char *what) {
         snprintf(p->error, p->error_len, "line %zu: %s", line + 1, what);
 }
 
+/* An allocation failure, which is not a fault in the document and so is not
+ * given a line. See MDY_YAML_OOM in mdyyaml.h. */
+static void oom(P *p) {
+    if (p->failed) return;
+    p->failed = 1;
+    if (p->error && p->error_len) snprintf(p->error, p->error_len, "%s", MDY_YAML_OOM);
+}
+
 static int is_space(char c) { return c == ' ' || c == '\t'; }
 
 /* A comment starts at a `#` that begins the line or follows whitespace — which
@@ -235,7 +243,7 @@ static int core_float(const char *s, size_t len, double *out) {
 
 static mdy_yaml_node *new_node(P *p, mdy_yaml_type type) {
     mdy_yaml_node *n = arena_alloc(p->arena, sizeof *n);
-    if (!n) { fail(p, p->at, "out of memory"); return NULL; }
+    if (!n) { oom(p); return NULL; }
     memset(n, 0, sizeof *n);
     n->type = type;
     return n;
@@ -245,7 +253,7 @@ static mdy_yaml_node *new_string(P *p, const char *s, size_t len) {
     mdy_yaml_node *n = new_node(p, MDY_YAML_STRING);
     if (!n) return NULL;
     char *copy = arena_alloc(p->arena, len + 1);
-    if (!copy) { fail(p, p->at, "out of memory"); return NULL; }
+    if (!copy) { oom(p); return NULL; }
     memcpy(copy, s, len);
     copy[len] = '\0';
     n->as.string.s = copy;
@@ -436,6 +444,11 @@ static mdy_yaml_node *read_quoted(P *p, size_t line, size_t from, char quote,
         return NULL;
     }
 
+    /* `out.ok` is the whole point of the flag: a buf_put that could not grow
+     * used to leave a scalar silently TRUNCATED, and a truncated title is a
+     * document that means something its author did not write. */
+    if (!out.ok) { oom(p); free(out.s); return NULL; }
+
     mdy_yaml_node *n = new_string(p, out.s ? out.s : "", out.len);
     free(out.s);
     *end_line = li;
@@ -539,6 +552,8 @@ static mdy_yaml_node *read_block_scalar(P *p, const char *header, size_t header_
         else if (chomp == 0) buf_putc(&out, '\n');
     }
 
+    if (!out.ok) { oom(p); free(out.s); return NULL; }
+
     mdy_yaml_node *node = new_string(p, out.s ? out.s : "", out.len);
     free(out.s);
     return node;
@@ -638,7 +653,7 @@ static mdy_yaml_node *parse_flow_at(Cur *c, size_t depth) {
         Pair *pairs = NULL;
         if (is_map) pairs = malloc(cap * sizeof *pairs);
         else items = malloc(cap * sizeof *items);
-        if ((is_map && !pairs) || (!is_map && !items)) { fail(c->p, c->line, "out of memory"); return NULL; }
+        if ((is_map && !pairs) || (!is_map && !items)) { oom(c->p); return NULL; }
 
         for (;;) {
             cur_skip(c);
@@ -654,7 +669,7 @@ static mdy_yaml_node *parse_flow_at(Cur *c, size_t depth) {
                 cap *= 2;
                 void *grown = is_map ? (void *)realloc(pairs, cap * sizeof *pairs)
                                      : (void *)realloc(items, cap * sizeof *items);
-                if (!grown) { fail(c->p, c->line, "out of memory"); goto flow_fail; }
+                if (!grown) { oom(c->p); goto flow_fail; }
                 if (is_map) pairs = grown; else items = grown;
             }
 
@@ -708,14 +723,14 @@ static mdy_yaml_node *parse_flow_at(Cur *c, size_t depth) {
 
         if (is_map) {
             Pair *out = arena_alloc(c->p->arena, (count ? count : 1) * sizeof *out);
-            if (!out) { fail(c->p, c->line, "out of memory"); goto flow_fail; }
+            if (!out) { oom(c->p); goto flow_fail; }
             memcpy(out, pairs, count * sizeof *out);
             node->as.map.pairs = out;
             node->as.map.count = count;
             free(pairs);
         } else {
             mdy_yaml_node **out = arena_alloc(c->p->arena, (count ? count : 1) * sizeof *out);
-            if (!out) { fail(c->p, c->line, "out of memory"); goto flow_fail; }
+            if (!out) { oom(c->p); goto flow_fail; }
             memcpy(out, items, count * sizeof *out);
             node->as.seq.items = out;
             node->as.seq.count = count;
@@ -879,6 +894,8 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
     }
     p->at = i - breaks;
 
+    if (!out.ok) { oom(p); free(out.s); return NULL; }
+
     mdy_yaml_node *n = resolve(p, out.s ? out.s : "", out.len);
     free(out.s);
     return n;
@@ -890,7 +907,7 @@ static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
 
     size_t cap = 8, count = 0;
     Pair *pairs = malloc(cap * sizeof *pairs);
-    if (!pairs) { fail(p, p->at, "out of memory"); return NULL; }
+    if (!pairs) { oom(p); return NULL; }
 
     for (;;) {
         size_t at = next_content(p, p->at);
@@ -939,7 +956,7 @@ static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
         if (count == cap) {
             cap *= 2;
             Pair *grown = realloc(pairs, cap * sizeof *pairs);
-            if (!grown) { fail(p, at, "out of memory"); goto map_fail; }
+            if (!grown) { oom(p); goto map_fail; }
             pairs = grown;
         }
         /*
@@ -962,7 +979,7 @@ static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
 
     {
         Pair *out = arena_alloc(p->arena, (count ? count : 1) * sizeof *out);
-        if (!out) { fail(p, p->at, "out of memory"); goto map_fail; }
+        if (!out) { oom(p); goto map_fail; }
         memcpy(out, pairs, count * sizeof *out);
         node->as.map.pairs = out;
         node->as.map.count = count;
@@ -981,7 +998,7 @@ static mdy_yaml_node *parse_sequence(P *p, size_t indent) {
 
     size_t cap = 8, count = 0;
     mdy_yaml_node **items = malloc(cap * sizeof *items);
-    if (!items) { fail(p, p->at, "out of memory"); return NULL; }
+    if (!items) { oom(p); return NULL; }
 
     for (;;) {
         size_t at = next_content(p, p->at);
@@ -1026,7 +1043,7 @@ static mdy_yaml_node *parse_sequence(P *p, size_t indent) {
         if (count == cap) {
             cap *= 2;
             mdy_yaml_node **grown = realloc(items, cap * sizeof *items);
-            if (!grown) { fail(p, at, "out of memory"); goto seq_fail; }
+            if (!grown) { oom(p); goto seq_fail; }
             items = grown;
         }
         items[count++] = v;
@@ -1034,7 +1051,7 @@ static mdy_yaml_node *parse_sequence(P *p, size_t indent) {
 
     {
         mdy_yaml_node **out = arena_alloc(p->arena, (count ? count : 1) * sizeof *out);
-        if (!out) { fail(p, p->at, "out of memory"); goto seq_fail; }
+        if (!out) { oom(p); goto seq_fail; }
         memcpy(out, items, count * sizeof *out);
         node->as.seq.items = out;
         node->as.seq.count = count;
@@ -1104,7 +1121,12 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
     if (len == 0) len = strlen(text);
 
     mdy_yaml *doc = calloc(1, sizeof *doc);
-    if (!doc) return NULL;
+    /* Before there is a P to fail: the caller still has to be able to tell
+     * this apart from a malformed document. */
+    if (!doc) {
+        if (error && error_len) snprintf(error, error_len, "%s", MDY_YAML_OOM);
+        return NULL;
+    }
 
     P p = {0};
     p.arena = &doc->arena;
@@ -1112,7 +1134,7 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
     p.error_len = error_len;
     p.trailing_newline = len > 0 && text[len - 1] == '\n';
     p.lines = split_lines(text, len, &p.count, &p);
-    if (!p.lines) { free(doc); return NULL; }
+    if (!p.lines) { oom(&p); free(doc); return NULL; }
 
     /*
      * Directives and document markers: one document per stream here.

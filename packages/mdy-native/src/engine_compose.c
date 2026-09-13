@@ -10,6 +10,7 @@
  * is.
  */
 #include "engine_internal.h"
+#include "xalloc.h"
 
 /* ---- composition -------------------------------------------------------------
  *
@@ -82,11 +83,16 @@ char *hold_tree(mdy_engine *e, mdy_doc *doc, mdy_node *tree) {
  */
 char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id) {
     mdy_engine *t = token_table(e);
+    /*
+     * A token is not optional. Returning NULL here left six callers each
+     * inventing their own answer -- one of them returned `true` with `*result`
+     * never assigned, which the VM then read as a value. The id is also
+     * OBSERVABLE (see keep_alive below), so a hold that did not happen moves
+     * every id after it and changes the site's own search index. See xalloc.h.
+     */
     if (t->held_count == t->held_cap) {
         size_t want = t->held_cap ? t->held_cap * 2 : 8;
-        Held *grown = realloc(t->held, want * sizeof *grown);
-        if (!grown) return NULL;
-        t->held = grown;
+        t->held = mdy_xrealloc(t->held, want * sizeof *t->held);
         t->held_cap = want;
     }
     Held *h = &t->held[t->held_count++];
@@ -97,8 +103,8 @@ char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id) 
     h->is_toc = 0;
 
     size_t n = strlen(TOKEN_OPEN) + strlen(h->id) + strlen(TOKEN_CLOSE) + 1;
-    char *token = malloc(n);
-    if (token) snprintf(token, n, "%s%s%s", TOKEN_OPEN, h->id, TOKEN_CLOSE);
+    char *token = mdy_xmalloc(n);
+    snprintf(token, n, "%s%s%s", TOKEN_OPEN, h->id, TOKEN_CLOSE);
     return token;
 }
 
@@ -115,11 +121,12 @@ char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id) 
  */
 void keep_alive(mdy_engine *e, mdy_doc *doc) {
     mdy_engine *t = token_table(e);
+    /* Returning here freed nothing and kept nothing: the document the caller
+     * is about to hand out went on being referenced after the render released
+     * it. See xalloc.h. */
     if (t->kept_count == t->kept_cap) {
         size_t want = t->kept_cap ? t->kept_cap * 2 : 8;
-        mdy_doc **grown = realloc(t->kept, want * sizeof *grown);
-        if (!grown) return;
-        t->kept = grown;
+        t->kept = mdy_xrealloc(t->kept, want * sizeof *t->kept);
         t->kept_cap = want;
     }
     t->kept[t->kept_count++] = doc;
@@ -307,7 +314,14 @@ char *fill_tokens(mdy_engine *e, const char *s, size_t len) {
         if (!used) { i++; continue; }
 
         Held *h = held_find(e, id);
-        char *html = h && h->tree ? mdy_to_html(h->tree, NULL) : NULL;
+        char *html = NULL;
+        if (h && h->tree) {
+            html = mdy_to_html(h->tree, NULL);
+            /* A held tree that will not serialise is not an empty token: the
+             * page would be written with the rendered piece silently missing
+             * and the build would report success. */
+            if (!html) { free(result); return NULL; }
+        }
         size_t plain = i - last;
         size_t add = plain + (html ? strlen(html) : 0);
         if (out + add + 1 > cap) {

@@ -42,11 +42,12 @@ what those checks do not reach.
 | B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
 | B27 | ~~Low~~ **fixed** | `engine.c` | `wrap()` built the program with `snprintf`, whose `int` overflows past 2 GB |
 | B18 | ~~Low~~ **fixed** | `watch.c` | The watcher's O(n²) scan cost 170 ms per poll on 8,000 files; a merge costs 0.1 |
-| B24 | Low **part fixed** | various | Unchecked allocations; `cache_put`'s dangling pointer fixed, the rest wants an error channel |
+| B24 | ~~Low~~ **fixed** | various | Unchecked allocations: 13 crashes and 306 builds that reported success with a *different site* |
 | B26 | ~~Low~~ **fixed** | `cli.c` | The local bus marked an undeliverable message done where the remote one dead-lettered it |
 | B19 | ~~Low~~ **fixed** | `cli.c` | An unknown option became the site directory, and the error blamed the entry script |
 | B39 | ~~Low~~ **fixed** | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
+| B41 | Low | wasm, `check-alloc` | The allocation sweep does not reach the wasm build, and covers one site by default |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
@@ -84,11 +85,11 @@ and `test/yaml.c`.)
 #### B1 — A `.yaml` file that begins with `---` corrupts the document set (High) — FIXED
 
 **Fixed.** A data file's bytes are no longer part of the concatenated source.
-`open_dir_inner` parses them once as YAML ([engine_walk.c:855](../src/engine_walk.c#L855))
+`open_dir_inner` parses them once as YAML ([engine_walk.c:855](../src/engine_walk.c#L892))
 and the mapping travels beside the document in a new `ident_data`
 ([engine_internal.h:227](../src/engine_internal.h#L227)), merged in `mdy_engine_open` after the
 document's own fields and before `path`
-([engine.c:580](../src/engine.c#L580)) — which is where mdy-docs puts a
+([engine.c:580](../src/engine.c#L616)) — which is where mdy-docs puts a
 source's `meta` (`parseDocuments`, `src/mdy.js`). The file's document is now
 the same placeholder every other non-MDY file gets, so a `---` or a `+++` line
 among its bytes can no longer be read as document structure, and the identity
@@ -117,7 +118,7 @@ are indexed by document position (`2357`, `2378`, `2419`), so every document
 after that file gets the identity of its neighbour.
 
 `---` at the top of a YAML file is a common convention, and the YAML reader
-itself accepts it ([yaml.c:1103–1106](../src/parse/yaml.c#L1103-L1106)).
+itself accepts it ([yaml.c:1103–1106](../src/parse/yaml.c#L1120-L1123)).
 
 Repro (site with `data.yaml` = `---\ntitle: Data file`, `zed.yaml`, and a
 `main.mdy` that lists `$.find({})`):
@@ -138,11 +139,11 @@ own source and is split on its own, which is what mdy-docs' `parseDocuments`
 does with an array: `mdy_split_sources`
 ([doc.c:173](../src/parse/doc.c#L173)) appends each source's documents to one
 list and says how many each became, and the walk asks it once
-([engine_walk.c:920](../src/engine_walk.c#L920)) instead of counting beforehand and
+([engine_walk.c:920](../src/engine_walk.c#L967)) instead of counting beforehand and
 re-deriving afterwards. Identity is collected per FILE while the walk runs
-(`WalkedFile`, [engine_walk.c:684–690](../src/engine_walk.c#L684-L690)) and expanded
+(`WalkedFile`, [engine_walk.c:684–690](../src/engine_walk.c#L694-L700)) and expanded
 to one entry per document once the count is known
-([engine_walk.c:943](../src/engine_walk.c#L943)). The two computations that had to
+([engine_walk.c:943](../src/engine_walk.c#L990)). The two computations that had to
 agree are one computation, so there is nothing left to disagree.
 
 The "when nothing survives, ONE empty document" rule is now applied per source
@@ -155,7 +156,7 @@ text needed a `\n` folded into each separator to keep it, which is gone — and
 a directory with no source files in it is a set of zero documents rather than
 one empty one, which is also what node reports. `mdy_engine_open` splits and
 then hands the documents to a shared `open_documents`
-([engine.c:435](../src/engine.c#L435)), so both ways in run the same code.
+([engine.c:435](../src/engine.c#L450)), so both ways in run the same code.
 
 Regression test: `blank_file_checks`
 ([test/engine.c:343](../test/engine.c#L343)), which fails on the old code in
@@ -185,14 +186,14 @@ source, it is just no longer at risk of being re-split.
 #### B3 — `$.render` of a `.md` document returns an empty or wrong token (High) — FIXED
 
 **Fixed.** `render_tree_out` has one exit. The markdown branch sets `out` and
-jumps to `done:` ([engine.c:3003](../src/engine.c#L3003)) like every other
+jumps to `done:` ([engine.c:3003](../src/engine.c#L3113)) like every other
 path, so `e->last_render_key` is written for it too and `render_native` parks
 the tree under the key of the render that actually made it.
 
 The other two exits went with it, which is B12 below. The index check is a
-`FAIL` ([engine.c:2992](../src/engine.c#L2992)) and gives back the depth and
+`FAIL` ([engine.c:2992](../src/engine.c#L3102)) and gives back the depth and
 the `current` it had already taken; the cycle guard moved ABOVE everything
-`done:` restores ([engine.c:2957](../src/engine.c#L2957)), which is what
+`done:` restores ([engine.c:2957](../src/engine.c#L3067)), which is what
 earns it the right to skip the label — there is nothing yet to give back.
 Before the move it silently cleared the enclosing render's `taint` on its way
 out.
@@ -238,13 +239,13 @@ The five `check-sites` sites never render a `.md` through `$.render`
 #### B4 — `$.find` is O(N³) in the number of documents (High) — FIXED
 
 **Fixed.** The set carries a map from `_id` to document index
-([engine.c:789](../src/engine.c#L789)) — open addressing on the 24 hex
+([engine.c:789](../src/engine.c#L842)) — open addressing on the 24 hex
 characters, built the first time a query asks and freed with the set, so it is
 exactly as valid as `ids` is. `index_of_id`
-([engine.c:809](../src/engine.c#L809)) is a lookup rather than a scan.
+([engine.c:809](../src/engine.c#L862)) is a lookup rather than a scan.
 
 The ordering pass reads each hit's `_id` ONCE
-([engine.c:870](../src/engine.c#L870)) and sorts the hits by the index it
+([engine.c:870](../src/engine.c#L945)) and sorts the hits by the index it
 resolves to, instead of walking every document position against every hit.
 Two allocations per inner step went with it: the `_id` atom was being interned
 again on every one of them, and the id itself converted to UTF-8 — the units
@@ -277,7 +278,7 @@ and `$.render` by document, by query and by index.
 #### B5 — The nisaba collection is never closed (Medium) — FIXED
 
 **Fixed.** `close_set` closes the collection and puts the handle back to -1
-([engine.c:411](../src/engine.c#L411)), so a set's data dies with the set.
+([engine.c:411](../src/engine.c#L426)), so a set's data dies with the set.
 `nis_close` was finished first ([nis.c:232](../src/nis.c#L232)): it freed the
 stores but never the B+trees over them, which is a tree's buffers per index
 plus one for the primary store. The two open paths that could leak a tree on
@@ -309,8 +310,8 @@ is the whole set. On the old engine two of its three assertions fail.
 #### B6 — The memo never hits across builds (Medium) — FIXED
 
 **Fixed.** `document_fingerprint` hashes the record without `_id`
-([engine.c:2898](../src/engine.c#L2898)). `canonical_hash` grew one parameter
-for it ([engine.c:2804](../src/engine.c#L2804)) — a single key left out, of
+([engine.c:2898](../src/engine.c#L3006)). `canonical_hash` grew one parameter
+for it ([engine.c:2804](../src/engine.c#L2912)) — a single key left out, of
 the TOP object only, since a value nested inside may legitimately be called
 the same thing and is the document's own business. mdy-docs hashes
 `doc.data`, which is this record before nisaba puts an id on it.
@@ -319,7 +320,7 @@ Enabling cross-set hits needed one thing more. The memo is shared by every set
 in the process, and two documents with the same text and the same record still
 render differently under a different element allowlist, a different task form
 or different values in scope — so those go into the fingerprint beside the
-record ([engine.c:2885](../src/engine.c#L2885)). mdy-docs folds in its own
+record ([engine.c:2885](../src/engine.c#L2993)). mdy-docs folds in its own
 equivalent, the native names a set offers, and gives the same reason. Nothing
 had needed it before because `_id` was keeping every set's keys apart by
 accident.
@@ -364,16 +365,16 @@ Four places enforce it, which is every way a value gets deep:
   already uses. `mdy_parse_block` carries a `nesting` argument now, so two
   chains one inside the other are held against the total rather than each
   passing a check of its own.
-- `parse_flow` ([yaml.c:593](../src/parse/yaml.c#L593)) — `MDY_YAML_MAX_DEPTH`
+- `parse_flow` ([yaml.c:593](../src/parse/yaml.c#L608)) — `MDY_YAML_MAX_DEPTH`
   ([mdyyaml.h:56](../src/parse/mdyyaml.h#L56)), refused with a message naming
   the line, since that is what this reader does with what it will not guess
   at. It also protects the JSON writer, the binjson encoder and the engine's
   hash, all of which walk the result.
-- `js_to_tree` ([engine_value.c:228](../src/engine_value.c#L228)) — a document can build a
+- `js_to_tree` ([engine_value.c:228](../src/engine_value.c#L233)) — a document can build a
   sixty-thousand-deep tree in two lines of its own code. Past the limit the
   branch is dropped, which is the answer the parser gives text nested that
   deep.
-- `canonical_hash` ([engine.c:2813](../src/engine.c#L2813)) — the same document
+- `canonical_hash` ([engine.c:2813](../src/engine.c#L2921)) — the same document
   can hand such an object to `$.render` as its request, and the memo key walks
   it. Past the limit there is NO key: hashing a marker and carrying on would
   make two different requests hash alike, and a key that cannot tell them
@@ -400,7 +401,7 @@ for nothing.
 The original finding follows.
 
 Several walkers recurse per nesting level with no depth limit:
-`write_node` ([html.c:298–379](../src/parse/html.c#L298-L379)), `mdy_clone`
+`write_node` ([html.c:298–379](../src/parse/html.c#L305-L386)), `mdy_clone`
 ([ast.c:132–194](../src/parse/ast.c#L132-L194)), `tree_to_js`, `js_to_tree`,
 `splice_tree`, `collect_headings` in engine.c, and `parse_flow` in yaml.c. The
 block parser builds the `<div>` chain for an indented line iteratively but then
@@ -417,12 +418,12 @@ wasm `document()` API, which take arbitrary typed input, it is a crash.
 
 #### B8 — A file name containing `"` or `\` silently loses its identity (Medium) — FIXED
 
-**Fixed.** `put_quoted` ([engine_walk.c:158](../src/engine_walk.c#L158)) writes an
+**Fixed.** `put_quoted` ([engine_walk.c:158](../src/engine_walk.c#L159)) writes an
 identity field as YAML with the value escaped the way `read_quoted` unescapes
 it — `\` and `"` named, control characters as `\xNN`, and everything else
 including UTF-8 through as bytes, since only what the reader would take for
 something else has to be named. The walk builds identity with it
-([engine_walk.c:769](../src/engine_walk.c#L769)) into a buffer that grows, which
+([engine_walk.c:769](../src/engine_walk.c#L793)) into a buffer that grows, which
 retires the fixed 4096-byte array as well: a long enough name and path would
 have been truncated mid-mapping and lost the document its `path` entirely. I
 could not construct one on macOS, where `PATH_MAX` is 1024, so that half is a
@@ -444,7 +445,7 @@ Byte-identical to node across `"`, `\`, a bell, an apostrophe, a semicolon,
 The original finding follows.
 
 Identity is written as YAML text by `snprintf` with no escaping
-([engine_walk.c:767–767](../src/engine_walk.c#L767-L767), [874](../src/engine_walk.c#L874)).
+([engine_walk.c:767–767](../src/engine_walk.c#L791-L791), [874](../src/engine_walk.c#L911)).
 A name like `it"s.mdy` produces `name: "it"s.mdy"`, which the YAML reader
 reads as `it` (see B9) — so the document's `path`, `name` and `ext` are all
 truncated at the quote. Node reports `it"s.mdy`. A backslash in a name would
@@ -455,7 +456,7 @@ text (see §3, *Identity as text*).
 
 **Fixed.** A quoted scalar ends at its closing quote, and what may follow on
 that line is nothing, or a comment — `nothing_after`
-([yaml.c:741](../src/parse/yaml.c#L741)), checked where `parse_value_from`
+([yaml.c:741](../src/parse/yaml.c#L756)), checked where `parse_value_from`
 used to walk straight on to the next line. `title: "Hello" world` is refused
 with `unexpected text after a quoted scalar` rather than coming back as
 `Hello`, which is what this file says of itself: "a parser that silently
@@ -465,7 +466,7 @@ mis-reads data is worse than one that refuses it".
 `{"a": "v"}`: `key_end` skips a quoted key and then scans on for a `:`, so the
 colon it measured against was not this scalar's. A quoted key now has to be
 followed by spaces and then that colon
-([yaml.c:891](../src/parse/yaml.c#L891)) — a comment is not one of the
+([yaml.c:891](../src/parse/yaml.c#L908)) — a comment is not one of the
 answers there, because `key_end` already stops at a `#`.
 
 Every case was put to node's reader as well, and it refuses all three.
@@ -490,20 +491,20 @@ process is gone: `curl` reports `http 000`, the connection closed with no
 response.
 
 **Fixed.** `dev_deliver` holds when there is no build
-([cli.c:1704](../src/cli.c#L1704)): 500 returns the messages to the broker,
+([cli.c:1704](../src/cli.c#L1728)): 500 returns the messages to the broker,
 which brings them back after a backoff, by which time a save may have fixed
 the build. Routing them with no engine would have found no page of that name,
 which is a different thing and settles them away — so the guard has to come
 before the routing, not be folded into it. `dev_drain`, the in-process path,
 does not take messages it cannot render either
-([cli.c:1500](../src/cli.c#L1500)); they stay queued for the drain after the
+([cli.c:1500](../src/cli.c#L1524)); they stay queued for the drain after the
 next good build. And `mdy_engine_page_index` and `mdy_engine_document_path`
-tolerate a NULL engine ([engine.c:3261](../src/engine.c#L3261)), which is the
+tolerate a NULL engine ([engine.c:3261](../src/engine.c#L3371)), which is the
 convention `mdy_engine_count` already sets in that file.
 
 **The dev server has a test now** — its first, which is the real reason this
 went unnoticed. `test/dev.test.js` with a `check-dev` target
-([Makefile:271](../Makefile#L271)) and a CI step: it spawns the binary on a
+([Makefile:271](../Makefile#L292)) and a CI step: it spawns the binary on a
 site that does not compile, waits for the banner, POSTs a delivery, and
 asserts 500, the `[hold]` line, and that the process is still running. Then it
 fixes the site, waits for the rebuild and POSTs again, which is the half that
@@ -522,7 +523,7 @@ address four gigabytes out, reached from `open_dir_inner`.
 
 **Fixed.** The offset is the file's to choose and nothing has checked it when
 the sum is taken, so every sum it takes part in is done in 64 bits
-([images.c:169](../src/images.c#L169)) — the bounds check and the per-entry
+([images.c:169](../src/images.c#L181)) — the bounds check and the per-entry
 offset both. `uint64_t` rather than the `size_t` the finding suggested:
 `size_t` is 32 bits under emscripten, and `make wasm` is a real target, so the
 promotion would wrap in exactly the same place there.
@@ -586,11 +587,11 @@ in the tree has noticed.
 
 **Fixed, in three places rather than one.** `$` is built in the guest by
 `wrap()`, and `count` is the only member of it that is not a call
-([engine.c:2510](../src/engine.c#L2510)). mdy-docs can write the number in as a
+([engine.c:2510](../src/engine.c#L2619)). mdy-docs can write the number in as a
 literal because it builds a program per document; this wrapper is compiled once
 and reused for every render of the document — that is what makes the request an
 argument — so the number arrives on `$$` beside `__scope` and `__wantResponse`
-([engine.c:3098](../src/engine.c#L3098)) and is read at object construction, so
+([engine.c:3098](../src/engine.c#L3208)) and is read at object construction, so
 `$.count` is a plain number to the document either way.
 
 The third place is the memo, and it is the half that was not obvious. **The
@@ -600,7 +601,7 @@ second build in the same process — which is what `mdy dev` is — would then
 serve each of them the render made when the set was smaller, with `$.count`
 frozen at the old number in a page that is otherwise correct and reports
 nothing. So the size goes into the fingerprint beside the knobs
-([engine.c:2903](../src/engine.c#L2903)), which is the same argument that
+([engine.c:3069](../src/engine.c#L3069)), which is the same argument that
 comment already makes for the element allowlist: what the ENGINE brings to a
 render belongs in the key.
 
@@ -683,7 +684,7 @@ Three changes, each matching a decision node makes for a reason:
   insert adds it after spreading the document. The merge also skips an `_id` a
   mapping tries to declare — the store's id is the store's, and writing it
   twice was reachable before.
-- **`path` first** ([engine_walk.c:796](../src/engine_walk.c#L796)), because
+- **`path` first** ([engine_walk.c:796](../src/engine_walk.c#L833)), because
   mdy-docs builds the record as `{ ...meta, ...parsed, path }` and re-assigning
   a key in JS leaves it where it was first written. Safe because
   `mdy_bj_document` takes a key's *place* from the first mapping that has it
@@ -691,7 +692,7 @@ Three changes, each matching a decision node makes for a reason:
   wins over a data file's own — checked, with a `.yaml` that declares
   `path: i-said-this` and still resolves to `note.yaml` on both engines.
 - **`$.data` and `res.data` carry no store id**
-  ([engine.c:955](../src/engine.c#L955)) — the rule `wrap()`'s `__answer`
+  ([engine.c:955](../src/engine.c#L1053)) — the rule `wrap()`'s `__answer`
   already applied to the response, now applied where the document reads it.
 
 Seven checks in `test/engine.c`, four in document mode and three over a
@@ -788,9 +789,9 @@ and the messages all five:
 So the fix is not a `free` added to one path; it is the shape §3 names under
 *Long functions with several exits*, and the one `render_tree_out` was given
 for B3 and B12. `cmd_build` has one exit now
-([cli.c:760](../src/cli.c#L760)), `rc` carries the answer to it
-([697](../src/cli.c#L697)), and the cleanup is written once — the third copy
-in this file, after `mdy dev`'s ([1707](../src/cli.c#L1707)) and document
+([cli.c:760](../src/cli.c#L784)), `rc` carries the answer to it
+([697](../src/cli.c#L721)), and the cleanup is written once — the third copy
+in this file, after `mdy dev`'s ([1707](../src/cli.c#L1731)) and document
 mode's, and the first that runs on every path rather than some.
 
 Every message and exit code was compared before and after: identical.
@@ -811,7 +812,7 @@ Found while measuring B15, and left alone deliberately: the 24 blocks that are
 the same before and after that fix.
 
 `dev_send` fingerprints each message as `name\1json` and keeps it in `d->sent`
-([cli.c:1441](../src/cli.c#L1441)) so a rebuild does not re-send what it
+([cli.c:1441](../src/cli.c#L1465)) so a rebuild does not re-send what it
 already sent. Nothing ever removes one, and `mdy dev` has no exit path that
 frees the array — it runs until it is killed. So the list grows by one entry
 per distinct message for as long as the server is up, and `leaks` counts every
@@ -852,13 +853,13 @@ the number.
 
 Three crossings, one rule, and it is node's: **the store keeps the infinity,
 null is what crosses.** `finite_or_null`
-([engine_value.c:455](../src/engine_value.c#L455)) is the store-to-guest side,
+([engine_value.c:455](../src/engine_value.c#L460)) is the store-to-guest side,
 and it is on the int, date and pointer decoders as well as the float — none of
 those can carry a non-finite today, and a decoder that quietly starts to should
 not be the thing that reintroduces this. `js_to_binjson`
-([375](../src/engine_value.c#L375)) is the guest-to-store side, so a query for
+([375](../src/engine_value.c#L380)) is the guest-to-store side, so a query for
 an infinity asks for null and matches nothing. And a guest's non-finite tree
-property is left unset ([339](../src/engine_value.c#L339)), which is the same
+property is left unset ([339](../src/engine_value.c#L344)), which is the same
 attribute list node produces, since a null property is one the HTML writer
 leaves out.
 
@@ -960,7 +961,7 @@ a digit at a time, `v = v * 10 + (s[k] - '0')`, and seventeen roundings do not
 land where one correctly-rounded conversion does.
 
 The loop still validates; `strtod` now decides the value
-([yaml.c:179](../src/parse/yaml.c#L179)) — the same call `core_float` twenty
+([yaml.c:179](../src/parse/yaml.c#L187)) — the same call `core_float` twenty
 lines below already made. Two things the fix has to not break, both of which
 the old accumulation got right and a naive `strtod` on a fixed buffer would
 not: leading zeros are skipped before the copy, so `0000…0001` stays short;
@@ -1016,6 +1017,28 @@ leave alone and leaves already-percent-encoded sequences untouched — so a fix
 has to be that function's rule, not "URL-encode the non-ASCII", or
 `%C3%A9` in the source becomes `%25C3%25A9`.
 
+#### B41 — the allocation sweep does not reach everything it should (Low)
+
+B24 built `build/mdy-af` and `make check-alloc`, which refuse the *n*th
+allocation of a build and assert that the result is either the same site or a
+reported failure. Two gaps are left, and both are the tool's reach rather than
+a defect in the engine.
+
+**The wasm build is not swept.** `build/mdy-af` is a native binary; the same
+engine compiled by `emcc` has emscripten's allocator underneath it and its own
+failure behaviour, and nothing here exercises that. The C sites B24 fixed are
+shared, so the wasm build has them fixed too — what is unverified is whether
+emscripten's own layer turns an exhausted heap into the same reported failure.
+
+**`check-alloc` sweeps `fixture` only.** That is 1,809 allocations and 54
+seconds, which is a target someone will actually run. It is also the smallest
+corpus here, and each larger one found sites it could not reach — the fixture
+has no hashtags, no `.yaml` data files and no pictures, and the blog's sweep
+found eleven more sites because of it. blog (14,298) and docs-site (17,747)
+were swept by hand for B24 and are clean, but they take 25 and 35 minutes, so
+they are not a target and nothing re-runs them. A nightly that sweeps all three
+would be the answer; a `check-alloc-all` nobody runs would not.
+
 #### B28 — YAML: a trailing `...` is refused as a second document (Low) — FIXED
 
 ```
@@ -1031,7 +1054,7 @@ matter alike.
 What decides is whether anything of substance follows the marker, which is
 what `next_content` already answers: blanks and comments do not make a
 document, a mapping does
-([yaml.c:1128](../src/parse/yaml.c#L1128)). The marker and whatever trails it
+([yaml.c:1128](../src/parse/yaml.c#L1150)). The marker and whatever trails it
 then leave the stream, and the line below already made the symmetric
 allowance for a leading `---`.
 
@@ -1106,7 +1129,7 @@ $.data(0)   C: ["_id","title","name","ext","size","mtime","path"]
 Two differences. `_id` is first here and last there — and `$.data` does not
 carry it at all under node, while it does here. And the identity block is
 written `name, ext, size, mtime, path`
-([engine_walk.c:767–767](../src/engine_walk.c#L767-L767)), `path` last so that it
+([engine_walk.c:767–767](../src/engine_walk.c#L791-L791)), `path` last so that it
 wins over a data file's own; node reaches the same result with
 `{ ...meta, ...parsed, path }`, where re-assigning `path` leaves it in the
 position it was first written — first.
@@ -1124,8 +1147,8 @@ both fixes.
 ([fsx.c:174](../src/fsx.c#L174)), `fsx_list`'s sort counts and splits on it
 ([fsx.c:253](../src/fsx.c#L253)), and all three readers became the same one
 line — `for (const char *rel = listing; *rel; rel += strlen(rel) + 1)` — in
-the engine's walk ([engine_walk.c:737](../src/engine_walk.c#L737)), `cli.c`'s static
-copier ([636](../src/cli.c#L636)) and `watch.c`'s snapshot
+the engine's walk ([engine_walk.c:737](../src/engine_walk.c#L751)), `cli.c`'s static
+copier ([636](../src/cli.c#L640)) and `watch.c`'s snapshot
 ([48](../src/watch.c#L48)). Each of them lost a `strchr`, a mutation of the
 buffer and an empty-entry guard.
 
@@ -1239,9 +1262,9 @@ and the messages all five:
 So the fix is not a `free` added to one path; it is the shape §3 names under
 *Long functions with several exits*, and the one `render_tree_out` was given
 for B3 and B12. `cmd_build` has one exit now
-([cli.c:760](../src/cli.c#L760)), `rc` carries the answer to it
-([697](../src/cli.c#L697)), and the cleanup is written once — the third copy
-in this file, after `mdy dev`'s ([1707](../src/cli.c#L1707)) and document
+([cli.c:760](../src/cli.c#L784)), `rc` carries the answer to it
+([697](../src/cli.c#L721)), and the cleanup is written once — the third copy
+in this file, after `mdy dev`'s ([1707](../src/cli.c#L1731)) and document
 mode's, and the first that runs on every path rather than some.
 
 Every message and exit code was compared before and after: identical.
@@ -1262,7 +1285,7 @@ Found while measuring B15, and left alone deliberately: the 24 blocks that are
 the same before and after that fix.
 
 `dev_send` fingerprints each message as `name\1json` and keeps it in `d->sent`
-([cli.c:1441](../src/cli.c#L1441)) so a rebuild does not re-send what it
+([cli.c:1441](../src/cli.c#L1465)) so a rebuild does not re-send what it
 already sent. Nothing ever removes one, and `mdy dev` has no exit path that
 frees the array — it runs until it is killed. So the list grows by one entry
 per distinct message for as long as the server is up, and `leaks` counts every
@@ -1303,13 +1326,13 @@ the number.
 
 Three crossings, one rule, and it is node's: **the store keeps the infinity,
 null is what crosses.** `finite_or_null`
-([engine_value.c:455](../src/engine_value.c#L455)) is the store-to-guest side,
+([engine_value.c:455](../src/engine_value.c#L460)) is the store-to-guest side,
 and it is on the int, date and pointer decoders as well as the float — none of
 those can carry a non-finite today, and a decoder that quietly starts to should
 not be the thing that reintroduces this. `js_to_binjson`
-([375](../src/engine_value.c#L375)) is the guest-to-store side, so a query for
+([375](../src/engine_value.c#L380)) is the guest-to-store side, so a query for
 an infinity asks for null and matches nothing. And a guest's non-finite tree
-property is left unset ([339](../src/engine_value.c#L339)), which is the same
+property is left unset ([339](../src/engine_value.c#L344)), which is the same
 attribute list node produces, since a null property is one the HTML writer
 leaves out.
 
@@ -1411,7 +1434,7 @@ a digit at a time, `v = v * 10 + (s[k] - '0')`, and seventeen roundings do not
 land where one correctly-rounded conversion does.
 
 The loop still validates; `strtod` now decides the value
-([yaml.c:179](../src/parse/yaml.c#L179)) — the same call `core_float` twenty
+([yaml.c:179](../src/parse/yaml.c#L187)) — the same call `core_float` twenty
 lines below already made. Two things the fix has to not break, both of which
 the old accumulation got right and a naive `strtod` on a fixed buffer would
 not: leading zeros are skipped before the copy, so `0000…0001` stays short;
@@ -1432,7 +1455,7 @@ identical.
 #### B28 — YAML: a trailing `...` is refused as a second document (Low)
 
 `mdy_yaml_parse` rejects any `...` line at indent 0 as "more than one document
-in a stream" ([yaml.c:1099–1100](../src/parse/yaml.c#L1099-L1100)), but a `...`
+in a stream" ([yaml.c:1099–1100](../src/parse/yaml.c#L1116-L1117)), but a `...`
 that CLOSES the one document — with nothing after it — is ordinary
 single-document YAML, and the line just below already makes the symmetric
 allowance for a leading `---`. So `a: 1\n...\n` is refused where node reads
@@ -1450,7 +1473,7 @@ end of the stream, and to stop the line walk there.
 
 - **~~B13 — GC rooting that works by luck.~~ FIXED, and the luck is now
   measurable.** The rule
-  ([engine_value.c:85–104](../src/engine_value.c#L85-L104)) is that a value
+  ([engine_value.c:85–104](../src/engine_value.c#L90-L109)) is that a value
   reachable only from the C stack must be rooted before anything allocates,
   and that building a key allocates. Four sites violated it:
   `js_object_get(e->vm, hit, key(e->vm, "_id"))` on an unrooted query result
@@ -1467,13 +1490,13 @@ end of the stream, and to stop the line walk there.
 
   So the first change is to the stress mode, not to the four sites: under
   `MDY_GC_STRESS`, building a key now costs a collection whether it interns or
-  not ([engine_value.c:75](../src/engine_value.c#L75)), which enforces the rule
+  not ([engine_value.c:75](../src/engine_value.c#L80)), which enforces the rule
   instead of assuming it. **It failed twelve checks the first time it ran.**
 
   The fix itself is one function. `set_val` already existed, and its comment
   already explained exactly this hazard for writes — the absence of the
   matching `get_val` is *why* the four sites existed. `get_val`
-  ([engine_value.c:145](../src/engine_value.c#L145)) roots the object and
+  ([engine_value.c:145](../src/engine_value.c#L150)) roots the object and
   builds the key after, as `set_val` does, and works for an object that is an
   rvalue at the call site because the parameter is the function's own stack
   slot. All forty-three inline-key reads across `engine.c`, `engine_value.c`
@@ -1509,7 +1532,7 @@ end of the stream, and to stop the line walk there.
   write a terminator is a walk through uninitialised stack.
 
   Both callers are one function now
-  ([cli.c:1109](../src/cli.c#L1109)); the duplicate formatting is gone and
+  ([cli.c:1109](../src/cli.c#L1133)); the duplicate formatting is gone and
   `stamp_now` terminates `out` itself when `strftime` writes nothing. Output is
   unchanged where `%l` worked: the two spellings were compared for **all 24
   hours** and are byte-identical, since `%l`-then-strip-spaces and
@@ -1542,7 +1565,7 @@ end of the stream, and to stop the line walk there.
   | from `dev_send` (see B35) | 24 | 24 |
 
   The response is zeroed at its declaration and freed on every path
-  ([cli.c:1487](../src/cli.c#L1487)). The zeroing is what lets the free be
+  ([cli.c:1487](../src/cli.c#L1511)). The zeroing is what lets the free be
   unconditional: the encode can fail before `http_request` has touched `r` at
   all. The old expression avoided reading `r.error` in that case by testing
   `bytes` first — which is sound, since `mdy_engine_encode_json` NULLs it
@@ -1552,7 +1575,7 @@ end of the stream, and to stop the line walk there.
   The `mdy dev` health probe had the same shape one guard weaker —
   `if (r.status) http_response_free(&r)` left behind the body of anything whose
   status line did not parse. Also unconditional now
-  ([cli.c:1999](../src/cli.c#L1999)). The other four `http_request` callers are
+  ([cli.c:1999](../src/cli.c#L2023)). The other four `http_request` callers are
   fine: each either `exit`s or calls `broker_fail`, which exits.
 
   `check-dev` had no coverage of the `--broker` path at all — every other test
@@ -1621,7 +1644,7 @@ end of the stream, and to stop the line walk there.
   **The bind.** It bound `0.0.0.0`, so every machine on the network could reach
   a server that rebuilds a directory on disk and, with a broker, renders
   whatever a POST tells it to. It binds `127.0.0.1` now, and `--host`
-  ([cli.c:1960](../src/cli.c#L1960)) opts back in and says so on stderr when it
+  ([cli.c:1960](../src/cli.c#L1984)) opts back in and says so on stderr when it
   does. This is a deliberate divergence: node's `server.listen(port)` binds
   everything too, but node has no delivery endpoint to reach — the bus is
   native-only. Verified with `lsof`: `127.0.0.1:45311 (LISTEN)` by default,
@@ -1634,7 +1657,7 @@ end of the stream, and to stop the line walk there.
   ([httpd.c:141](../src/httpd.c#L141)), 19 bytes from `/dev/urandom` or
   `BCryptGenRandom`, and **there is no fallback**: if the OS will not supply
   randomness the server says so and serves without the bus
-  ([cli.c:1976](../src/cli.c#L1976)), because a token that looks random and is
+  ([cli.c:1976](../src/cli.c#L2000)), because a token that looks random and is
   not is worse than a refusal. `srand`/`rand` are gone from the program.
 
   **The request cap.** There was none: `recv` appended and the buffer doubled,
@@ -1700,7 +1723,7 @@ end of the stream, and to stop the line walk there.
 
   Document mode in this same binary had rejected unknown options properly all
   along, with a message that names the option *and* the way out. Those are now
-  the words all four commands use ([cli.c:448](../src/cli.c#L448)), together
+  the words all four commands use ([cli.c:448](../src/cli.c#L452)), together
   with its `Option '%s' argument missing` for a flag whose value ran off the
   end, and its `--` escape so a positional may still start with a dash.
 
@@ -1777,7 +1800,7 @@ end of the stream, and to stop the line walk there.
   `if (isnan(v) || isinf(v)) { buf_put(b, "null", 4); return; }` — which is
   both the model for the others and the evidence that `null` is the answer.
   The real sites were [ingest.c:34](../src/ingest.c#L34),
-  [engine_value.c:375](../src/engine_value.c#L375),
+  [engine_value.c:375](../src/engine_value.c#L380),
   [bjval.c](../src/bjval.c#L119), [ast.c](../src/parse/ast.c#L261) and
   [html.c](../src/parse/html.c#L210).
 
@@ -1845,37 +1868,159 @@ end of the stream, and to stop the line walk there.
 
   Two differences it uncovered and did NOT fix, both present before it and
   independent of entities — see B39 and B40.
-- **B24 — Unchecked allocations that dereference on failure.** PART FIXED;
-  the rest is one deliberate pass and is described below rather than sprinkled.
+- **~~B24 — Unchecked allocations that dereference on failure~~ FIXED.** The
+  list was never the hard part. The hard part was that **none of these paths
+  runs unless an allocation actually fails**, so every edit would have been
+  unverifiable — which is why this sat parked, and why the first thing built
+  was the thing that makes them run.
 
-  **Fixed, because they are not only OOM.** `cache_put`
-  ([engine_walk.c:650](../src/engine_walk.c#L650)) did both reallocs and then
-  `free(d); free(s)` if either failed, which left `c->dirs` **dangling**
-  whichever way it went — if realloc moved the block it had already freed the
-  old pointer, and if it did not then `free(d)` freed the block `c->dirs` still
-  pointed at. It returned without adding, the caller carried on, and the next
-  `cache_get` read freed memory: a use-after-free reached *from* an allocation
-  failure rather than at it. Each realloc is taken as it succeeds now, and the
-  `strdup` is checked. Already done elsewhere: http.c's `recv` buffer with B16,
-  `snapshot_changes` with B18, `wrap()` with B27.
+  **`build/mdy-af`, and `make check-alloc`.** The engine, the parser and md4c
+  compiled against an allocator that refuses the *n*th request and only that
+  one ([allocfail.c](../src/allocfail.c#L7)); a force-included header does the
+  renaming, so no source file knows it exists and the real build is untouched.
+  `check-alloc` ([Makefile:655](../Makefile#L655)) sweeps *n* across a whole
+  build of `fixture` — 1,809 of them, 54 seconds — against one invariant:
 
-  **Parked, with the reason.** The rest — `outputs_put`, `collect_message`,
-  `buf_put`, `seen_before`, `absolute` in cli.c, `add` in watch.c,
-  `broker_request`, `mdy_engine_encode_json`, and the sixteen `mdy_alloc` sites
-  in block.c — are all `void` or value-returning helpers with **no error
-  channel**. Checking the allocation is the easy half; deciding what a failure
-  *means* is the change. Dropping an emitted page silently would be worse than
-  the crash it replaces: the build would report success with files missing.
-  Doing it properly means an `ok` flag on `Outputs`, `Messages`, `Buf` and the
-  snapshot — which `yaml.c`'s own `Buf` already has, so the shape is settled —
-  and a check at each place that finishes a build.
+  > a run that exits 0 produced the **same site** as an uninterfered one; a run
+  > that could not must say so and exit non-zero.
 
-  It also wants a way to be *tested*. None of these paths can be reached
-  without an allocator that fails on demand; a shim the test binaries can arm
-  (fail the *n*th allocation) would turn sixteen unverifiable edits into
-  sixteen checks, and is most of the work's value.
+  Not "it does not crash". Silently dropping a page is *worse* than the crash
+  it replaces, because the build reports success with files missing.
 
-  `read_stdin` was already checked and is off the list.
+  **What the first sweep found**, against code that had been read carefully
+  twice:
+
+  | | fixture | blog | docs-site |
+  | --- | --- | --- | --- |
+  | allocations swept | 1,809 | 14,298 | 17,747 |
+  | segfaults | 13 | 5 | 1 |
+  | aborts (stb's own assert) | 0 | 2,006 | 0 |
+  | **exited 0, built a different site** | **306** | **195** | **62** |
+  | after | **0** | **0** | **0** |
+
+  The blog's and docs-site's columns are what each found *after* the corpus
+  before it was clean — they are additional sites, not the same ones counted
+  again.
+
+  306 of 1,809. Not one of them was a missing check — nearly every site
+  *checked*, and then carried on with the wrong answer. `key()` returned an
+  undefined atom, so a property landed under the name `undefined`. A `tagName`
+  fell back to `"div"`. `fsx_list` said "unsorted beats nothing" and the site's
+  documents built in readdir order, which reordered every `find`. A className
+  list that would not join wrote `class=""` and the serialiser went on to
+  succeed. `$.find` answered `[]` for a query that had *failed*, so an index
+  page was written with no posts on it. Each was a deliberate decision to
+  degrade, and each turned an allocation failure into a plausible-looking wrong
+  build.
+
+  **Two mechanisms, and a rule for choosing.** *If NULL reaches something that
+  reports it and stops, propagate. If NULL turns into different output, it must
+  not be NULL.* The second is [xalloc.h](../src/xalloc.h#L1), whose file
+  comment is the argument: `key(vm, "_id")` returns a `JsValue`, there is no
+  `JsValue` that means "the allocation failed", and threading a status out of
+  it means changing every caller of a function called from everywhere — to
+  carry a condition that on any machine this runs on means the process is
+  already finished. Those allocate through
+  [mdy_xmalloc](../src/xalloc.c#L18) instead and the run ends with one line.
+  [mdy_fatal](../src/xalloc.c#L24) is the same policy for the failures that are
+  not allocations.
+
+  **Propagated** — the channel existed and the caller was ignoring it:
+  `fsx_read`'s NULL in the walk ([engine_walk.c:807](../src/engine_walk.c#L807)),
+  `fsx_stat`'s return, which was dropped entirely — the document's record then
+  claimed an empty file last written in 1970
+  ([engine_walk.c:784](../src/engine_walk.c#L784)),
+  `fsx_list`'s in `copy_static` ([cli.c:671](../src/cli.c#L671)) and in
+  [fsx_list](../src/fsx.c#L280) itself, `mdy_to_html`'s in
+  [fill_tokens](../src/engine_compose.c#L304), the identity copies
+  ([engine_walk.c:1028](../src/engine_walk.c#L1028)), `rewrite_imports`'
+  two unchecked `strdup`s ([engine_walk.c:606](../src/engine_walk.c#L606)),
+  and a failed write in `copy_static` that was simply not counted.
+
+  **Made infallible** — no channel, and the failure was silently different
+  output: the four UTF-16 conversions
+  ([engine_value.c:40](../src/engine_value.c#L40),
+  [key](../src/engine_value.c#L65), [d_key](../src/engine_value.c#L518)),
+  `put_room` and the identity block it builds
+  ([engine_walk.c:169](../src/engine_walk.c#L169)), `add_tag`
+  ([engine_walk.c:345](../src/engine_walk.c#L345)), `scan_hashtags`
+  ([engine_walk.c:356](../src/engine_walk.c#L356)), `cache_put`
+  ([engine_walk.c:662](../src/engine_walk.c#L662)), the composition tokens
+  ([engine_compose.c:95](../src/engine_compose.c#L95)), `tokenize_native`
+  ([engine.c:39](../src/engine.c#L39)), the contents list and the text walk it
+  uses ([collect_headings](../src/engine.c#L1677),
+  [collect_text_into](../src/engine.c#L295)), `canonical_hash_deep`
+  ([engine.c:3013](../src/engine.c#L3013)), `set_context_json`
+  ([engine.c:703](../src/engine.c#L703)), the resize dedupe table
+  ([engine.c:2230](../src/engine.c#L2230)) and `absolute`
+  ([cli.c:261](../src/cli.c#L261)).
+
+  **Three that needed a new channel.**
+
+  `run_query_in` ([engine.c:888](../src/engine.c#L888)) is the one worth
+  naming: nisaba reports an exhausted allocation properly, all the way out
+  through `dc_find`'s negative return — and this **threw that away** and
+  answered with an empty array. It is the only place in the engine where a
+  foreign error code was dropped rather than missing, which is why it survived
+  reading. `$.find`, `$.findOne`, `$.render` and `$.text` now say which
+  happened. `document_record` ([engine.c:1023](../src/engine.c#L1023)) did the
+  same with `{}` for a document looked up by its *own* id — never "not found",
+  always a page built with no data.
+
+  The third is the YAML parser, and it is an interface change.
+  `mdy_yaml_parse` returned NULL for a malformed document *and* for an
+  exhausted one, and the engine treated both as "this part had nothing" — which
+  for a malformed document is right, and is what node does, and for an
+  exhausted one silently drops the document's fields. So the parser gained
+  **[MDY_YAML_OOM](../src/parse/mdyyaml.h#L87)**: one exact string, documented
+  as a constant precisely so the caller can tell them apart, written by
+  [oom()](../src/parse/yaml.c#L121) without the `line N:` every other message
+  carries. The five call sites in the engine act on it and let a malformed
+  document through unchanged.
+
+  **The parser's own three.** `Buf.ok` was checked in `mdy_yaml_to_json` and
+  nowhere else, so a scalar that could not grow came back **truncated** — a
+  title that meant something its author did not write. Same in `html.c`, where
+  a `class` list was built in a temporary buffer whose `ok` nobody read
+  ([html.c:291](../src/parse/html.c#L291)). And `mdy_alloc` — B24's "sixteen
+  sites in block.c" — had a contract that twenty-six of its forty-two callers
+  relied on and which was **not true**: it ends the process now
+  ([arena.c:22](../src/parse/arena.c#L22)), and `internal.h` says why. A
+  recursive-descent parser has no way to unwind from the middle of a node.
+
+  **stb's own answer to OOM** was `STBIW_ASSERT(p)` — `abort()`, from inside a
+  vendored header, 2,006 of the blog's aborts. `STBIW_MALLOC`/`REALLOC`/`FREE`
+  are the documented way to replace its allocator and are set to ours
+  ([images.c:48](../src/images.c#L48)); the vendored file is not patched.
+
+  **Verification.** The sweep is the test, and it is a property rather than a
+  list — the ordinals move whenever the code does, so it cannot rot into
+  sixteen assertions about line numbers. Control: putting back the single line
+  `if (!v) return out.s; /* unsorted beats nothing */` brings back ordinal 49
+  and *only* ordinal 49 — the `cities.json` order flip, and nothing else moves.
+
+  Each corpus found sites the one before it could not reach: the fixture has no
+  hashtags, no `.yaml` data files and no pictures, so the blog's sweep added
+  another eleven; docs-site has a contents list and `$.node`, and added
+  `fsx_stat`, `collect_headings`, `mdy_doc_new` and one more **heap overflow**
+  — `collect_text_into` moved its capacity before knowing the allocation had
+  succeeded and then returned, so the next call through wrote past the end of
+  the buffer. Full sweeps after: fixture
+  1,809 clean, blog 14,298 clean, docs-site 17,747 clean. Parity unchanged on
+  all five sites, the whole check suite green, ASan clean over a blog build,
+  `leaks --atExit` reports 0 in both document and site mode.
+
+  On that last point, honestly: the earlier note here said `leaks` showed 2
+  blocks (208 bytes) from `absolute` on any document-mode run. It reports 0
+  today, in all three invocations tried — and the change to `absolute` swaps
+  `strdup`/`malloc` for their infallible twins and alters nothing about what is
+  freed, so **this fix cannot be what changed it**. The earlier figure was
+  measured some other way and is withdrawn rather than claimed.
+
+  Still open, and filed as **B41**: the wasm build's own allocation sites are
+  not swept, because `build/mdy-af` is native. `check-alloc` sweeps `fixture`
+  only — blog and docs-site were swept by hand here and take 25 and 35 minutes.
+
 - **~~B25 — `walk` treats every `opendir` failure as an empty directory~~
   FIXED.** `return errno == ENOENT ? 0 : 0` — both branches zero. A subtree
   whose permissions kept us out simply left the site. Measured against node on
@@ -1915,7 +2060,7 @@ end of the stream, and to stop the line walk there.
   500 and lets the broker's retry and dead-letter policy have them.
 
   The guard is now one call deeper
-  ([cli.c:1610](../src/cli.c#L1610)), where both paths reach it: no page and
+  ([cli.c:1610](../src/cli.c#L1634)), where both paths reach it: no page and
   not the dead-letter channel means the batch is **returned**, with the same
   `[return]` line the remote path prints. `dev_deliver`'s own guard is now
   redundant and harmless.
@@ -1941,7 +2086,7 @@ end of the stream, and to stop the line walk there.
   FIXED.** `snprintf` returns `int`, so a document over two gigabytes overflows
   it and the cast to `size_t` makes `out + o` an address nowhere near the
   buffer — AddressSanitizer's `negative-size-param` on a 3.6 GB input. The big
-  pieces are `memcpy` now ([engine.c:2605](../src/engine.c#L2605)), which has
+  pieces are `memcpy` now ([engine.c:2605](../src/engine.c#L2714)), which has
   no `int` in the path and reads more plainly besides.
 
   The scope lines keep `snprintf`: each is one short identifier twice, the
@@ -1995,7 +2140,7 @@ move, `resolve_path`, moved to `engine_walk.c` and is still not somewhere
 
 - ~~UTF-8↔UTF-16~~ **FOLDED, and it was a bug.** `to_utf16`/`from_utf16` in
   engine.c are wrappers over `mdy_to_utf16`/`mdy_from_utf16` now
-  ([engine_value.c:33](../src/engine_value.c#L33)); they allocate, which is what every
+  ([engine_value.c:33](../src/engine_value.c#L40)); they allocate, which is what every
   caller here wants, and the decoding is the parser's.
 
   The copy did not merely accept overlong forms and surrogates. It treated any
@@ -2013,15 +2158,15 @@ move, `resolve_path`, moved to `engine_walk.c` and is still not somewhere
   check exists to refuse; the surrogate passed through; and the stray `\x80`
   ate the three bytes after it, which is how `and \x80 end` lost its `en`. It
   is byte-identical to node now, and astral characters still round-trip.
-- Path normalisation: `resolve_path` ([engine_walk.c:467](../src/engine_walk.c#L467))
-  and `absolute` ([cli.c:256](../src/cli.c#L256)) are the same algorithm
+- Path normalisation: `resolve_path` ([engine_walk.c:467](../src/engine_walk.c#L473))
+  and `absolute` ([cli.c:256](../src/cli.c#L257)) are the same algorithm
   written twice, both over `strtok`. **Not folded.** They are the same
   normalisation but not the same function: one joins against a base and writes
   into a caller's buffer, the other joins against the working directory and
   allocates, and only the second translates `\` to `/`. Unifying means picking
   one behaviour for both and finding a home for it — `fsx.h` is the candidate,
   since it already owns `fsx_is_absolute`. `resolve_path` has since moved, to
-  [engine_walk.c:467](../src/engine_walk.c#L467), which settles where it lives
+  [engine_walk.c:467](../src/engine_walk.c#L473), which settles where it lives
   in the engine and not where the shared one would.
 - ASCII case-insensitive comparison, written inline at least seven times
   (`ends_with_ci`, `is_image_ext`, `ieq`, `doctype_line`, `resize_in`,
@@ -2055,8 +2200,8 @@ move, `resolve_path`, moved to `engine_walk.c` and is still not somewhere
   said so. `tags: [\'A"b\', Alpha, ALPHA]` gave `["A\"b","Alpha","ALPHA"]` where
   node gives `["a\"b","alpha"]`.
 
-  There is one writer now ([engine_walk.c:232](../src/engine_walk.c#L232)) over one
-  escaper ([engine_walk.c:184](../src/engine_walk.c#L184)), which `put_quoted` from
+  There is one writer now ([engine_walk.c:232](../src/engine_walk.c#L239)) over one
+  escaper ([engine_walk.c:184](../src/engine_walk.c#L191)), which `put_quoted` from
   B8's fix also uses — so everything this file emits as YAML is escaped by the
   same code. Regression test: `tag_checks`
   ([test/engine.c:939](../test/engine.c#L939)), a quote, a backslash and a tab
@@ -2111,19 +2256,19 @@ keeps `engine_walk.c` out of the render memo's. That is the next structural
 item and the split did not make it easier; it made it visible.
 
 **Long functions with several exits.** `render_tree_out`
-([2925–3234](../src/engine.c#L2925-L3234), ~300 lines) manages seven GC roots
+([2925–3234](../src/engine.c#L3035-L3344), ~300 lines) manages seven GC roots
 and a `FAIL` macro that jumps to `done:`. It had three early returns that
 *bypassed* `done:` — one was B3, another B12, the third silently cleared the
 enclosing render's `taint` — and it has one exit now. Length is what let three
 of them accumulate unnoticed, and the length is still there. `open_dir_inner`
-([704–1015](../src/engine_walk.c#L704-L1015)) builds the synthetic source that
+([704–1015](../src/engine_walk.c#L714-L1082)) builds the synthetic source that
 caused B1 and B2; what is left of it is B8. `mdy_parse_block` ([block.c:1267–1779](../src/parse/block.c#L1267-L1779),
 480 lines) inlines the entire list grammar. `resize_in` defines a
 `RESIZE_FAIL` macro and then uses it for two of its eight failures.
 
-**Process-global state.** The memo tables ([engine.c:2732](../src/engine.c#L2732))
+**Process-global state.** The memo tables ([engine.c:2732](../src/engine.c#L2840))
 and `mdy_engine_rotate_memo(void)`, the nisaba slot table (`nis.c`),
-`lookup_import`'s `static char path[1024]` ([1030](../src/engine.c#L1030)),
+`lookup_import`'s `static char path[1024]` ([1030](../src/engine.c#L1128)),
 `seen_sources` in cli.c, the OID statics in ingest.c. These make the engine
 non-reentrant and are the reason `wasm/index.mjs` instantiates a fresh module
 per call. They also make the memo shared between unrelated engines in one
@@ -2141,9 +2286,9 @@ and then there would be nothing to escape.
 **The `Dev` struct and the bus code in cli.c** carry fixed-size scratch
 (`done_ix[64]`, `done_list[4096]`, `char cand[3][4200]`), fake growable
 arrays by passing a compound literal as the capacity
-([1472](../src/cli.c#L1472), [1883](../src/cli.c#L1883)), and reuse the drain
+([1472](../src/cli.c#L1496), [1883](../src/cli.c#L1907)), and reuse the drain
 loop for document mode by constructing a fake `Dev`
-([1646–1679](../src/cli.c#L1646-L1679)). Five functions return pointers to
+([1646–1679](../src/cli.c#L1670-L1703)). Five functions return pointers to
 `static char msg[4096]`.
 
 **The Makefile** ~~repeats the twelve-file engine source list four times~~
@@ -2158,7 +2303,7 @@ prerequisite now.
 
 ~~What is still true: every engine binary compiles from source in one `cc`
 invocation, with no object files~~ — **also fixed, and it was the larger
-half.** One object per source ([Makefile:484](../Makefile#L484)), and three
+half.** One object per source ([Makefile:484](../Makefile#L505)), and three
 binaries that link them; `build/mdy` and `build/engine-test` share theirs,
 ASan has its own because its flags differ.
 
@@ -2177,7 +2322,7 @@ that was wrong in the safe direction is still wrong, and editing
 `fsx.h` exactly seven.
 
 Rules are generated per source with `$(eval)` rather than found by a `vpath`
-([Makefile:498](../Makefile#L498)): the sources come from four directories, two
+([Makefile:498](../Makefile#L526)): the sources come from four directories, two
 outside this tree, and a global `vpath %.c` would also be consulted for the
 parser's and the tests', which resolve by exact path and should keep doing so.
 Object names are basenames, so two sources may not share one — thirty-one are
@@ -2207,14 +2352,14 @@ self-inflicted. Each time the result described a different binary than the one
 named.
 
 There is nothing a Makefile can do about it, so the Makefile says so
-([Makefile:60](../Makefile#L60)) — and only when a `check-` target is what was
+([Makefile:60](../Makefile#L61)) — and only when a `check-` target is what was
 asked for, since that is where believing a stale result costs something.
 Ordinary builds stay quiet.
 
 While here: the ASan build was never read for warnings, and had one from
 `stb_image_resize2.h` that appears at `-O1` and not at `-O2`. It goes in the
 `#pragma` block `images.c` already keeps for exactly this
-([images.c:29](../src/images.c#L29)). A clean build of all three binaries is
+([images.c:29](../src/images.c#L30)). A clean build of all three binaries is
 silent now, not just the default one.
 
 ---
@@ -2265,8 +2410,8 @@ somebody else's header. What follows is what the warnings were.
 
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`
-([engine.c:282](../src/engine.c#L282), [1006](../src/engine.c#L1006),
-[3177](../src/engine.c#L3177)), the unused parameter above, and two from stb
+([engine.c:282](../src/engine.c#L285), [1006](../src/engine.c#L1104),
+[3177](../src/engine.c#L3287)), the unused parameter above, and two from stb
 under `STBI_ONLY_PNG`. A non-const `mdy_root_mut` in `mdybuild.h` (or
 `-Wno-unused-function` around the stb include) makes the build silent, which
 is the only state in which a *new* warning is noticed.
@@ -2274,12 +2419,12 @@ is the only state in which a *new* warning is noticed.
 **Error reporting has four conventions.** `0/-1` with an error buffer
 (engine, fsx), `BJ_*` codes (memns, nis), `NULL` plus a static message buffer
 (cli), and `fprintf(stderr)` from inside the library
-([engine.c:2376](../src/engine.c#L2376), [2391](../src/engine.c#L2391)) even
+([engine.c:2376](../src/engine.c#L2485), [2391](../src/engine.c#L2500)) even
 though `on_message` exists for exactly that. Pick two.
 
 **Debug switches are read in hot paths.** `getenv("MDY_MEMO_DEBUG")` runs
 three times per render and `getenv("MDY_LINEMAP_DEBUG")` once per produced
-line ([engine.c:2676](../src/engine.c#L2676)); read them once in
+line ([engine.c:2676](../src/engine.c#L2784)); read them once in
 `mdy_engine_new`.
 
 **Fragile initialisers.** `bjval.c` fills `bj_visitor` positionally

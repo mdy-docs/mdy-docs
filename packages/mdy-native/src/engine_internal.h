@@ -318,7 +318,10 @@ void put_document_tags(char **buf, size_t *len, size_t *cap,
  * which is the one place these two lean on each other.
  */
 int open_documents(mdy_engine *e, mdy_documents *docs, char *error, size_t error_len);
-JsValue run_query(mdy_engine *e, JsValue query, int one);
+/* `failed` (optional) says the query could not RUN, as distinct from
+ * matching nothing -- see run_query_in. Pass NULL only where the caller's
+ * own "not found" answer already stops the build. */
+JsValue run_query(mdy_engine *e, JsValue query, int one, int *failed);
 int index_of_id(mdy_engine *e, const char *hex, size_t len);
 
 #endif

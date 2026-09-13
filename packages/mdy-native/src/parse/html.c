@@ -282,7 +282,14 @@ static void write_attribute(Buf *b, const mdy_prop *p) {
                 if (i) puts_(&tmp, sep);
                 puts_(&tmp, p->list[i]);
             }
-            if (tmp.s) escape(b, tmp.s, tmp.len, SUBSET_VALUE);
+            /*
+             * `tmp.ok` carries into the output buffer's. Without this a
+             * className list that could not be joined wrote `class=""` and
+             * the serialisation went on to succeed: an element that lost its
+             * classes, in a page that was written and reported as built.
+             */
+            if (!tmp.ok) b->ok = 0;
+            else if (tmp.s) escape(b, tmp.s, tmp.len, SUBSET_VALUE);
             free(tmp.s);
             break;
         }

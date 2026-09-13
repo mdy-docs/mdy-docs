@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "images.h"
+#include "xalloc.h"
 
 /*
  * Vendored, and it compiles a handful of helpers this build never reaches —
@@ -36,6 +37,17 @@
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STBI_WRITE_NO_STDIO
+/*
+ * The writer's own allocator, because its answer to an exhausted one is
+ * `STBIW_ASSERT(p)` -- abort(), from inside a vendored header, with no way
+ * for the caller to hear about it. These three are the documented way to
+ * replace it (stb_image_write.h's own notes say all or none), and they turn
+ * that abort into the same one line every other allocation failure here
+ * prints. It is not a patch to the vendored file. See xalloc.h.
+ */
+#define STBIW_MALLOC(sz)      mdy_xmalloc(sz)
+#define STBIW_REALLOC(p, sz)  mdy_xrealloc(p, sz)
+#define STBIW_FREE(p)         free(p)
 #include "stb_image_write.h"
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION

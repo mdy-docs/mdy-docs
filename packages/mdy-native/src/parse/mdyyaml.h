@@ -74,6 +74,18 @@ typedef struct mdy_yaml_node mdy_yaml_node;
  * NULL), of the shape `line 12: what went wrong`. An empty stream is not a
  * failure: it parses to a null node, which is what `parse("")` should give.
  */
+/*
+ * The exact text written into `error` when the parse stopped because it could
+ * not allocate, rather than because it found a fault in the document.
+ *
+ * It is a constant, and not merely one of the messages, because the caller has
+ * to be able to tell the two apart and cannot otherwise: a malformed document
+ * is that document's problem and is reported for it, an allocation failure is
+ * the whole process's and must stop the build. Every other message begins
+ * `line N:`, so this one deliberately does not.
+ */
+#define MDY_YAML_OOM "out of memory"
+
 mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error_len);
 const mdy_yaml_node *mdy_yaml_root(const mdy_yaml *doc);
 void mdy_yaml_free(mdy_yaml *doc);

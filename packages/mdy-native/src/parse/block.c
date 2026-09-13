@@ -2033,12 +2033,16 @@ static size_t front_matter_lines(mdy_doc *doc, const mdy_line *lines, size_t cou
  * type is the thing they share and the arena is how it is owned. mdy_free is
  * the only cleanup either of them needs.
  */
+/* An empty document, which cannot fail: its arena already ends the process
+ * rather than hand back NULL (internal.h), and the struct that holds the
+ * arena is the same allocation in every sense that matters. Returning NULL
+ * here left each of six callers inventing an answer, and `$.node` picked
+ * `undefined` -- a document built without the node it was given. */
 mdy_doc *mdy_doc_new(void) {
     mdy_doc *doc = calloc(1, sizeof *doc);
-    if (!doc) return NULL;
+    if (!doc) mdy_oom_exit();
     mdy_options_default(&doc->options);
     doc->root = mdy_alloc(&doc->arena, sizeof *doc->root);
-    if (!doc->root) { mdy_free(doc); return NULL; }
     memset(doc->root, 0, sizeof *doc->root);
     doc->root->type = MDY_ROOT;
     return doc;

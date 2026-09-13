@@ -1,12 +1,19 @@
 /*
  * The arena and the intern table. See internal.h for why both exist.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "internal.h"
 
 #define MDY_BLOCK_MIN (64 * 1024)
+
+void mdy_oom_exit(void) {
+    fputs("mdy: out of memory\n", stderr);
+    fflush(stderr);
+    _Exit(1);
+}
 
 void *mdy_alloc(mdy_arena *arena, size_t size) {
     size = (size + 15) & ~(size_t)15;   /* 16-byte aligned, enough for anything here */
@@ -15,7 +22,8 @@ void *mdy_alloc(mdy_arena *arena, size_t size) {
         size_t block = MDY_BLOCK_MIN;
         while (block < size + sizeof(mdy_block)) block *= 2;
         mdy_block *next = malloc(block);
-        if (!next) return NULL;
+        /* See internal.h: this does not return NULL. */
+        if (!next) mdy_oom_exit();
         next->next = arena->head;
         next->used = 0;
         next->size = block - sizeof(mdy_block);

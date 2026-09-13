@@ -8,6 +8,7 @@
  * out of a five-thousand-line file.
  */
 #include "engine_internal.h"
+#include "xalloc.h"
 
 /* ---- strings across the boundary ------------------------------------------- */
 
@@ -29,12 +30,17 @@
  *
  * Both wrappers still allocate, which is what every caller here wants; the
  * parser's take a buffer because its callers have one.
+ *
+ * They allocate through xalloc.h, and the reason is the whole of that file:
+ * a string that fails to convert has no way to say so from here. `str` used
+ * to return js_undefined() and `key` an undefined ATOM, so an allocation
+ * failure did not stop a build -- it moved a property to a different name and
+ * let the build finish, reporting success. See xalloc.h.
  */
 uint16_t *to_utf16(const char *in, size_t len, size_t *out_len) {
     /* Never more than one unit per byte: a character that is two units is at
      * least four bytes, and an ill-formed one is one byte and one U+FFFD. */
-    uint16_t *out = malloc((len + 1) * sizeof *out);
-    if (!out) { *out_len = 0; return NULL; }
+    uint16_t *out = mdy_xmalloc((len + 1) * sizeof *out);
     *out_len = mdy_to_utf16(in, len, out, len + 1);
     return out;
 }
@@ -42,8 +48,7 @@ uint16_t *to_utf16(const char *in, size_t len, size_t *out_len) {
 char *from_utf16(const uint16_t *u, size_t len) {
     /* Never more than three bytes per unit: a surrogate pair is two units and
      * four bytes, and a lone surrogate is one unit and a three-byte U+FFFD. */
-    char *out = malloc(len * 3 + 1);
-    if (!out) return NULL;
+    char *out = mdy_xmalloc(len * 3 + 1);
     size_t n = mdy_from_utf16(u, len, out, len * 3);
     out[n] = '\0';
     return out;
@@ -52,7 +57,7 @@ char *from_utf16(const uint16_t *u, size_t len) {
 JsValue str(JsVm *vm, const char *s, size_t len) {
     size_t n = 0;
     uint16_t *u = to_utf16(s, len, &n);
-    JsValue v = u ? js_string_new(vm, u, n) : js_undefined();
+    JsValue v = js_string_new(vm, u, n);
     free(u);
     return v;
 }
@@ -77,7 +82,7 @@ JsValue key(JsVm *vm, const char *s) {
     if (stress) js_gc_collect(vm);
     size_t n = 0;
     uint16_t *u = to_utf16(s, strlen(s), &n);
-    JsValue v = u ? js_atom(vm, u, n) : js_undefined();
+    JsValue v = js_atom(vm, u, n);
     free(u);
     return v;
 }
@@ -514,11 +519,10 @@ static void d_key(void *ctx, const uint8_t *s, uint32_t n) {
     Decode *d = ctx;
     if (d->depth == 0) return;
     free(d->keys[d->depth - 1]);
-    d->keys[d->depth - 1] = malloc(n + 1);
-    if (d->keys[d->depth - 1]) {
-        memcpy(d->keys[d->depth - 1], s, n);
-        d->keys[d->depth - 1][n] = '\0';
-    }
+    char *k = mdy_xmalloc(n + 1);
+    memcpy(k, s, n);
+    k[n] = '\0';
+    d->keys[d->depth - 1] = k;
 }
 static void d_end(void *ctx) {
     Decode *d = ctx;

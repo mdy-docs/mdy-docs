@@ -34,6 +34,26 @@ typedef struct {
     size_t total;
 } mdy_arena;
 
+/* Report an exhausted allocator and end the process. _Exit rather than exit
+ * because the handlers exit runs are themselves allocating code. */
+_Noreturn void mdy_oom_exit(void);
+
+/*
+ * Arena allocation, which does not return NULL.
+ *
+ * That was always the CONTRACT -- twenty-six of the forty-two call sites in
+ * this library do not check, because a recursive-descent parser has no way to
+ * unwind from the middle of a node -- but it was not true, and an exhausted
+ * arena returned NULL into all of them. The sixteen that did check were no
+ * better off: they returned NULL to a caller that carried on, so the parse
+ * finished with nodes silently missing and the document was written out as
+ * though that were what it said.
+ *
+ * So the contract is enforced instead of assumed: a block that cannot be
+ * allocated ends the process with one line on stderr. Everything in this
+ * library is reached from a parse that has nowhere to put an out-of-memory,
+ * and a caller that could do something useful with one does not exist.
+ */
 void *mdy_alloc(mdy_arena *arena, size_t size);
 char *mdy_strdup_n(mdy_arena *arena, const char *s, size_t len);
 void mdy_arena_free(mdy_arena *arena);

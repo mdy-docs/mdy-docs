@@ -9,6 +9,7 @@
 #   make check-site SITE=<dir>    one site, the same way
 #   make check-highlight          highlight.js in lamassu, against lowlight
 #   make check-cli                mdy-docs' CLI tests, run against build/mdy
+#   make check-alloc              a build with each allocation refused in turn
 #   make wasm                     the same engine as WebAssembly (needs emcc)
 #   make check-wasm               the golden sites through it, under node
 #   make serve-wasm               and a page that builds a site in a browser
@@ -230,6 +231,26 @@ build/parse/md4c-entity.o: third_party/md4c/src/entity.c
 $(PARSE_LIB): $(PARSE_OBJS) $(MD4C_OBJS)
 	$(AR) rcs $@ $(PARSE_OBJS) $(MD4C_OBJS)
 
+# The same library with the failing allocator forced in, for build/mdy-af.
+# Without it the sweep cannot reach block.c's arena, which is where a third
+# of B24's named sites are.
+PARSE_AF_OBJS := $(patsubst src/parse/%.c,build/parse-af/%.o,$(PARSE_SRCS))
+MD4C_AF_OBJS  := build/parse-af/md4c.o build/parse-af/md4c-entity.o
+PARSE_AF_LIB  := build/libmdyparse-af.a
+
+build/parse-af/%.o: src/parse/%.c $(PARSE_HDRS) src/allocfail.h
+	@mkdir -p build/parse-af
+	$(CC) $(PARSE_CFLAGS) -include src/allocfail.h -c $< -o $@
+build/parse-af/md4c.o: third_party/md4c/src/md4c.c src/allocfail.h
+	@mkdir -p build/parse-af
+	$(CC) $(PARSE_CFLAGS) -include src/allocfail.h -c $< -o $@
+build/parse-af/md4c-entity.o: third_party/md4c/src/entity.c src/allocfail.h
+	@mkdir -p build/parse-af
+	$(CC) $(PARSE_CFLAGS) -include src/allocfail.h -c $< -o $@
+
+$(PARSE_AF_LIB): $(PARSE_AF_OBJS) $(MD4C_AF_OBJS)
+	$(AR) rcs $@ $(PARSE_AF_OBJS) $(MD4C_AF_OBJS)
+
 # stb: three single-file headers, vendored. See third_party/stb/README.md.
 STB_INC   := -Ithird_party/stb
 
@@ -435,7 +456,7 @@ check-golden: build/mdy$(EXE)
 	done; \
 	exit $$fail
 
-.PHONY: check-ingest check-engine check-site check-sites check-dev clean
+.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc clean
 
 # A document from text into a nisaba collection, with no JavaScript in it:
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
@@ -456,7 +477,7 @@ check-ingest: build/ingest-test$(EXE)
 # PREREQUISITE and not only an include: editing a header used to leave every
 # binary that depends on it untouched, and a stale build is a test result that
 # means nothing.
-ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_walk.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c
+ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_walk.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c src/xalloc.c
 
 # ---- and the objects they compile to ---------------------------------------
 #
@@ -484,12 +505,19 @@ ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_w
 OBJ_SRCS  := $(ENGINE_SRCS) $(NIS_SRCS)
 ENGINE_OBJS := $(addprefix build/obj/,$(notdir $(OBJ_SRCS:.c=.o)))
 ASAN_OBJS   := $(addprefix build/obj-asan/,$(notdir $(OBJ_SRCS:.c=.o)))
+AF_OBJS     := $(addprefix build/obj-af/,$(notdir $(OBJ_SRCS:.c=.o)))
 ifneq ($(words $(ENGINE_OBJS)),$(words $(sort $(ENGINE_OBJS))))
   $(error two of ENGINE_SRCS/NIS_SRCS share a basename; object names would collide)
 endif
 
 ENGINE_CPPFLAGS := -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME)
 ASAN_CFLAGS     := -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer
+
+# build/mdy-af is build/mdy with one allocation refused. The header is forced
+# in rather than included by hand so that the engine sources stay ignorant of
+# it -- no #ifdef in a call site, nothing to get out of step with the real
+# build. See src/allocfail.c.
+AF_CFLAGS       := $(CFLAGS) -include src/allocfail.h
 
 # An explicit rule per source rather than a vpath: the sources come from four
 # directories, two of them outside this tree, and a global `vpath %.c` would
@@ -502,6 +530,9 @@ build/obj/$(notdir $(1:.c=.o)): $(1) $$(HL_HDR)
 build/obj-asan/$(notdir $(1:.c=.o)): $(1) $$(HL_HDR)
 	@mkdir -p build/obj-asan
 	$$(CC) $$(ASAN_CFLAGS) $$(ENGINE_CPPFLAGS) -I$$(LAMASSU)/include -MMD -MP -c $$< -o $$@
+build/obj-af/$(notdir $(1:.c=.o)): $(1) $$(HL_HDR) src/allocfail.h
+	@mkdir -p build/obj-af
+	$$(CC) $$(AF_CFLAGS) $$(ENGINE_CPPFLAGS) -MMD -MP -c $$< -o $$@
 endef
 $(foreach s,$(OBJ_SRCS),$(eval $(call ENGINE_OBJ_RULE,$(s))))
 
@@ -511,15 +542,25 @@ build/obj/cli.o: src/cli.c $(HL_HDR)
 build/obj-asan/cli.o: src/cli.c $(HL_HDR)
 	@mkdir -p build/obj-asan
 	$(CC) $(ASAN_CFLAGS) $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include -MMD -MP -c $< -o $@
+build/obj-af/cli.o: src/cli.c $(HL_HDR) src/allocfail.h
+	@mkdir -p build/obj-af
+	$(CC) $(AF_CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
+# The shim is the one file the -include must not reach: it defines what the
+# macros rename to, and would rename itself into infinite recursion.
+build/obj-af/allocfail.o: src/allocfail.c src/allocfail.h
+	@mkdir -p build/obj-af
+	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
 # Named for the binary, not the file: src/engine.c already owns engine.o.
 build/obj/engine-test.o: test/engine.c $(HL_HDR)
 	@mkdir -p build/obj
 	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
 
 ENGINE_LIBS := $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS)
+AF_LIBS     := $(PARSE_AF_LIB) build/libsukkal.a $(LAM_LIBS)
 
--include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) \
-         build/obj/cli.d build/obj-asan/cli.d build/obj/engine-test.d
+-include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) $(AF_OBJS:.o=.d) \
+         build/obj/cli.d build/obj-asan/cli.d build/obj-af/cli.d \
+         build/obj-af/allocfail.d build/obj/engine-test.d
 
 # One document, end to end, with no JavaScript engine but lamassu — the three
 # passes of src/mdy.js done in C. No JavaScript engine but lamassu is linked
@@ -534,6 +575,12 @@ build/engine-test$(EXE): build/obj/engine-test.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 build/mdy-asan$(EXE): build/obj-asan/cli.o $(ASAN_OBJS) $(ENGINE_LIBS)
 	@mkdir -p build
 	$(CC) $(ASAN_CFLAGS) build/obj-asan/cli.o $(ASAN_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
+
+# The same driver with a single allocation refused, chosen by
+# MDY_ALLOC_FAIL_NTH. check-alloc sweeps n over a whole build; see check-alloc.
+build/mdy-af$(EXE): build/obj-af/cli.o $(AF_OBJS) build/obj-af/allocfail.o $(AF_LIBS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) build/obj-af/cli.o $(AF_OBJS) build/obj-af/allocfail.o $(AF_LIBS) -o $@ $(LDLIBS)
 
 build/mdy$(EXE): build/obj/cli.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 	@mkdir -p build
@@ -584,6 +631,49 @@ check-site: build/mdy$(EXE)
 #                 raw block, until src/parse/markdown.c dropped it.
 CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
                ../../examples/messaging:0 fixture:0 fixture-pkg:0
+#
+# Every allocation in a build, refused one at a time.
+#
+# B24 was a list of allocations whose result was used unchecked, and the
+# reason it sat unfixed is that none of those paths runs unless an allocation
+# actually fails: sixteen edits nobody could test. build/mdy-af is build/mdy
+# with the allocator replaced by one that refuses the nth request
+# (src/allocfail.c), and this sweeps n across a whole build.
+#
+# The invariant is not "it does not crash". It is:
+#
+#     a run that exits 0 produced the SAME SITE as a run that was not
+#     interfered with; a run that could not must say so and exit non-zero.
+#
+# Silently dropping a page is worse than the crash it replaces, because the
+# build reports success with files missing -- and that is what nearly three
+# hundred of these ordinals used to do. The first sweep found 13 segfaults and
+# 306 wrong-but-successful builds; the ones that remain are all in nisaba-db,
+# which is a different repository (B41).
+#
+# ~1800 builds of `fixture`, about two minutes. Not in any other target.
+check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
+	@set -e; \
+	ref=build/alloc-ref; out=build/alloc-out; \
+	rm -rf $$ref $$out; ./build/mdy$(EXE) build fixture --out $$ref >/dev/null; \
+	n=$$(MDY_ALLOC_COUNT=1 ./build/mdy-af$(EXE) build fixture --out $$out 2>&1 >/dev/null \
+	     | sed -n 's/^mdy-af: \([0-9]*\) .*/\1/p'); \
+	echo "sweeping $$n allocations"; \
+	i=1; bad=; crash=; \
+	while [ $$i -le $$n ]; do \
+	  rm -rf $$out; \
+	  rc=0; \
+	  MDY_ALLOC_FAIL_NTH=$$i ./build/mdy-af$(EXE) build fixture --out $$out >/dev/null 2>&1 || rc=$$?; \
+	  if [ $$rc -ge 128 ]; then crash="$$crash $$i"; \
+	  elif [ $$rc -eq 0 ] && ! diff -rq $$ref $$out >/dev/null 2>&1; then bad="$$bad $$i"; fi; \
+	  i=$$((i+1)); \
+	done; \
+	rm -rf $$ref $$out; \
+	if [ -n "$$crash" ]; then echo "CRASHED at:$$crash"; fi; \
+	if [ -n "$$bad" ]; then echo "reported success with a DIFFERENT site at:$$bad"; fi; \
+	if [ -n "$$crash$$bad" ]; then echo "$$(echo $$crash $$bad | wc -w) of $$n allocations"; exit 1; fi; \
+	echo "$$n allocations: every refusal was either survived exactly or reported"
+
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \
 	  dir=$${s%:*}; want=$${s##*:}; \

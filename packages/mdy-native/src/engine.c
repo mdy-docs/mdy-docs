@@ -1,5 +1,6 @@
 /* The contract, and what is not here yet, is in engine.h. */
 #include "engine_internal.h"
+#include "xalloc.h"
 
 /* ---- the site's three small natives ------------------------------------------
  *
@@ -44,7 +45,13 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     if (!text) { *result = js_array_new(ctx, 0); return true; }
 
     size_t len = strlen(text);
-    char *word = malloc(len + 1);
+    /*
+     * Every allocation below used to answer failure with `break` or an empty
+     * array, and the result is what a site INDEXES: a truncated word list is
+     * a search box that cannot find a page, on a build that succeeded. See
+     * xalloc.h.
+     */
+    char *word = mdy_xmalloc(len + 1);
     /*
      * The words are collected and deduplicated ON THIS SIDE, and the JS array
      * is built once at the end.
@@ -58,8 +65,6 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     /* Open-addressed index over `words`, power of two, kept under half full. */
     size_t *slots = NULL;
     size_t slot_cap = 0;
-
-    if (!word) { free(text); *result = js_array_new(ctx, 0); return true; }
 
     size_t i = 0;
     while (i < len) {
@@ -94,8 +99,7 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
 
         if (count * 2 + 2 > slot_cap) {         /* grow and rehash */
             size_t want = slot_cap ? slot_cap * 2 : 64;
-            size_t *grown = malloc(want * sizeof *grown);
-            if (!grown) break;
+            size_t *grown = mdy_xmalloc(want * sizeof *grown);
             for (size_t k = 0; k < want; k++) grown[k] = (size_t)-1;
             for (size_t k = 0; k < count; k++) {
                 uint64_t h = 1469598103934665603u;
@@ -123,13 +127,10 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
 
         if (count == cap) {
             size_t want = cap ? cap * 2 : 32;
-            char **grown = realloc(words, want * sizeof *grown);
-            if (!grown) break;
-            words = grown;
+            words = mdy_xrealloc(words, want * sizeof *words);
             cap = want;
         }
-        words[count] = malloc(wlen + 1);
-        if (!words[count]) break;
+        words[count] = mdy_xmalloc(wlen + 1);
         memcpy(words[count], word, wlen + 1);
         slots[at] = count;
         count++;
@@ -223,7 +224,7 @@ static mdy_doc *render_tree(mdy_engine *e, size_t index, JsValue req,
  * (which carries its own `_id`). All three end at a document index, which is
  * what the `_id` to index map is for.
  */
-static int resolve_target(mdy_engine *e, JsValue target) {
+static int resolve_target(mdy_engine *e, JsValue target, int *failed) {
     if (js_is_number(target)) {
         double at = js_get_number(target);
         return (at >= 0 && at < (double)e->count) ? (int)at : -1;
@@ -238,7 +239,7 @@ static int resolve_target(mdy_engine *e, JsValue target) {
         if (at >= 0) return at;
     }
 
-    JsValue hit = run_query(e, target, 1);
+    JsValue hit = run_query(e, target, 1, failed);
     if (!js_is_object(hit)) return -1;
     char *hit_id = js_string_utf8(get_val(e, hit, "_id"));
     if (!hit_id) return -1;
@@ -252,9 +253,11 @@ static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
-    int at = argc > 0 ? resolve_target(e, args[0]) : -1;
+    int failed = 0;
+    int at = argc > 0 ? resolve_target(e, args[0], &failed) : -1;
     if (at < 0) {
-        const char *msg = "mdy-engine: $.render found no such document";
+        const char *msg = failed ? "mdy-engine: $.render could not run the query"
+                                 : "mdy-engine: $.render found no such document";
         *result = str(e->vm, msg, strlen(msg));
         return false;
     }
@@ -293,10 +296,19 @@ static void collect_text_into(const mdy_node *n, char **out, size_t *len, size_t
     if (n->type == MDY_TEXT && n->text) {
         size_t add = strlen(n->text);
         if (*len + add + 1 > *cap) {
-            while (*len + add + 1 > *cap) *cap = *cap ? *cap * 2 : 256;
-            char *grown = realloc(*out, *cap);
-            if (!grown) return;
-            *out = grown;
+            /*
+             * `*cap` moved BEFORE the allocation was known to have succeeded,
+             * and the early return left it moved: the next call through here
+             * saw room that did not exist and wrote past the end of the
+             * buffer. A heap overflow reached from an allocation failure
+             * rather than at it -- the same shape as cache_put's, found by
+             * the same sweep. `want` is local until it is real, and there is
+             * no early return now. See xalloc.h.
+             */
+            size_t want = *cap;
+            while (*len + add + 1 > want) want = want ? want * 2 : 256;
+            *out = mdy_xrealloc(*out, want);
+            *cap = want;
         }
         memcpy(*out + *len, n->text, add);
         *len += add;
@@ -311,9 +323,11 @@ static bool text_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
-    int at = argc > 0 ? resolve_target(e, args[0]) : -1;
+    int failed = 0;
+    int at = argc > 0 ? resolve_target(e, args[0], &failed) : -1;
     if (at < 0) {
-        const char *msg = "mdy-engine: $.text found no such document";
+        const char *msg = failed ? "mdy-engine: $.text could not run the query"
+                                 : "mdy-engine: $.text found no such document";
         *result = str(e->vm, msg, strlen(msg));
         return false;
     }
@@ -352,13 +366,23 @@ static bool emit_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     if (argc < 2) { *result = js_null(); return true; }
     char *path = js_string_utf8(args[0]);
     char *content = js_string_utf8(args[1]);
+    int failed = 0;
     if (path && content) {
         char *filled = fill_tokens(e, content, strlen(content));
-        if (filled && e->on_emit) e->on_emit(e->on_emit_ud, path, filled);
+        /* fill_tokens returns NULL only when it could not build the string --
+         * emitting the page without its composed pieces, or not at all, is a
+         * file that is wrong rather than a file that is missing. */
+        if (!filled) failed = 1;
+        else if (e->on_emit) e->on_emit(e->on_emit_ud, path, filled);
         free(filled);
     }
     free(path);
     free(content);
+    if (failed) {
+        const char *msg = "mdy-engine: $.emit could not build the page";
+        *result = str(e->vm, msg, strlen(msg));
+        return false;
+    }
     *result = js_null();
     return true;
 }
@@ -519,9 +543,21 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
          * text never goes in, which is what a measured build of mdy-docs
          * shows it doing.
          */
-        char err[256];
+        char err[256] = { 0 };
         mdy_yaml *matter = NULL;
         if (d->matter.len) matter = mdy_yaml_parse(d->matter.text, d->matter.len, err, sizeof err);
+        /*
+         * A front matter the parser could not READ is this document's problem
+         * and is left as no data, which is what node does with it too. One it
+         * could not ALLOCATE for is the process's problem, and leaving it as
+         * no data means building the page without its fields and reporting
+         * success. MDY_YAML_OOM exists to tell those apart.
+         */
+        if (!matter && d->matter.len && strcmp(err, MDY_YAML_OOM) == 0) {
+            if (error && error_len) snprintf(error, error_len, "out of memory");
+            close_set(e);
+            return -1;
+        }
 
         size_t fence_count = d->fences ? mdy_data_count(d->fences) : 0;
         /* identity-as-default + front matter + fences + tags + data + identity */
@@ -530,16 +566,24 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         if (!maps || !parsed) { free(maps); free(parsed); mdy_yaml_free(matter); close_set(e); return -1; }
 
         size_t used = 0;
-        /* Before the document's own fields, where identity is a DEFAULT. */
-        mdy_yaml *pre = NULL;
+        /* All four are freed by the cleanup below, which the OOM jumps reach,
+         * so all four are declared before the first of those jumps. */
+        mdy_yaml *pre = NULL, *post = NULL, *tag_map = NULL;
+        int oom = 0;
         if (e->ident_pre && i < e->identity_count && e->ident_pre[i]) {
+            err[0] = '\0';
             pre = mdy_yaml_parse(e->ident_pre[i], strlen(e->ident_pre[i]), err, sizeof err);
             if (pre) maps[used++] = mdy_yaml_root(pre);
+            else if (strcmp(err, MDY_YAML_OOM) == 0) goto docs_oom;
         }
         if (matter) maps[used++] = mdy_yaml_root(matter);
         for (size_t f = 0; f < fence_count; f++) {
             const mdy_data_fence *fence = mdy_data_at(d->fences, f);
+            err[0] = '\0';
             mdy_yaml *y = mdy_yaml_parse(fence->source, fence->source_len, err, sizeof err);
+            /* A malformed fence is skipped, as node skips it. One that could
+             * not be allocated for is not the same thing. */
+            if (!y && strcmp(err, MDY_YAML_OOM) == 0) goto docs_oom;
             if (!y) continue;
             parsed[f] = y;
             maps[used++] = mdy_yaml_root(y);
@@ -553,21 +597,22 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
          * list — which is what Object.assign then a single `data.tags = tags`
          * does on the JavaScript side.
          */
-        mdy_yaml *tag_map = NULL;
         {
             size_t body_len = 0;
             const char *body = mdy_data_body(d->fences, &body_len);
-            char *text = malloc(256);
+            /* `if (text)` here meant a document silently kept none of its
+             * tags -- and tags decide which indexes it appears in. */
+            char *text = mdy_xmalloc(256);
             size_t tlen = 0, tcap = 256;
-            if (text) {
-                text[0] = '\0';
-                put_document_tags(&text, &tlen, &tcap, maps, used, body ? body : "", body_len);
-                if (tlen > 0) {
-                    tag_map = mdy_yaml_parse(text, tlen, err, sizeof err);
-                    if (tag_map) maps[used++] = mdy_yaml_root(tag_map);
-                }
-                free(text);
+            text[0] = '\0';
+            put_document_tags(&text, &tlen, &tcap, maps, used, body ? body : "", body_len);
+            if (tlen > 0) {
+                err[0] = '\0';
+                tag_map = mdy_yaml_parse(text, tlen, err, sizeof err);
+                if (tag_map) maps[used++] = mdy_yaml_root(tag_map);
+                else if (strcmp(err, MDY_YAML_OOM) == 0) { free(text); goto docs_oom; }
             }
+            free(text);
         }
 
         /* A data file's own mapping, after everything the document itself
@@ -581,10 +626,11 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
 
         /* After them, where identity WINS — and, for a data file, the one
          * field that must be real whatever it declared. */
-        mdy_yaml *post = NULL;
         if (e->ident_post && i < e->identity_count && e->ident_post[i]) {
+            err[0] = '\0';
             post = mdy_yaml_parse(e->ident_post[i], strlen(e->ident_post[i]), err, sizeof err);
             if (post) maps[used++] = mdy_yaml_root(post);
+            else if (strcmp(err, MDY_YAML_OOM) == 0) goto docs_oom;
         }
 
         mdy_oid_next(d->oid);
@@ -598,6 +644,19 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
             ok = bytes && nis_insert(e->handle, bytes, (uint32_t)dlen) == 0;
         }
         bj_builder_free(b);
+        if (0) {
+            /*
+             * Every mdy_yaml_parse in this loop can fail two ways, and only
+             * one of them is the document's fault. A malformed part is
+             * skipped -- node skips it too -- but a part that could not be
+             * ALLOCATED for is the process failing, and skipping it builds
+             * the page without its data and calls that a success. The four
+             * call sites above jump here; the cleanup is the loop's own.
+             */
+        docs_oom:
+            ok = 0;
+            oom = 1;
+        }
         mdy_yaml_free(matter);
         mdy_yaml_free(pre);
         mdy_yaml_free(post);
@@ -607,8 +666,10 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         free(parsed);
 
         if (!ok) {
-            if (error && error_len)
-                snprintf(error, error_len, "document %zu could not be inserted", i);
+            if (error && error_len) {
+                if (oom) snprintf(error, error_len, "out of memory");
+                else snprintf(error, error_len, "document %zu could not be inserted", i);
+            }
             close_set(e);
             return -1;
         }
@@ -643,16 +704,17 @@ void mdy_engine_on_binary(mdy_engine *e,
     e->on_binary_ud = ud;
 }
 
+/*
+ * void, and called before a build starts: a context that quietly failed to
+ * bind is a document whose `$.site` is undefined, built and written as if
+ * that were what it said. See xalloc.h.
+ */
 void mdy_engine_set_context_json(mdy_engine *e, const char *name, const char *json, int strict) {
-    char **names = realloc(e->ctx_names, (e->ctx_count + 1) * sizeof *names);
-    if (names) e->ctx_names = names;
-    char **texts = realloc(e->ctx_json, (e->ctx_count + 1) * sizeof *texts);
-    if (texts) e->ctx_json = texts;
-    char *stricts = realloc(e->ctx_strict, e->ctx_count + 1);
-    if (stricts) e->ctx_strict = stricts;
-    if (!names || !texts || !stricts) return;
-    e->ctx_names[e->ctx_count] = strdup(name);
-    e->ctx_json[e->ctx_count] = strdup(json);
+    e->ctx_names  = mdy_xrealloc(e->ctx_names, (e->ctx_count + 1) * sizeof *e->ctx_names);
+    e->ctx_json   = mdy_xrealloc(e->ctx_json, (e->ctx_count + 1) * sizeof *e->ctx_json);
+    e->ctx_strict = mdy_xrealloc(e->ctx_strict, e->ctx_count + 1);
+    e->ctx_names[e->ctx_count] = mdy_xstrdup(name);
+    e->ctx_json[e->ctx_count] = mdy_xstrdup(json);
     e->ctx_strict[e->ctx_count] = (char)(strict ? 1 : 0);
     e->ctx_count++;
 }
@@ -832,12 +894,18 @@ static int by_document_index(const void *a, const void *b) {
  * VM, so a value made in one is meaningless in the other and the documents
  * have to be rebuilt on the caller's side.
  */
-static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query, int one) {
+static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query,
+                            int one, int *failed) {
     mdy_engine *e = vals;
+    if (failed) *failed = 0;
     bj_builder *b = bj_builder_new();
-    if (!b) return js_undefined();
+    if (!b) { if (failed) *failed = 1; return js_undefined(); }
     if (js_is_object(query) && !js_is_array(query)) {
-        if (js_to_binjson(e, b, query) != 0) { bj_builder_free(b); return js_undefined(); }
+        if (js_to_binjson(e, b, query) != 0) {
+            bj_builder_free(b);
+            if (failed) *failed = 1;
+            return js_undefined();
+        }
     } else {
         bj_begin_object(b);
         bj_end_object(b);
@@ -849,12 +917,28 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query, 
     size_t out_len = 0;
     int rc = nis_find(store->handle, filter, (uint32_t)flen, &out, &out_len);
     bj_builder_free(b);
-    if (rc != 0 || !out) return one ? js_null() : js_array_new(e->ctx, 0);
+    /*
+     * A query that could not RUN is not a query that matched nothing.
+     *
+     * nisaba reports an exhausted allocation properly, all the way out through
+     * dc_find's negative return -- and this threw that away and answered with
+     * an empty array. `$.find` then said the site had no posts, the index page
+     * was written without them, and the build reported success. It is the one
+     * place in this engine where a foreign error code was dropped rather than
+     * missing, which is why it survived so long.
+     */
+    if (rc != 0 || !out) {
+        if (failed) *failed = 1;
+        return one ? js_null() : js_array_new(e->ctx, 0);
+    }
 
     /* The result is a binjson ARRAY of documents. */
     JsValue hits = binjson_to_js(e, out, out_len, NULL);
     free(out);
-    if (!js_is_array(hits)) return one ? js_null() : js_array_new(e->ctx, 0);
+    if (!js_is_array(hits)) {
+        if (failed) *failed = 1;
+        return one ? js_null() : js_array_new(e->ctx, 0);
+    }
     js_gc_protect(e->vm, &hits);
 
     /* Back into document order. */
@@ -869,7 +953,9 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query, 
      */
     JsValue id_key = key(e->vm, "_id");
     js_gc_protect(e->vm, &id_key);
-    Placed *order = n ? malloc((size_t)n * sizeof *order) : NULL;
+    /* Placing the hits is not optional: `order` being NULL used to mean the
+     * loop did not run and `find` answered with nothing. See xalloc.h. */
+    Placed *order = n ? mdy_xmalloc((size_t)n * sizeof *order) : NULL;
     uint32_t placed = 0;
     for (uint32_t i = 0; order && i < n; i++) {
         size_t ulen = 0;
@@ -899,8 +985,8 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query, 
 }
 
 /* The ordinary case: one set, queried in its own VM. */
-JsValue run_query(mdy_engine *e, JsValue query, int one) {
-    return run_query_in(e, e, query, one);
+JsValue run_query(mdy_engine *e, JsValue query, int one, int *failed) {
+    return run_query_in(e, e, query, one, failed);
 }
 
 static bool find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
@@ -908,7 +994,13 @@ static bool find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
-    *result = run_query(e, argc > 0 ? args[0] : js_undefined(), 0);
+    int failed = 0;
+    *result = run_query(e, argc > 0 ? args[0] : js_undefined(), 0, &failed);
+    if (failed) {
+        const char *msg = "mdy-engine: $.find could not run the query";
+        *result = str(e->vm, msg, strlen(msg));
+        return false;
+    }
     return true;
 }
 
@@ -917,16 +1009,30 @@ static bool find_one_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
-    *result = run_query(e, argc > 0 ? args[0] : js_undefined(), 1);
+    int failed = 0;
+    *result = run_query(e, argc > 0 ? args[0] : js_undefined(), 1, &failed);
+    if (failed) {
+        const char *msg = "mdy-engine: $.findOne could not run the query";
+        *result = str(e->vm, msg, strlen(msg));
+        return false;
+    }
     return true;
 }
 
 /* `$.data(i)` — a document's own data, by index, without a query. */
 /* One document's record, as the guest sees it. */
+/*
+ * A document looked up by its OWN id, which `open_documents` inserted and
+ * `at < e->count` guarantees is there. So the empty object this returned on
+ * every failure was never "not found": it was `$.data` answering `{}` for a
+ * page whose data exists, and the page being written from it. There is no
+ * JsValue that means "could not read the store", and nine callers, so the
+ * failures that are allocations end the run. See xalloc.h.
+ */
 static JsValue document_record(mdy_engine *e, size_t at) {
     if (at >= e->count) return js_object_new(e->ctx);
     bj_builder *b = bj_builder_new();
-    if (!b) return js_object_new(e->ctx);
+    if (!b) mdy_fatal("out of memory looking a document up");
     bj_begin_object(b);
     bj_put_key(b, (const uint8_t *)"_id", 3);
     bj_put_oid(b, e->ids[at]);
@@ -937,11 +1043,12 @@ static JsValue document_record(mdy_engine *e, size_t at) {
     size_t out_len = 0;
     int rc = nis_find(e->handle, filter, (uint32_t)flen, &out, &out_len);
     bj_builder_free(b);
-    if (rc != 0 || !out) return js_object_new(e->ctx);
+    if (rc != 0 || !out) mdy_fatal("the document store could not return a document");
     JsValue hits = binjson_to_js(e, out, out_len, NULL);
     free(out);
-    return js_is_array(hits) && js_array_length(hits) > 0
-               ? js_array_get(hits, 0) : js_object_new(e->ctx);
+    if (!js_is_array(hits) || js_array_length(hits) == 0)
+        mdy_fatal("a document came back from the store unreadable");
+    return js_array_get(hits, 0);
 }
 
 /*
@@ -1141,9 +1248,11 @@ static bool import_render_native(JsContext *ctx, JsValue this_val, const JsValue
     }
     free(spec);
 
-    int at = resolve_target(set, argc > 1 ? args[1] : js_undefined());
+    int qfailed = 0;
+    int at = resolve_target(set, argc > 1 ? args[1] : js_undefined(), &qfailed);
     if (at < 0) {
-        const char *msg = "$.render: no such document in the imported package";
+        const char *msg = qfailed ? "$.render: the imported package could not run the query"
+                                  : "$.render: no such document in the imported package";
         *result = str(e->vm, msg, strlen(msg));
         return false;
     }
@@ -1196,7 +1305,13 @@ static bool import_query_native(JsContext *ctx, JsValue this_val, const JsValue 
      * documents — but the values must come back as the IMPORTER's, because
      * that is the VM the caller will read them in.
      */
-    JsValue hits = run_query_in(e, set, argc > 1 ? args[1] : js_undefined(), one);
+    int failed = 0;
+    JsValue hits = run_query_in(e, set, argc > 1 ? args[1] : js_undefined(), one, &failed);
+    if (failed) {
+        const char *msg = "mdy-engine: the imported set could not run the query";
+        *result = str(e->vm, msg, strlen(msg));
+        return false;
+    }
     *result = hits;
     return true;
 }
@@ -1562,11 +1677,11 @@ static int heading_depth(const mdy_node *n) {
 static void collect_headings(const mdy_node *n, Heading **out, size_t *count, size_t *cap) {
     int depth = heading_depth(n);
     if (depth) {
+        /* A heading dropped here is a contents list missing an entry, on a
+         * page that was written and reported built. See xalloc.h. */
         if (*count == *cap) {
             size_t want = *cap ? *cap * 2 : 16;
-            Heading *grown = realloc(*out, want * sizeof *grown);
-            if (!grown) return;
-            *out = grown;
+            *out = mdy_xrealloc(*out, want * sizeof **out);
             *cap = want;
         }
         char *text = NULL;
@@ -1576,8 +1691,10 @@ static void collect_headings(const mdy_node *n, Heading **out, size_t *count, si
         for (const mdy_prop *p = n->props; p; p = p->next)
             if (strcmp(p->name, "id") == 0 && p->type == MDY_PROP_STRING) id = p->as.string;
         (*out)[*count].depth = depth;
-        (*out)[*count].text = text ? text : calloc(1, 1);
-        (*out)[*count].id = id ? strdup(id) : NULL;
+        (*out)[*count].text = text ? text : mdy_xcalloc(1, 1);
+        /* NULL is a real value here -- it is a heading with no id, which the
+         * list leaves out -- so a failed copy could not be told from one. */
+        (*out)[*count].id = id ? mdy_xstrdup(id) : NULL;
         (*count)++;
     }
     for (const mdy_node *c = n->first; c; c = c->next)
@@ -2115,14 +2232,17 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
 
     /* Remembered on the token table, which the whole import graph shares — a
      * theme and the site that imported it must not each make their own copy. */
-    Resized *grown = realloc(t->resized, (t->resized_count + 1) * sizeof *grown);
-    if (grown) {
-        t->resized = grown;
-        t->resized[t->resized_count].path = strdup(out_path);
-        t->resized[t->resized_count].width = width;
-        t->resized[t->resized_count].height = height;
-        t->resized_count++;
-    }
+    /*
+     * `if (grown)` here meant a resize that was not remembered, which is a
+     * second copy written for the same picture -- and `strdup` was not checked
+     * at all, so the table could hold a NULL that every later comparison
+     * dereferenced. See xalloc.h.
+     */
+    t->resized = mdy_xrealloc(t->resized, (t->resized_count + 1) * sizeof *t->resized);
+    t->resized[t->resized_count].path = mdy_xstrdup(out_path);
+    t->resized[t->resized_count].width = width;
+    t->resized[t->resized_count].height = height;
+    t->resized_count++;
     free(path); free(ext); free(shown);
 
     JsValue r = js_object_new(e->ctx);
@@ -2658,8 +2778,7 @@ static char *wrap(mdy_engine *e, const char *statements) {
  */
 static char *flatten(JsValue out, size_t *out_len) {
     size_t cap = 4096, len = 0;
-    char *text = malloc(cap);
-    if (!text) return NULL;
+    char *text = mdy_xmalloc(cap);
     text[0] = '\0';
 
     uint32_t n = js_array_length(out);
@@ -2900,7 +3019,9 @@ static uint64_t canonical_hash_deep(mdy_engine *e, JsValue v, uint64_t h,
     }
     if (js_is_object(v)) {
         size_t n = js_object_size(v);
-        char **names = malloc((n ? n : 1) * sizeof *names);
+        /* A hash has no way to report a failure -- a wrong one is a memo hit
+         * on a different request. See xalloc.h. */
+        char **names = mdy_xmalloc((n ? n : 1) * sizeof *names);
         size_t m = 0;
         for (size_t i = 0; i < n; i++) { char *k = js_string_utf8(js_object_key_at(v, i)); if (k) names[m++] = k; }
         qsort(names, m, sizeof *names, key_cmp);
