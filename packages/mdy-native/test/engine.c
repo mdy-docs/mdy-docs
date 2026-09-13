@@ -518,6 +518,161 @@ static void markdown_render_checks(void) {
 }
 
 
+/* ---- GFM footnotes in a .md document ----------------------------------------
+ *
+ * md4c reported footnotes all along — MD_FLAG_FOOTNOTES is part of
+ * MD_DIALECT_GITHUB — and markdown.c handled none of the three callbacks, so
+ * every reference was dropped and every definition leaked out of the end of
+ * the document as a paragraph of its own. (B45.)
+ *
+ * Five shapes, each pinning a rule that is separately wrong if it is wrong:
+ * the markup itself; the `-2` on a second reference and the <sup> that goes
+ * with it; numbering by FIRST REFERENCE rather than by where the definitions
+ * were written; a reference inside a TABLE, which md4c counts twice because it
+ * parses a table's cells twice; and a definition with nothing in it, which
+ * takes no paragraph. Every expected string is what `node bin/mdy.js` writes
+ * for the same file.
+ */
+static void footnote_checks(void) {
+    printf("\n--- engine: GFM footnotes in a .md ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-fn", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "one.md",   "a[^1]\n\n[^1]: n\n");
+    write_file(root, "twice.md", "a[^1] b[^1]\n\n[^1]: n\n");
+    write_file(root, "order.md", "a[^z] b[^y]\n\n[^y]: why\n[^z]: zed\n");
+    write_file(root, "table.md", "| h |\n| --- |\n| c[^1] |\n\n[^1]: n\n");
+    write_file(root, "empty.md", "a[^1]\n\n[^1]:\n");
+    write_file(root, "main.mdy",
+        "% $.emit('one.html',   $.html($.render({ path: 'one.md' })))\n"
+        "% $.emit('twice.html', $.html($.render({ path: 'twice.md' })))\n"
+        "% $.emit('order.html', $.html($.render({ path: 'order.md' })))\n"
+        "% $.emit('table.html', $.html($.render({ path: 'table.md' })))\n"
+        "% $.emit('empty.html', $.html($.render({ path: 'empty.md' })))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of markdown\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    static const char ONE[] =
+        "<p>a<sup><a href=\"#user-content-fn-1\" id=\"user-content-fnref-1\""
+        " data-footnote-ref=\"\" aria-describedby=\"footnote-label\">1</a></sup></p>\n"
+        "<section data-footnotes=\"\" class=\"footnotes\">"
+        "<h2 class=\"sr-only\" id=\"footnote-label\">Footnotes</h2>\n"
+        "<ol>\n"
+        "<li id=\"user-content-fn-1\">\n"
+        "<p>n <a href=\"#user-content-fnref-1\" data-footnote-backref=\"\""
+        " aria-label=\"Back to reference 1\" class=\"data-footnote-backref\">\xe2\x86\xa9</a></p>\n"
+        "</li>\n"
+        "</ol>\n"
+        "</section>";
+    ok_("a reference becomes GitHub's <sup><a>, and the definitions a section after the body",
+        emitted("one.html") && strcmp(emitted("one.html"), ONE) == 0, emitted("one.html"));
+
+    /* The SECOND reference is `-2` and carries a <sup> saying so; the first
+     * carries none, which is not the same as "there is only one". */
+    static const char TWICE[] =
+        "<p>a<sup><a href=\"#user-content-fn-1\" id=\"user-content-fnref-1\""
+        " data-footnote-ref=\"\" aria-describedby=\"footnote-label\">1</a></sup>"
+        " b<sup><a href=\"#user-content-fn-1\" id=\"user-content-fnref-1-2\""
+        " data-footnote-ref=\"\" aria-describedby=\"footnote-label\">1</a></sup></p>\n"
+        "<section data-footnotes=\"\" class=\"footnotes\">"
+        "<h2 class=\"sr-only\" id=\"footnote-label\">Footnotes</h2>\n"
+        "<ol>\n"
+        "<li id=\"user-content-fn-1\">\n"
+        "<p>n <a href=\"#user-content-fnref-1\" data-footnote-backref=\"\""
+        " aria-label=\"Back to reference 1\" class=\"data-footnote-backref\">\xe2\x86\xa9</a>"
+        " <a href=\"#user-content-fnref-1-2\" data-footnote-backref=\"\""
+        " aria-label=\"Back to reference 1-2\" class=\"data-footnote-backref\">"
+        "\xe2\x86\xa9<sup>2</sup></a></p>\n"
+        "</li>\n"
+        "</ol>\n"
+        "</section>";
+    ok_("...a second reference to one note is -2, with a back-reference each way",
+        emitted("twice.html") && strcmp(emitted("twice.html"), TWICE) == 0, emitted("twice.html"));
+
+    /* `z` is referenced first, so it is note 1 and the section lists it
+     * first — though `y` is DEFINED first. */
+    static const char ORDER[] =
+        "<p>a<sup><a href=\"#user-content-fn-z\" id=\"user-content-fnref-z\""
+        " data-footnote-ref=\"\" aria-describedby=\"footnote-label\">1</a></sup>"
+        " b<sup><a href=\"#user-content-fn-y\" id=\"user-content-fnref-y\""
+        " data-footnote-ref=\"\" aria-describedby=\"footnote-label\">2</a></sup></p>\n"
+        "<section data-footnotes=\"\" class=\"footnotes\">"
+        "<h2 class=\"sr-only\" id=\"footnote-label\">Footnotes</h2>\n"
+        "<ol>\n"
+        "<li id=\"user-content-fn-z\">\n"
+        "<p>zed <a href=\"#user-content-fnref-z\" data-footnote-backref=\"\""
+        " aria-label=\"Back to reference 1\" class=\"data-footnote-backref\">\xe2\x86\xa9</a></p>\n"
+        "</li>\n"
+        "<li id=\"user-content-fn-y\">\n"
+        "<p>why <a href=\"#user-content-fnref-y\" data-footnote-backref=\"\""
+        " aria-label=\"Back to reference 2\" class=\"data-footnote-backref\">\xe2\x86\xa9</a></p>\n"
+        "</li>\n"
+        "</ol>\n"
+        "</section>";
+    ok_("...numbered and listed by FIRST REFERENCE, not by where they were defined",
+        emitted("order.html") && strcmp(emitted("order.html"), ORDER) == 0, emitted("order.html"));
+
+    /*
+     * One reference in a table cell, and md4c says two: it parses a cell's
+     * inline content twice and its own counter advances on both passes. Taking
+     * `ref_id` at its word gives `user-content-fnref-1-2` here, pointing at a
+     * reference that does not exist, and a second back-reference beside it.
+     */
+    ok_("...and a reference in a TABLE cell is still the first reference",
+        emitted("table.html") &&
+            strstr(emitted("table.html"), "id=\"user-content-fnref-1\"") != NULL &&
+            strstr(emitted("table.html"), "fnref-1-2") == NULL,
+        emitted("table.html"));
+
+    /* Nothing to append to, so no paragraph and no leading space either. */
+    static const char EMPTY[] =
+        "<p>a<sup><a href=\"#user-content-fn-1\" id=\"user-content-fnref-1\""
+        " data-footnote-ref=\"\" aria-describedby=\"footnote-label\">1</a></sup></p>\n"
+        "<section data-footnotes=\"\" class=\"footnotes\">"
+        "<h2 class=\"sr-only\" id=\"footnote-label\">Footnotes</h2>\n"
+        "<ol>\n"
+        "<li id=\"user-content-fn-1\">\n"
+        "<a href=\"#user-content-fnref-1\" data-footnote-backref=\"\""
+        " aria-label=\"Back to reference 1\" class=\"data-footnote-backref\">\xe2\x86\xa9</a>\n"
+        "</li>\n"
+        "</ol>\n"
+        "</section>";
+    ok_("...and a definition with nothing in it takes no paragraph",
+        emitted("empty.html") && strcmp(emitted("empty.html"), EMPTY) == 0, emitted("empty.html"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- an answer in document order --------------------------------------------
  *
  * A hit carries the `_id` it was inserted with, and the answer is put back
@@ -2957,6 +3112,7 @@ int main(void) {
     data_file_checks();
     blank_file_checks();
     markdown_render_checks();
+    footnote_checks();
     query_order_checks();
     reopen_checks();
     memo_key_checks();

@@ -3162,7 +3162,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     MemoEntry *hit = memo_find(memo_now, mkey);
     if (!hit) {
         hit = memo_find(memo_prev, mkey);
-        if (hit) { memo_put(memo_now, mkey, memo_copy(hit->doc), strdup(hit->text)); hit = memo_find(memo_now, mkey); }
+        if (hit) { memo_put(memo_now, mkey, memo_copy(hit->doc), mdy_xstrdup(hit->text)); hit = memo_find(memo_now, mkey); }
     }
     if (memo_debug()) {
         JsValue rec = document_record(e, index);
@@ -3174,7 +3174,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     }
     if (hit) {
         key_base36(mkey, e->last_render_key);
-        if (wrote) *wrote = strdup(hit->text);
+        if (wrote) *wrote = mdy_xstrdup(hit->text);
         return memo_copy(hit->doc);
     }
     /*
@@ -3237,7 +3237,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         out = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
         if (!out) { free(text); FAIL("the markdown document could not be read"); }
         /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
-        if (mkey) memo_put(memo_now, mkey, memo_copy(out), strdup(text ? text : ""));
+        if (mkey) memo_put(memo_now, mkey, memo_copy(out), mdy_xstrdup(text ? text : ""));
         if (memo_debug()) fprintf(stderr, "memo kept #%zu\n", index);
         if (wrote) *wrote = text; else free(text);
         /*

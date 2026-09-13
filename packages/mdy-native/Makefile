@@ -676,7 +676,15 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 # runs is worth more than a thorough one they do not.
 #
 #     fixture 1,808 / 6s      blog 14,298 / 1m      docs-site 17,747 / 5m30
-ALLOC_SITE ?= fixture
+#     fixture-awkward 2,300 / 4s
+#
+# fixture-awkward is the default because it is strictly more: 493 more
+# allocations than `fixture`, a `.md` front end `fixture` has none of, and
+# FASTER, since its documents are small where the fixture's entry does real
+# work. Sweeping it the first time found three unchecked strdups in
+# render_tree_out that `fixture` cannot reach -- it has no `.md` to render --
+# and an md4c allocation failure that md4c itself drops (B47).
+ALLOC_SITE ?= fixture-awkward
 
 check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
 	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \

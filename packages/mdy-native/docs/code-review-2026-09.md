@@ -66,7 +66,10 @@ what those checks do not reach.
 | B38 | ~~Low~~ **fixed** | `yaml.c` | `core_int` accumulates digits in a double: a 17-digit integer lands on the wrong one |
 | B43 | ~~Low~~ **fixed** | `check-alloc` | The sweep covered `mdy build` alone; document mode and the server held fourteen more |
 | B44 | ~~Low~~ **fixed** | `markdown.c` | A list item holding a block was not padded, and node's tree pads it |
-| B45 | Medium | `markdown.c` | GFM footnotes in a `.md` document are dropped: the reference vanishes, the definition leaks out |
+| B45 | ~~Medium~~ **fixed** | `markdown.c` | GFM footnotes in a `.md` document were dropped: the reference vanished, the definition leaked out |
+| B46 | Medium | `.md` raw HTML | Inline raw HTML in a paragraph is escaped rather than parsed; block-level is fine |
+| B47 | ~~Medium~~ **fixed** | `engine.c` / md4c | The sweep never saw a `.md`: three unchecked `strdup`s, and an allocation failure md4c discards |
+| B48 | Low | md4c | A link label beginning with `^` loses it: `[^a b]` renders `a b` where node renders `^a b` |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -405,8 +408,8 @@ for nothing.
 The original finding follows.
 
 Several walkers recurse per nesting level with no depth limit:
-`write_node` ([html.c:288–369](../src/parse/html.c#L288-L369)), `mdy_clone`
-([ast.c:132–194](../src/parse/ast.c#L132-L194)), `tree_to_js`, `js_to_tree`,
+`write_node` ([html.c:296–377](../src/parse/html.c#L296-L377)), `mdy_clone`
+([ast.c:141–203](../src/parse/ast.c#L141-L203)), `tree_to_js`, `js_to_tree`,
 `splice_tree`, `collect_headings` in engine.c, and `parse_flow` in yaml.c. The
 block parser builds the `<div>` chain for an indented line iteratively but then
 every downstream pass recurses over it.
@@ -416,7 +419,7 @@ every downstream pass recurses over it.
 - YAML `a: ` followed by 200,000 `[`: `yamlcat` exits 139.
 
 md4c's front end caps at 128 levels and refuses cleanly
-([markdown.c:22](../src/parse/markdown.c#L22)); the rest should do the same. For
+([markdown.c:23](../src/parse/markdown.c#L23)); the rest should do the same. For
 a build tool fed its own site this is low risk; for the live preview and the
 wasm `document()` API, which take arbitrary typed input, it is a crash.
 
@@ -537,7 +540,7 @@ does its arithmetic in `size_t` bounded by `n`, `webp_size` reads fixed
 offsets behind length guards, and `isobmff_size` walks with `i + 20 <= n`.
 
 Regression test: `bad_image_checks`
-([test/engine.c:1679](../test/engine.c#L1679)) — the wrapping offset in both
+([test/engine.c:1834](../test/engine.c#L1834)) — the wrapping offset in both
 byte orders, one just past the end, a directory count that would walk entries
 off it, a header cut short, an empty file, and a real PNG beside them so the
 reader is not merely refusing everything. Each broken one costs the file its
@@ -928,7 +931,7 @@ two adjacent text nodes: nothing upstream produces them and the serialiser
 cannot tell them apart, so this is invisible in the HTML and a real difference
 in the tree that `transform`, `visit` and the TOC walk are handed. `newline`
 appends to the text node already there rather than adding another
-([markdown.c:116](../src/parse/markdown.c#L116)). It can only arise where
+([markdown.c:132](../src/parse/markdown.c#L132)). It can only arise where
 inline content is followed by a block, which is a tight list item and nowhere
 else.
 
@@ -953,11 +956,7 @@ a text-then-block item, so `check-sites`, `check-golden` and the wasm golden
 all hold this now. Reverting the one line turns `nested.html` red at the first
 `<li>`.
 
-#### B45 — GFM footnotes in a `.md` document are dropped (Medium)
-
-Found by B44's differential, and checked through a whole build rather than the
-front end alone — which mattered, because the other two differences that
-harness reported were artefacts of it and this one was not.
+#### B45 — GFM footnotes in a `.md` document were dropped (Medium) — FIXED
 
 ```
 - a[^1]
@@ -966,57 +965,219 @@ harness reported were artefacts of it and this one was not.
 ```
 
 ```
-node   <ul>
-       <li>a<sup><a href="#user-content-fn-1" id="user-content-fnref-1"
-       data-footnote-ref="" aria-describedby="footnote-label">1</a></sup></li>
-       </ul>
-       <section data-footnotes="" class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
-       <ol>
-       <li id="user-content-fn-1">
-       <p>n <a href="#user-content-fnref-1" data-footnote-backref="" ...>&#8617;</a></p>
-       </li>
-       </ol>
-       </section>
-
-C      <ul>
-       <li>a</li>
-       </ul>n
+before  <li>a</li></ul>n
+after   <li>a<sup><a href="#user-content-fn-1" id="user-content-fnref-1"
+        data-footnote-ref="" aria-describedby="footnote-label">1</a></sup></li>
+        ...and the <section data-footnotes> below it   = node, byte for byte
 ```
 
-The reference is dropped and the definition's own text leaks out behind the
-list as if it were a paragraph.
+The reference vanished and the definition's text came out behind the list as
+if it were a paragraph.
 
-**md4c is already parsing them.** This file asks for `MD_DIALECT_GITHUB`
-([markdown.c:893](../src/parse/markdown.c#L893)), which includes
-`MD_FLAG_FOOTNOTES`, so md4c reports `MD_BLOCK_FOOTNOTE_DEF_SECTION`,
-`MD_BLOCK_FOOTNOTE_DEF` and `MD_SPAN_FOOTNOTE_REF` — and there is a handler for
-none of the three. They fall through the block and span switches, which is
-exactly why the definition arrives as loose text rather than not at all.
+**md4c had been parsing them all along.** This file asks for
+`MD_DIALECT_GITHUB` ([markdown.c:1214](../src/parse/markdown.c#L1214)), which
+includes `MD_FLAG_FOOTNOTES`, so md4c reports `MD_SPAN_FOOTNOTE_REF`,
+`MD_BLOCK_FOOTNOTE_DEF_SECTION` and `MD_BLOCK_FOOTNOTE_DEF` — and there was a
+handler for none of the three. They fell through both switches, which is why
+the definition arrived as loose text rather than not at all.
 
-**Most of the markup already exists, in the other front end.** `footnote.c`
-builds it for `.mdy` documents, which have had footnotes all along under mdy's
-own `[[^id]]` spelling: the reference
-([footnote.c:24](../src/parse/footnote.c#L24)) and the section with its
-back-references ([footnote.c:38](../src/parse/footnote.c#L38)). Checked
-against node on `- a[[^1]]` / `[[^1]]: n`, those two agree byte for byte —
-`user-content-fn-1`, `user-content-fnref-1`, the `sr-only` `footnote-label`
-heading, the `<ol>`, the backref — so what a handler needs is mostly here.
+It had also done the counting: a reference carries the number its note was
+given in order of FIRST REFERENCE, which is the order mdast-util-to-hast
+numbers them in too, and the definitions arrive in that same order and only
+for notes something referenced. So four of the five things that have to agree
+were agreed before a line was written. The fifth is the markup
+([markdown.c:998](../src/parse/markdown.c#L998) and
+[524](../src/parse/markdown.c#L524)).
 
-Mostly, not all: the back-reference's label differs between the two. mdy's
-says `aria-label="Back to content"` and GFM's says
-`aria-label="Back to reference 1"`, numbered. So this cannot simply call
-`mdy_footnote_section` and stop.
+**Not `footnote.c`, which builds this already.** The shape is right — it is
+where `.mdy` documents' footnotes come from, under mdy's own `[[^id]]`
+spelling, and checked against node on `- a[[^1]]` it agrees byte for byte down
+to `user-content-fn-1` and the `sr-only` heading. What differs is one string:
+GFM's back-reference says `aria-label="Back to reference 2-3"`, numbered, where
+mdy's says `Back to content`. One attribute, so calling it was not an option;
+the ids and the section are built again here beside it.
 
-That, and the rest of what has to match mdast-util-gfm-footnote byte for byte
-— the numbering, the order the section lists definitions in, whether a
-definition nobody references still appears, where the section is placed — is
-why it is filed rather than folded into B44, whose rule it has nothing to do
-with.
+**Three things the reference does that are not guessable**, and each is a test
+of its own:
 
-`check-sites` cannot see it: no site here puts a footnote in a `.md`. The
-confusing part for whoever hits it is that `.mdy` footnotes are fine, and that
-`[^1]` in a `.mdy` file is fine too — both engines leave it as literal text
-there, and agree. Only `.md` diverges.
+- **The number is the note's, not the label's.** `[^note]` renders `1`. The
+  `-2` that distinguishes a second reference to one note goes on the `id`, not
+  the number.
+- **The first back-reference never carries a `<sup>`**, even when a note has
+  five. The rule is the index of the reference, not whether the note has more
+  than one.
+- **A definition with nothing in it takes no paragraph.** The back-references
+  are appended to a tail `<p>`, so with no tail they go straight onto the item
+  and the space that would have separated them goes too. The paragraph is
+  built here either way and placed on the way out only if it earned it
+  ([markdown.c:853](../src/parse/markdown.c#L853)) — whether it earned it is
+  not known until the content has been seen.
+
+**Two things had to be true elsewhere before any of it worked.**
+
+`aria-describedby` is a LIST. hast's schema calls it space-separated, so what
+rehype-raw's parser hands back for `aria-describedby="footnote-label"` is
+`["footnote-label"]` and not the string. `className` had been the only
+list-valued property and had a setter of its own; it is one setter with a name
+argument now ([ast.c:107](../src/parse/ast.c#L107)). The three places that
+READ a list — the HTML writer, the JSON writer and the bridge into the VM —
+were already generic.
+
+And `identify_headings` gave every heading an id, where mdy-docs' gives every
+heading "an id it does not already have"
+([markdown.c:1160](../src/parse/markdown.c#L1160)). Until footnotes there was
+nothing to overwrite — a heading written as raw HTML is still a `raw` node at
+that point, so the only headings the pass met were ones it had just named — and
+the section's `h2` is the first that arrives with an id of its own. It was
+being given the slug of the word "Footnotes" instead, which every
+back-reference's `aria-describedby` then pointed at nothing.
+
+**md4c counts a reference in a table cell twice**, because it parses a cell's
+inline content twice and its own counter advances on both passes. A single
+`[^1]` in a cell arrives carrying `ref_id` 2 and its definition carrying
+`ref_count` 2, which would give the anchor an id nothing points at and the
+definition a second back-reference to a reference that does not exist. The
+CALLBACK fires once, so the notes are counted here instead
+([markdown.c:489](../src/parse/markdown.c#L489)) — which is also just what the
+reference does, `footnoteOrder` being the order of first reference and
+`footnoteCounts` how many times each was named.
+
+**Measured on the footnote spec**, which `make check-markdown` runs as
+`ext-footnotes` over md4c's own extension suite: **8/26 → 25/26**. Over the
+whole 1,772-document corpus, 984 → 1,002 trees identical, and **no other
+category moved by one** — commonmark 544/652, tables 10/12, tasklists 5/5,
+before and after. Three hand-built differentials over 45 more shapes go
+1/15 → 14/15, 2/24 → 23/24 and 0/6 → 2/6 — the last being the definitions
+holding BLOCK content, which is the limit below.
+
+`fixture-awkward` carries a `.md` with all of it
+([main.mdy:49](../fixture-awkward/main.mdy#L49)) — numbering by first
+reference, a repeat's `-2`, a reference in a table cell, a definition with
+nothing in it — so `check-sites`, `check-golden` and the wasm golden hold it on
+every platform CI builds for. `footnote_checks`
+([test/engine.c:536](../test/engine.c#L536)) is five assertions against what
+`node bin/mdy.js` writes; reverting any one of the four decisions above fails
+its own assertion and no other.
+
+**What still differs, and why it is md4c rather than this.** A definition's
+body is block content in mdast and INLINE TEXT to md4c: `[^1]: > quoted` gives
+the definition the literal characters `> quoted`, a fenced block or a list
+inside one is flattened the same way, and a second paragraph is pushed out of
+the definition altogether. Nothing in the callback stream can recover that —
+md4c hands over the text, having already decided it is not a block. That is the
+one remaining `ext-footnotes` failure too: on `[^1]:` followed by an unindented
+line, md4c continues the definition where micromark ends it.
+
+Two things the same differential turned up that are NOT this and are filed on
+their own: a label with a space in it loses its `^` (**B48**), and inline raw
+HTML in a `.md` paragraph is escaped rather than parsed (**B46**) — which has
+nothing to do with footnotes and is as old as the front end.
+
+#### B46 — inline raw HTML in a `.md` paragraph is escaped, not parsed (Medium)
+
+Found by B45's differential and confirmed at HEAD, where it has been all
+along: it has nothing to do with footnotes, and it is bigger than the finding
+that turned it up.
+
+```
+a <b>x</b>
+```
+
+```
+node   <p>a <b>x</b></p>
+C      <p>a &#x3C;b>x&#x3C;/b></p>
+```
+
+**Block-level raw HTML is fine.** `<div>block</div>` on its own, a `<div>`
+alone in a list item, a whole `<p>…</p>` — all three are identical to node
+through a real build. What is not handled is raw HTML *inside* a paragraph's
+inline content, which is where CommonMark's raw-HTML spans live and what
+`rehypeRaw` re-parses along with everything else.
+
+md4c reports it correctly: `a <b>x</b>` gives `MD_TEXT_HTML` for `<b>` and
+`</b>` exactly as `<div>` does at block level. So this is the emulation of
+rehype-raw on this side, not the parse.
+
+Nothing sees it. `check-html` compares a serialiser against a tree, so a tree
+that is wrong in the same way twice is identical to itself; `check-sites` has
+no `.md` with an inline tag in it; `check-markdown` needs the corpus and is the
+one that DOES see it — some part of `commonmark 544/652` is this.
+
+Not fixed with B45 because it is a different mechanism in a different place —
+what turns `raw` nodes into elements, rather than what markdown.c emits — and
+because it is worth knowing how much of the corpus gap it accounts for before
+touching it.
+
+#### B47 — sweeping the awkward fixture: three unchecked `strdup`s, and an allocation failure md4c drops (Medium) — FIXED
+
+`check-alloc` has swept `fixture` since B24 filed it. `fixture` has no `.md`
+document, so the whole markdown front end and every path in `render_tree_out`
+that serves one has never been under the shim. Pointing the sweep at
+`fixture-awkward` — which has five — broke the invariant four times over on the
+first run.
+
+**Three `strdup`s in `render_tree_out`** that nothing checked
+([engine.c:3165](../src/engine.c#L3165),
+[3177](../src/engine.c#L3177), [3240](../src/engine.c#L3240)). All three carry
+a document's TEXT, and the policy in xalloc.h decides them the same way: a
+NULL here does not stop anything, it becomes a `$.text` that answers nothing
+and a memo entry that serves nothing, which is different output from a run that
+said it succeeded. So they cannot be NULL. One of them segfaulted outright,
+which is the same defect wearing a louder coat.
+
+**And md4c dropping one of its own.** md4c reports a failed allocation up its
+call chain from seven of the nine places that call `md_end_current_block` and
+DISCARDS it at two — one of them the last line of `md_parse` itself. That is
+where a document's footnote definitions are registered, so a refused allocation
+there leaves `md_parse` answering 0 with a tree that has no footnotes in it:
+the references come out as literal `[^1]`, the definitions as prose, and the
+build says it succeeded.
+
+md4c is vendored at a pinned upstream commit and is not patched here, so this
+listens instead ([markdown.c:1194](../src/parse/markdown.c#L1194)):
+`debug_log` is a documented `MD_PARSER` member, and fifteen of md4c's
+twenty-nine messages through it are `malloc() failed.` or `realloc() failed.`.
+The other fourteen are a parse deciding something — a table too sparse to be a
+table — or one of the callbacks here having already returned -1.
+
+**`fixture-awkward` is the sweep's default now**
+([Makefile:687](../Makefile#L687)), because it is strictly more: 2,300
+allocations against 1,808, a front end the other has none of, and FASTER
+(3.5s against 5.4s), since its documents are small where the fixture's entry
+does real work. `ALLOC_SITE=fixture` still runs, and still passes.
+
+Control: reverting the three `strdup`s brings back ordinal 1400's segfault and
+1467's wrong site; removing `debug_log` brings back 1948–1952, five runs that
+report success and write a document with its footnotes missing.
+
+#### B48 — a link label beginning with `^` loses it (Low)
+
+The last shape in B45's differential, and the only one of seven in its family
+that differs.
+
+```
+a[^a b]
+
+[^a b]: n
+```
+
+```
+node   <p>a<a href="n">^a b</a></p>
+C      <p>a<a href="n">a b</a></p>
+```
+
+A label with a space in it is not a footnote to either engine — both read the
+pair as an ordinary link reference and its definition. What differs is the
+link's TEXT: md4c has already eaten the `^` deciding the label was not a
+footnote's, and does not put it back.
+
+`[^x]` without a space, `[^a b]` with no definition, `[x]`, `[\^x]` and a bare
+`^` all agree, which is what makes it this narrow.
+
+Not fixable from here: md4c hands over the link's text and its destination,
+never the label it matched, so the missing character is not in anything this
+side can see. It would be a change to a vendored parser pinned at an upstream
+commit, for a shape a document is unlikely to contain on purpose.
 
 #### B43 — the allocation sweep covered one command (Low) — FIXED
 
@@ -1303,13 +1464,13 @@ details decide whether this is that function or a guess at it:
 - **An already-encoded `%XX` is left alone.** Without it `%C3%A9` in the source
   becomes `%25C3%25A9`, which is the failure the entry warned about.
 - **`XX` is two ASCII ALPHANUMERICS, not two hex digits** — micromark's own
-  test is `asciiAlphanumeric` ([markdown.c:284](../src/parse/markdown.c#L284)),
+  test is `asciiAlphanumeric` ([markdown.c:314](../src/parse/markdown.c#L314)),
   so `%zz` is passed through as well. That is not obviously deliberate on their
   side. It is what the reference does, and this has to agree with the reference
   rather than with the RFC.
 
 The safe set is micromark's `/[!#$&-;=?-Z_a-z~]/`, written out longhand
-([markdown.c:276](../src/parse/markdown.c#L276)).
+([markdown.c:306](../src/parse/markdown.c#L306)).
 
 **One thing the port cannot copy directly.** node walks UTF-16 code units and
 has a branch for surrogates; C has UTF-8 bytes and no surrogates to find. The
@@ -1351,7 +1512,7 @@ $.markdown('![i](<>)')    before  <p><img alt="i"></p>
 is a link to the current document, `normalizeUri('')` is `''`, and
 mdast-util-to-hast sets it. The early return now depends on whether the
 attribute is a destination, not on its name
-([markdown.c:359](../src/parse/markdown.c#L359)). It showed for an inline
+([markdown.c:389](../src/parse/markdown.c#L389)). It showed for an inline
 link, an inline image and a reference definition alike.
 
 #### B41 — the allocation sweep did not reach everything it should (Low) — FIXED
@@ -1876,7 +2037,7 @@ reach it.
   through the table `entity()` already uses and `MD_TEXT_NULLCHAR` to U+FFFD;
   an entity the table does not have goes through as typed, which is what
   CommonMark says about `&nope;`. `entity_utf8` and `utf8_of`
-  ([182](../src/parse/markdown.c#L182)) are the numeric and named halves of
+  ([212](../src/parse/markdown.c#L212)) are the numeric and named halves of
   `entity()` without a `Build` to write into, which is what an attribute needs.
 
   **It reproduces through `$.markdown`, not through a `.md` file** — a `.md`
@@ -2265,7 +2426,7 @@ it is FIXED at four times the input, which is B20's fix, and the comment above
   escaper ([engine_walk.c:175](../src/engine_walk.c#L175)), which `put_quoted` from
   B8's fix also uses — so everything this file emits as YAML is escaped by the
   same code. Regression test: `tag_checks`
-  ([test/engine.c:940](../test/engine.c#L940)), a quote, a backslash and a tab
+  ([test/engine.c:1915](../test/engine.c#L1915)), a quote, a backslash and a tab
   in one document's tags, byte-identical to node.
 - ~~`ref_id` called twice for the same string — two arena copies per
   footnote.~~ **FOLDED.** Called once, into a local.
@@ -2367,14 +2528,14 @@ than a live one — every caller uses the result before anything can call the
 function again — and are left as they are.
 
 **Long functions with several exits.** `render_tree_out`
-([3158–3468](../src/engine.c#L3158-L3468), ~300 lines) manages seven GC roots
+([3154–3467](../src/engine.c#L3154-L3467), ~300 lines) manages seven GC roots
 and a `FAIL` macro that jumps to `done:`. It had three early returns that
 *bypassed* `done:` — one was B3, another B12, the third silently cleared the
 enclosing render's `taint` — and it has one exit now. Length is what let three
 of them accumulate unnoticed, and the length is still there. `open_dir_inner`
-([716–1084](../src/engine_walk.c#L716-L1084)) builds the synthetic source that
+([709–1101](../src/engine_walk.c#L709-L1101)) builds the synthetic source that
 caused B1 and B2; what is left of it is B8. `mdy_parse_block`
-([block.c:1267–1779](../src/parse/block.c#L1267-L1779), 480 lines) inlines the
+([block.c:1340–1863](../src/parse/block.c#L1340-L1863), 524 lines) inlines the
 entire list grammar. `resize_in` defines a `RESIZE_FAIL` macro and then uses
 it for two of its eight failures.
 
@@ -2560,7 +2721,7 @@ pads a `<table>`, its row groups and its rows with newlines the way it pads a
 `rehypeRaw` re-parses the tree through an HTML parser, and an HTML parser may
 not keep character data inside a table — it **foster-parents** it out, in
 document order, to immediately before the table. `foster_parent_table`
-([markdown.c:641](../src/parse/markdown.c#L641)) does that now, and coalesces
+([markdown.c:814](../src/parse/markdown.c#L814)) does that now, and coalesces
 with the text already there, because an HTML parser produces one run of
 character data rather than two adjacent ones.
 
@@ -2696,17 +2857,27 @@ date.
 
 **What is left, in the order it is worth doing.**
 
-1. **B45**, the only open finding: GFM footnotes in a `.md` document are
-   dropped — md4c reports them, `markdown.c` has no handler, and
-   `footnote.c` already builds the markup node expects for the other front
-   end. Three callbacks onto machinery that is here, plus getting the
-   numbering and the section's placement to match byte for byte.
+1. **B46**, inline raw HTML in a `.md` paragraph, which is escaped where node
+   parses it. The largest open finding and the least explored: block-level raw
+   HTML is right, md4c reports the inline kind correctly, and what is wrong is
+   this side's emulation of rehype-raw. Worth measuring against
+   `check-markdown`'s `commonmark 544/652` first — some unknown part of that
+   gap is this one bug, and knowing how much decides whether it is a morning
+   or a week.
 2. ~~**The public API that `test/engine.c` never calls.**~~ **Done** —
    `api_checks`, 23 assertions over all twelve, with the knobs tested as
    contrasts so that an engine ignoring one would fail rather than pass. See
-   §4. What is left of the testing gap is the differential harnesses, which
-   need a corpus outside the repository and so cannot run in CI; that is a
-   question about where the corpus lives, not about writing a test.
+   §4.
+
+   What is left of that testing gap is the differential harnesses, which need
+   a corpus outside the repository and so cannot run in CI — and B45 is the
+   argument for settling that. `make corpus && make check-markdown` is what
+   measured it (`ext-footnotes` 8/26 → 25/26, no other category moving), and
+   it is the only check in the repository that would have SEEN the bug:
+   `check-html` compares a serialiser against a tree, and `check-sites` has
+   only the documents somebody happened to write. B46 is open for the same
+   reason. It is still a question about where the corpus lives rather than
+   about writing a test, but it is now a question with two findings attached.
 3. **`struct mdy_engine`'s 56 fields** ([engine_internal.h:97](../src/engine_internal.h#L97)),
    still 56. It is grouped and commented — the VM, the open set, composition,
    the callbacks, the knobs, identity, the walk — so what is wanted is those

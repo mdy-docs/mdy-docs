@@ -42,6 +42,12 @@ title: The awkward cases
 % // wrap(loose) every other block parent takes.
 % $.emit("nested.html", $.render({ path: "pages/nested.md" }))
 %
+% // B45: GFM footnotes in a .md, which md4c reported all along and this
+% // handled not at all — the reference vanished and the definition leaked out
+% // as prose. Numbering by first reference, a repeat's -2, a reference in a
+% // table cell (md4c counts those twice), and a definition with nothing in it.
+% $.emit("notes.html", $.render({ path: "pages/notes.md" }))
+%
 % // B11: a .tif whose header points its IFD past the end of the file. It is a
 % // real file and still gets a record; what it must not get is width/height
 % // read from off the end of it.

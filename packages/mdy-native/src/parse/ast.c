@@ -94,17 +94,23 @@ void mdy_set_bool(mdy_doc *doc, mdy_node *el, const char *name, int value) {
 }
 
 /*
- * `className` is the one list-valued property hast produces here, and it is
- * appended to rather than replaced — an element can pick up classes from more
- * than one rule.
+ * A space-separated property is a LIST in hast, and it is appended to rather
+ * than replaced — an element can pick up classes from more than one rule.
+ *
+ * `className` was the only one until a `.md` footnote reference needed
+ * `ariaDescribedBy`, which hast's schema also calls space-separated: what
+ * rehype-raw's parser hands back for `aria-describedby="footnote-label"` is
+ * `["footnote-label"]` and not the string. The three places that read a list
+ * — the HTML writer, the JSON writer and the bridge into the VM — were
+ * already generic over the name; only this was not.
  */
-void mdy_add_class(mdy_doc *doc, mdy_node *el, const char *class_name) {
+void mdy_add_token(mdy_doc *doc, mdy_node *el, const char *name, const char *token) {
     mdy_prop *p = NULL;
     for (mdy_prop *q = el->props; q; q = q->next) {
-        if (strcmp(q->name, "className") == 0) { p = q; break; }
+        if (strcmp(q->name, name) == 0) { p = q; break; }
     }
     if (!p) {
-        p = new_prop(doc, el, "className");
+        p = new_prop(doc, el, name);
         if (!p) return;
         p->type = MDY_PROP_LIST;
         p->list = NULL;
@@ -113,9 +119,13 @@ void mdy_add_class(mdy_doc *doc, mdy_node *el, const char *class_name) {
     const char **grown = mdy_alloc(&doc->arena, sizeof(char *) * (p->list_len + 1));
     if (!grown) return;
     for (size_t i = 0; i < p->list_len; i++) grown[i] = p->list[i];
-    grown[p->list_len] = mdy_strdup_n(&doc->arena, class_name, strlen(class_name));
+    grown[p->list_len] = mdy_strdup_n(&doc->arena, token, strlen(token));
     p->list = grown;
     p->list_len++;
+}
+
+void mdy_add_class(mdy_doc *doc, mdy_node *el, const char *class_name) {
+    mdy_add_token(doc, el, "className", class_name);
 }
 
 /*

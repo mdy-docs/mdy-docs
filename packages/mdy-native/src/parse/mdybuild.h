@@ -47,8 +47,12 @@ void mdy_set_bool(mdy_doc *doc, mdy_node *el, const char *name, int value);
  */
 mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node);
 
-/* `className` is the one list-valued property, and it is APPENDED to — an
- * element can pick up classes from more than one rule. */
+/*
+ * A space-separated property is a LIST, and it is APPENDED to — an element can
+ * pick up classes from more than one rule. `className` is the common one and
+ * has its own name; `ariaDescribedBy` on a footnote reference is the other.
+ */
+void mdy_add_token(mdy_doc *doc, mdy_node *el, const char *name, const char *token);
 void mdy_add_class(mdy_doc *doc, mdy_node *el, const char *class_name);
 
 #ifdef __cplusplus

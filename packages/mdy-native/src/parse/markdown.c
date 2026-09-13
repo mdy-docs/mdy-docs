@@ -11,6 +11,7 @@
  * are remark-rehype's choices, and a port that reasons them out gets them
  * subtly wrong.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -57,6 +58,21 @@ typedef struct {
      */
     char *inline_text;
     size_t inline_len, inline_cap;
+    /*
+     * The notes, in the order they were first referenced, and how many times
+     * each has been. See note_entry for why this is counted here rather than
+     * read off md4c's detail structs.
+     */
+    struct { const char *slug; unsigned refs; } *notes;
+    size_t note_count, note_cap;
+    /*
+     * The footnote definition being built. Its back-references are written on
+     * the way OUT, and everything they need is known on the way in;
+     * definitions do not nest, so one slot is the whole of it.
+     */
+    const char *note_slug_now;
+    mdy_node *note_item;
+    unsigned note_index, note_refs;
     int failed;
 } Build;
 
@@ -413,6 +429,90 @@ static void set_attribute(Build *b, mdy_node *el, const char *name,
 
 /* ---- blocks ---------------------------------------------------------------- */
 
+/* ---- footnotes --------------------------------------------------------------
+ *
+ * md4c has already done the counting. MD_FLAG_FOOTNOTES is part of
+ * MD_DIALECT_GITHUB, so `[^label]` arrives as MD_SPAN_FOOTNOTE_REF carrying
+ * the number the note was given (`id`, assigned in order of FIRST REFERENCE,
+ * which is the order mdast-util-to-hast numbers them in too) and which
+ * reference to that note this is (`ref_id`). The definitions arrive at the end
+ * of the document inside MD_BLOCK_FOOTNOTE_DEF_SECTION, in the same order, and
+ * only the ones something referenced — which is also what the reference does.
+ * So four of the five things that have to agree are agreed already; the fifth
+ * is the markup, and it is here.
+ *
+ * The ids are GitHub's, the same ones footnote.c writes for a `.mdy` document.
+ * What differs, and why this does not call that, is the back-reference's
+ * label: GFM numbers it ("Back to reference 2-3") where mdy's says "Back to
+ * content".
+ */
+
+/*
+ * `normalizeUri(identifier.toLowerCase())`, which is what both the reference
+ * and the definition are keyed on. md4c has already collapsed and trimmed the
+ * label's whitespace, which is the rest of micromark's normalizeIdentifier.
+ *
+ * ASCII lowercase, where JavaScript's toLowerCase is Unicode-aware. See the
+ * review's B45: md4c pairs a reference with its definition by its own rules,
+ * and for a label needing more than ASCII folding the two parsers stop
+ * agreeing about that well before they get here.
+ */
+static const char *note_slug(Build *b, const MD_ATTRIBUTE *label) {
+    size_t len = (label && label->text) ? label->size : 0;
+    char *lower = mdy_alloc(&b->doc->arena, len + 1);
+    for (size_t i = 0; i < len; i++) lower[i] = mdy_lower_ascii(label->text[i]);
+    lower[len] = '\0';
+
+    char *out = mdy_alloc(&b->doc->arena, len * 3 + 1);
+    size_t n = normalize_uri(lower, len, out);
+    out[n] = '\0';
+    return out;
+}
+
+/*
+ * The note's place in the document, made on first sight. Its position is the
+ * note's NUMBER, because that is the order of first reference — which is what
+ * mdast-util-to-hast's `footnoteOrder` is — and `refs` is how many times it
+ * has been named, which is its `footnoteCounts`.
+ *
+ * Counted here rather than read off md4c's `id` and `ref_id`, because md4c
+ * parses a table's cells TWICE and its own counter advances on both passes: a
+ * single `[^1]` in a cell arrives carrying ref_id 2, and its definition
+ * carrying ref_count 2, so the anchor would get an id nothing points at and
+ * the definition would grow a second back-reference to a reference that does
+ * not exist. The callback itself fires once, so counting callbacks is right
+ * where trusting the numbers on them is not.
+ *
+ * Keyed on the slug rather than the label, because that is the identity the
+ * ids are built from: two labels differing only in case are one note.
+ */
+static int note_entry(Build *b, const char *slug) {
+    for (size_t i = 0; i < b->note_count; i++)
+        if (strcmp(b->notes[i].slug, slug) == 0) return (int)i;
+
+    if (b->note_count == b->note_cap) {
+        size_t cap = b->note_cap ? b->note_cap * 2 : 8;
+        void *grown = realloc(b->notes, cap * sizeof *b->notes);
+        if (!grown) { b->failed = 1; return -1; }
+        b->notes = grown;
+        b->note_cap = cap;
+    }
+    b->notes[b->note_count].slug = slug;
+    b->notes[b->note_count].refs = 0;
+    return (int)b->note_count++;
+}
+
+/* `user-content-fn-<slug>` or `user-content-fnref-<slug>`, with `-n` on the
+ * second and later references, and `lead` for the `#` an href wants. */
+static const char *note_id(Build *b, const char *lead, const char *kind,
+                           const char *slug, unsigned n) {
+    size_t need = strlen(lead) + sizeof "user-content-" + strlen(kind) + strlen(slug) + 24;
+    char *out = mdy_alloc(&b->doc->arena, need);
+    if (n > 1) snprintf(out, need, "%suser-content-%s%s-%u", lead, kind, slug, n);
+    else       snprintf(out, need, "%suser-content-%s%s", lead, kind, slug);
+    return out;
+}
+
 static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
     Build *b = ud;
     if (b->failed) return -1;
@@ -420,6 +520,79 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
     switch (type) {
         case MD_BLOCK_DOC:
             return 0;
+
+        case MD_BLOCK_FOOTNOTE_DEF_SECTION: {
+            before_block(b);
+            mdy_node *section = mdy_new_element(b->doc, "section", 7);
+            /*
+             * An empty STRING, not a bool. `dataFootnotes` leaves
+             * mdast-util-to-hast as `true`, but the `.md` pipeline puts the
+             * tree through rehype-raw, and a data-* attribute has no schema
+             * entry saying it is boolean: it serialises as `data-footnotes=""`
+             * and parses back as `""`. A task box's `checked`, which the
+             * schema DOES know, survives as `true` — which is why those two
+             * lines a few cases below look different from these.
+             */
+            mdy_set_string(b->doc, section, "dataFootnotes", "", 0);
+            mdy_add_class(b->doc, section, "footnotes");
+            append(b, section);
+            push(b, section, 0);
+
+            /*
+             * `h2, "\n", ol, "\n"` — written out rather than wrapped, because
+             * it is neither of wrap()'s two shapes: the heading takes no
+             * newline before it, as in a tight parent, and the list takes one
+             * after it, as in a loose one.
+             */
+            before_block(b);
+            mdy_node *h2 = mdy_new_element(b->doc, "h2", 2);
+            mdy_add_class(b->doc, h2, "sr-only");
+            mdy_set_string(b->doc, h2, "id", "footnote-label", 14);
+            mdy_append(h2, mdy_new_text(b->doc, "Footnotes", 9));
+            append(b, h2);
+
+            before_block(b);
+            mdy_node *ol = mdy_new_element(b->doc, "ol", 2);
+            append(b, ol);
+            push(b, ol, 1);
+            return 0;
+        }
+
+        case MD_BLOCK_FOOTNOTE_DEF: {
+            const MD_BLOCK_FOOTNOTE_DEF_DETAIL *d = detail;
+            b->note_slug_now = note_slug(b, &d->label);
+            int at = note_entry(b, b->note_slug_now);
+            if (at < 0) return -1;
+            b->note_index = (unsigned)at + 1;
+            b->note_refs = b->notes[at].refs;
+
+            before_block(b);
+            mdy_node *li = mdy_new_element(b->doc, "li", 2);
+            const char *id = note_id(b, "", "fn-", b->note_slug_now, 1);
+            mdy_set_string(b->doc, li, "id", id, strlen(id));
+            append(b, li);
+            push(b, li, 1);
+
+            /*
+             * The paragraph is OURS. A definition's content is block content
+             * in mdast and md4c reports it as inline text with no paragraph
+             * around it, so the one the reference gives every definition is
+             * supplied here.
+             *
+             * Pushed but NOT placed, because a definition with nothing in it
+             * gets no paragraph at all — `[^1]:` is `<li>` holding the
+             * back-reference and nothing else, since the reference appends
+             * them to a tail <p> only when there is one. Whether there is one
+             * is not known until the content has been seen, so the newline
+             * this item is due goes in now (it is due either way) and the
+             * paragraph is placed on the way out if it earned it.
+             */
+            before_block(b);
+            b->note_item = li;
+            mdy_node *p = mdy_new_element(b->doc, "p", 1);
+            push(b, p, 0);
+            return 0;
+        }
 
         case MD_BLOCK_P: {
             before_block(b);
@@ -677,6 +850,73 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
         case MD_BLOCK_DOC:
             return 0;
 
+        case MD_BLOCK_FOOTNOTE_DEF: {
+            /*
+             * The back-references go INSIDE the definition's last paragraph,
+             * after a space — mdast-util-to-hast's footer appends them to a
+             * tail <p> rather than after it, and md4c's flat content means
+             * that paragraph is the one opened above.
+             *
+             * Unless there is none. A definition with nothing in it has no
+             * tail to append to, so the reference pushes the back-references
+             * onto the item itself and the leading space goes with the
+             * paragraph it would have followed.
+             */
+            mdy_node *para = top(b);
+            int placed = para && (para->first || b->inline_len > 0);
+            if (placed) mdy_append(b->note_item, para);
+            else pop(b);      /* the paragraph nothing went into */
+
+            /*
+             * A space before EACH, which is two rules on the reference's side
+             * that come to the same thing here: the first is appended to the
+             * text already there and the rest are text nodes between the
+             * anchors. Text is held until something else is appended, so both
+             * fall out of one text_out.
+             */
+            for (unsigned n = 1; n <= b->note_refs; n++) {
+                if (placed || n > 1) text_out(b, " ", 1);
+                mdy_node *back = mdy_new_element(b->doc, "a", 1);
+                const char *href = note_id(b, "#", "fnref-", b->note_slug_now, n);
+                mdy_set_string(b->doc, back, "href", href, strlen(href));
+                mdy_set_string(b->doc, back, "dataFootnoteBackref", "", 0);
+
+                /* "Back to reference <note>" — and `-n` for the second and
+                 * later references to the same note, which is the numbering
+                 * mdy's own footnotes do not have. */
+                char label[64];
+                int ln = (n > 1)
+                    ? snprintf(label, sizeof label, "Back to reference %u-%u", b->note_index, n)
+                    : snprintf(label, sizeof label, "Back to reference %u", b->note_index);
+                if (ln < 0) { b->failed = 1; return -1; }
+                mdy_set_string(b->doc, back, "ariaLabel", label, (size_t)ln);
+                mdy_add_class(b->doc, back, "data-footnote-backref");
+
+                mdy_append(back, mdy_new_text(b->doc, "↩", 3));
+                /* The arrow alone on the FIRST; a <sup> saying which on the
+                 * rest. Not "more than one reference exists" — the first one
+                 * never carries a number even when there are five. */
+                if (n > 1) {
+                    mdy_node *sup = mdy_new_element(b->doc, "sup", 3);
+                    char num[16];
+                    int nn = snprintf(num, sizeof num, "%u", n);
+                    if (nn < 0) { b->failed = 1; return -1; }
+                    mdy_append(sup, mdy_new_text(b->doc, num, (size_t)nn));
+                    mdy_append(back, sup);
+                }
+                append(b, back);
+            }
+            if (placed) close_block(b);   /* the paragraph */
+            close_block(b);               /* the item */
+            return 0;
+        }
+
+        case MD_BLOCK_FOOTNOTE_DEF_SECTION:
+            close_block(b);   /* the list, with the trailing newline it is due */
+            newline(b);       /* and the section's own, which wrap() has no shape for */
+            pop(b);
+            return 0;
+
         case MD_BLOCK_CODE:
             flush_gathered(b);
             b->gathering = 0;
@@ -755,6 +995,39 @@ static int enter_span(MD_SPANTYPE type, void *detail, void *ud) {
             b->gathering = 1;
             return 0;
         }
+        case MD_SPAN_FOOTNOTE_REF: {
+            /* Self-contained: md4c reports no text between enter and leave,
+             * so the whole thing is built here and leave_span has nothing to
+             * do with it. */
+            const MD_SPAN_FOOTNOTE_REF_DETAIL *d = detail;
+            const char *slug = note_slug(b, &d->label);
+            int at = note_entry(b, slug);
+            if (at < 0) return -1;
+            unsigned index = (unsigned)at + 1;
+            unsigned nth = ++b->notes[at].refs;
+
+            mdy_node *a = mdy_new_element(b->doc, "a", 1);
+            const char *href = note_id(b, "#", "fn-", slug, 1);
+            mdy_set_string(b->doc, a, "href", href, strlen(href));
+            const char *id = note_id(b, "", "fnref-", slug, nth);
+            mdy_set_string(b->doc, a, "id", id, strlen(id));
+            mdy_set_string(b->doc, a, "dataFootnoteRef", "", 0);
+            /* A LIST, because hast's schema calls aria-describedby
+             * space-separated and rehype-raw's parser splits it. */
+            mdy_add_token(b->doc, a, "ariaDescribedBy", "footnote-label");
+
+            /* The note's number, not its label: `[^note]` is rendered `1`. */
+            char num[16];
+            int n = snprintf(num, sizeof num, "%u", index);
+            if (n < 0) { b->failed = 1; return -1; }
+            mdy_append(a, mdy_new_text(b->doc, num, (size_t)n));
+
+            mdy_node *sup = mdy_new_element(b->doc, "sup", 3);
+            mdy_append(sup, a);
+            append(b, sup);
+            return 0;
+        }
+
         case MD_SPAN_A: {
             const MD_SPAN_A_DETAIL *d = detail;
             mdy_node *a = mdy_new_element(b->doc, "a", 1);
@@ -862,10 +1135,32 @@ static void collect_text(const mdy_node *n, char *out, size_t cap, size_t *len) 
     for (const mdy_node *c = n->first; c; c = c->next) collect_text(c, out, cap, len);
 }
 
+static int has_id(const mdy_node *el) {
+    for (const mdy_prop *p = el->props; p; p = p->next)
+        if (strcmp(p->name, "id") == 0) return 1;
+    return 0;
+}
+
+/*
+ * "Give every heading an id it does not already have" — mdy-docs'
+ * identifyHeadings, and the second half of that sentence is load-bearing.
+ * This overwrote one.
+ *
+ * Until footnotes there was nothing to overwrite: a heading the document wrote
+ * as raw HTML is still a `raw` node here, so the only headings this pass met
+ * were the ones it had just named itself. The footnotes section's `h2` is the
+ * first that arrives with an id of its own — `footnote-label`, which every
+ * back-reference's aria-describedby points at — and it was being handed the
+ * slug of the word "Footnotes" instead.
+ *
+ * The other half is that the slugger is not ASKED for a name it will not use,
+ * so a document with its own `## Footnotes` beside a footnotes section
+ * numbers the two the same way on both engines.
+ */
 static void identify_headings(mdy_doc *doc, mdy_node *n) {
     for (mdy_node *c = n->first; c; c = c->next) {
         if (c->type == MDY_ELEMENT && c->tag && c->tag[0] == 'h' &&
-            c->tag[1] >= '1' && c->tag[1] <= '6' && c->tag[2] == '\0') {
+            c->tag[1] >= '1' && c->tag[1] <= '6' && c->tag[2] == '\0' && !has_id(c)) {
             char text[1024];
             size_t len = 0;
             collect_text(c, text, sizeof text, &len);
@@ -875,6 +1170,32 @@ static void identify_headings(mdy_doc *doc, mdy_node *n) {
         }
         identify_headings(doc, c);
     }
+}
+
+/*
+ * md4c's own log, which is the only way to hear about an allocation it could
+ * not make.
+ *
+ * md4c reports a failed malloc up its call chain — except from two of the nine
+ * places that call md_end_current_block, which drop the return value, and one
+ * of those is the last line of md_parse itself. That is where a document's
+ * footnote definitions are registered, so a refused allocation there leaves
+ * md_parse answering 0 with a tree that has no footnotes in it: `[^1]` comes
+ * out as literal text, the definitions come out as prose, and the build says
+ * it succeeded. A run that cannot produce the site has to SAY so (see
+ * allocfail.c), and that one did not.
+ *
+ * md4c is vendored at a pinned upstream commit and not patched here, so this
+ * listens instead: `debug_log` is a documented MD_PARSER member, and fifteen
+ * of its twenty-nine messages are these two. The rest are a parse deciding
+ * something — a table too sparse to be a table — or one of the callbacks below
+ * having already returned -1, and neither is an allocation.
+ */
+static void md_log(const char *msg, void *ud) {
+    Build *b = ud;
+    if (!msg) return;
+    if (strcmp(msg, "malloc() failed.") == 0 || strcmp(msg, "realloc() failed.") == 0)
+        b->failed = 1;
 }
 
 mdy_doc *mdy_markdown_parse(const char *text, size_t len) {
@@ -896,12 +1217,14 @@ mdy_doc *mdy_markdown_parse(const char *text, size_t len) {
         .enter_span = enter_span,
         .leave_span = leave_span,
         .text = text_cb,
+        .debug_log = md_log,
     };
 
     int rc = md_parse(text, (MD_SIZE)len, &parser, &b);
     flush_text(&b);
     free(b.pending);
     free(b.inline_text);
+    free(b.notes);
     if (rc != 0 || b.failed) { mdy_free(doc); return NULL; }
 
     identify_headings(doc, doc->root);
