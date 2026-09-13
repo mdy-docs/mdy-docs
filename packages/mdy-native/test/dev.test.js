@@ -428,3 +428,82 @@ test('the dead-letter channel with no page is still kept, not returned', async (
     dev.child.kill();
   }
 });
+
+/*
+ * B19: `build`, `dev` and `dead` ended their option loop with `else root = a`,
+ * so an unknown flag or one whose value was missing became the site
+ * directory. `mdy build --draft` then looked for a site called `--draft` and
+ * blamed the ENTRY SCRIPT for not being in it — a failure, but about the
+ * wrong thing. Document mode in this same binary had rejected unknown options
+ * properly all along; these are its words, so the four commands answer alike.
+ *
+ * Native-only like the rest of this file: node's CLI takes `--draft` as the
+ * directory too, so there is no shared behaviour to pin in cli.test.js.
+ */
+function runCli(args) {
+  return new Promise((resolve) => {
+    const child = spawn(bin, args);
+    let out = '';
+    child.stdout.on('data', (b) => { out += b; });
+    child.stderr.on('data', (b) => { out += b; });
+    child.on('exit', (code) => resolve({ code, out }));
+  });
+}
+
+test('an unknown option is named, rather than taken for the site directory', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-cli-'));
+  writeFileSync(join(root, 'main.mdy'), '= main\n');
+
+  for (const args of [
+    ['build', root, '--draft'],
+    ['dev', root, '--prot', '3000'],
+    ['dead', 'x', '--nonsense'],
+  ]) {
+    const { code, out } = await runCli(args);
+    assert.equal(code, 1, `${args.join(' ')} should fail`);
+    assert.match(out, /Unknown option '--(draft|prot|nonsense)'/,
+                 `${args.join(' ')} should name the option`);
+    assert.doesNotMatch(out, /entry script not found/,
+                        `${args.join(' ')} should not blame the entry script`);
+  }
+});
+
+test("an option whose value is missing says so", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-cli-'));
+  writeFileSync(join(root, 'main.mdy'), '= main\n');
+
+  for (const [args, opt] of [
+    [['build', root, '--out'], '--out'],
+    [['build', root, '--entry'], '--entry'],
+    [['dev', root, '--port'], '--port'],
+    [['dead', 'x', '--requeue'], '--requeue'],
+  ]) {
+    const { code, out } = await runCli(args);
+    assert.equal(code, 1, `${args.join(' ')} should fail`);
+    assert.match(out, new RegExp(`Option '\\${opt}' argument missing`),
+                 `${args.join(' ')} should name the option`);
+  }
+});
+
+test('what is valid still works, and `--` still escapes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-cli-'));
+  writeFileSync(join(root, 'main.mdy'), '% $.emit("i.html", "x")\n= main\n');
+  const out = mkdtempSync(join(tmpdir(), 'mdy-out-'));
+
+  for (const args of [
+    ['build', root, '--out', out],
+    ['build', root, '--out', out, '--drafts'],
+    ['build', root, '--out', out, '--future', '--quiet'],
+    ['build', '--help'],
+  ]) {
+    const { code } = await runCli(args);
+    assert.equal(code, 0, `${args.join(' ')} should succeed`);
+  }
+
+  /* The escape the error message points at: a positional that starts with `-`
+   * is reachable after `--`. It fails because no such directory exists, which
+   * is a different failure from refusing the argument. */
+  const { code, out: text } = await runCli(['build', '--', '--weird']);
+  assert.equal(code, 1);
+  assert.doesNotMatch(text, /Unknown option/, '`--` makes it a positional');
+});

@@ -36,7 +36,7 @@ what those checks do not reach.
 | B12 | ~~Medium~~ **fixed** | `engine.c` | Render-depth counter leaked on an out-of-range index |
 | B13 | ~~Low~~ **fixed** | `engine.c` / `engine_value.c` | Four unrooted property reads, and a GC stress mode that could not see them |
 | B14 | ~~Low~~ **fixed** | `cli.c` | `strftime("%l")` is a GNU extension: under emscripten the `--watch` timestamp vanished |
-| B19, B20 | Low | various | Portability, leaks on error paths, truncation, UB casts |
+| B20 | Low | parser | Silent truncation into fixed buffers: ids, headings, classes, hrefs, tables | Portability, leaks on error paths, truncation, UB casts |
 | B22 | ~~Low~~ **fixed** | `linkify.c` | `match_port` ran `strtoul` past the span, dropping a valid link |
 | B25 | ~~Low~~ **fixed** | `fsx.c` | Every `opendir` failure was an empty directory: a denied subtree left the site silently |
 | B23 | ~~Low~~ **fixed** | `markdown.c` | A link attribute's entity substrings were escaped a second time |
@@ -44,6 +44,7 @@ what those checks do not reach.
 | B18 | ~~Low~~ **fixed** | `watch.c` | The watcher's O(n²) scan cost 170 ms per poll on 8,000 files; a merge costs 0.1 |
 | B24 | Low **part fixed** | various | Unchecked allocations; `cache_put`'s dangling pointer fixed, the rest wants an error channel |
 | B26 | ~~Low~~ **fixed** | `cli.c` | The local bus marked an undeliverable message done where the remote one dead-lettered it |
+| B19 | ~~Low~~ **fixed** | `cli.c` | An unknown option became the site directory, and the error blamed the entry script |
 | B39 | ~~Low~~ **fixed** | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
 | B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
@@ -1680,12 +1681,44 @@ end of the stream, and to stop the line walk there.
   the same **set** of paths; what changed is the order, which is now sorted
   rather than after-side-then-before-side. Nothing depends on it: the caller
   prints the paths and rebuilds.
-- **B19 — `mdy build`/`dev`/`dead` accept anything as the positional**: an
-  unknown flag or a flag with its value missing falls into `else root = a`
-  ([cli.c:668](../src/cli.c#L668), [1914](../src/cli.c#L1914),
-  [440](../src/cli.c#L440)). `mdy build --draft` builds a site called
-  `--draft`; `mdy build site --out` builds `--out`. Document mode (and the
-  JavaScript CLI) reject unknown options.
+- **~~B19 — `mdy build`/`dev`/`dead` accept anything as the positional~~
+  FIXED**, and the finding was wrong about node.
+
+  ```
+  before  mdy build site --draft
+          entry script not found at "main.mdy" (looked among 0 document(s) under --draft)
+  after   mdy: Unknown option '--draft'. To specify a positional argument starting
+          with a '-', place it at the end of the command after '--', as in '-- "--draft"'
+  ```
+
+  All three ended their option loop with `else root = a`, so an unknown flag —
+  or one whose value was missing — became the site directory. The command did
+  fail, which is why this reads as cosmetic at first, but it failed **saying
+  the wrong thing**: it blamed the entry script for not being in a directory
+  the user never named. `mdy build site --out` built a directory called
+  `--out`.
+
+  Document mode in this same binary had rejected unknown options properly all
+  along, with a message that names the option *and* the way out. Those are now
+  the words all four commands use ([cli.c:448](../src/cli.c#L448)), together
+  with its `Option '%s' argument missing` for a flag whose value ran off the
+  end, and its `--` escape so a positional may still start with a dash.
+
+  **The finding said "Document mode (and the JavaScript CLI) reject unknown
+  options."** Half right: `node bin/mdy.js build site --draft` takes `--draft`
+  as the directory exactly as this did, so there was no parity to restore — the
+  case for the change is that a message should say what is wrong, and that one
+  binary should answer four ways the same. Two places this now diverges from
+  node, both deliberate: `--out` with no value makes node build to the default
+  `dist` where this refuses, and node's message for an unknown option is the
+  entry-script one.
+
+  Not changed: two positionals still take the last, silently, in both engines —
+  `mdy build A B` builds `B`. That is shared behaviour and a separate decision.
+
+  Three tests in `test/dev.test.js` — the unknown option across all three
+  commands, the missing value across four flags, and the valid usage plus `--`.
+  Reverting fails five checks.
 - **B20 — Silent truncation into fixed buffers, all parity divergences with no
   warning**: heading ids over 255 bytes (`unique[256]`,
   [block.c:329](../src/parse/block.c#L329)) and heading text over 1 KB

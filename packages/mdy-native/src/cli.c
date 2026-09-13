@@ -433,15 +433,47 @@ static int publish_messages(mdy_engine *e, const Messages *m, const char *broker
     return sent;
 }
 
+/*
+ * What `build`, `dev` and `dead` do with an argument they do not know.
+ *
+ * All three ended their option loop with `else root = a`, so an unknown flag
+ * or one whose value was missing became the site directory. `mdy build
+ * --draft` looked for a site called `--draft` and blamed the entry script for
+ * not being in it; `mdy build site --out` built a directory called `--out`.
+ * The command failed, which is something, but it failed saying the wrong
+ * thing — and document mode in this same binary had rejected unknown options
+ * properly all along, with a message that even names the way out. These are
+ * that message, so the four commands answer alike. (B19.)
+ */
+static void fail_unknown_option(const char *a) {
+    char m[256];
+    snprintf(m, sizeof m,
+             "Unknown option '%s'. To specify a positional argument starting with a '-', "
+             "place it at the end of the command after '--', as in '-- \"%s\"", a, a);
+    fail(m);
+}
+
+static void fail_missing_value(const char *a) {
+    char m[256];
+    snprintf(m, sizeof m, "Option '%s' argument missing", a);
+    fail(m);
+}
+
+/* An argument that is an option rather than a positional. A lone `-` is a
+ * filename by convention and `--` is the escape, handled by the callers. */
+static int looks_like_option(const char *a) { return a[0] == '-' && a[1] != '\0'; }
+
 /* mdy dead <name> [--broker <url>] [--requeue <index>] */
 static int cmd_dead(int argc, char **argv) {
     if (argc == 0) { fputs(SITE_USAGE, stdout); return 1; }
     const char *name = NULL, *broker = NULL, *requeue = NULL;
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
+        if (strcmp(a, "--") == 0) { if (i + 1 < argc) name = argv[++i]; continue; }
         if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) { fputs(SITE_USAGE, stdout); return 0; }
-        else if (strcmp(a, "--broker") == 0 && i + 1 < argc) broker = argv[++i];
-        else if (strcmp(a, "--requeue") == 0 && i + 1 < argc) requeue = argv[++i];
+        else if (strcmp(a, "--broker") == 0) { if (i + 1 >= argc) fail_missing_value(a); broker = argv[++i]; }
+        else if (strcmp(a, "--requeue") == 0) { if (i + 1 >= argc) fail_missing_value(a); requeue = argv[++i]; }
+        else if (looks_like_option(a)) fail_unknown_option(a);
         else name = a;
     }
     if (!name) name = ".";
@@ -662,14 +694,16 @@ static int cmd_build(int argc, char **argv) {
     int quiet = 0, drafts = 0, future = 0, publish = 0;
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
+        if (strcmp(a, "--") == 0) { if (i + 1 < argc) root = argv[++i]; continue; }
         if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) { fputs(SITE_USAGE, stdout); return 0; }
-        else if (strcmp(a, "--out") == 0 && i + 1 < argc) out = argv[++i];
-        else if (strcmp(a, "--entry") == 0 && i + 1 < argc) entry = argv[++i];
-        else if (strcmp(a, "--broker") == 0 && i + 1 < argc) broker = argv[++i];
+        else if (strcmp(a, "--out") == 0) { if (i + 1 >= argc) fail_missing_value(a); out = argv[++i]; }
+        else if (strcmp(a, "--entry") == 0) { if (i + 1 >= argc) fail_missing_value(a); entry = argv[++i]; }
+        else if (strcmp(a, "--broker") == 0) { if (i + 1 >= argc) fail_missing_value(a); broker = argv[++i]; }
         else if (strcmp(a, "--drafts") == 0) drafts = 1;
         else if (strcmp(a, "--future") == 0) future = 1;
         else if (strcmp(a, "--publish") == 0) publish = 1;
         else if (strcmp(a, "--quiet") == 0) quiet = 1;
+        else if (looks_like_option(a)) fail_unknown_option(a);
         else root = a;
     }
     char out_default[4096];
@@ -1982,18 +2016,20 @@ static int cmd_dev(int argc, char **argv) {
     DevOptions o = { ".", NULL, NULL, "mdy-bus", "mdy", 4321, 0, 0, 5, 1000, 300000, 0 };
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
+        if (strcmp(a, "--") == 0) { if (i + 1 < argc) o.root_arg = argv[++i]; continue; }
         if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) { fputs(SITE_USAGE, stdout); return 0; }
-        else if (strcmp(a, "--port") == 0 && i + 1 < argc) o.port = atoi(argv[++i]);
-        else if (strcmp(a, "--entry") == 0 && i + 1 < argc) o.entry = argv[++i];
-        else if (strcmp(a, "--broker") == 0 && i + 1 < argc) o.broker = argv[++i];
-        else if (strcmp(a, "--consumer") == 0 && i + 1 < argc) o.consumer = argv[++i];
-        else if (strcmp(a, "--group") == 0 && i + 1 < argc) o.group = argv[++i];
-        else if (strcmp(a, "--max-attempts") == 0 && i + 1 < argc) o.max_attempts = atoi(argv[++i]);
-        else if (strcmp(a, "--backoff") == 0 && i + 1 < argc) o.backoff = atoi(argv[++i]);
-        else if (strcmp(a, "--max-backoff") == 0 && i + 1 < argc) o.max_backoff = atoi(argv[++i]);
+        else if (strcmp(a, "--port") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.port = atoi(argv[++i]); }
+        else if (strcmp(a, "--entry") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.entry = argv[++i]; }
+        else if (strcmp(a, "--broker") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.broker = argv[++i]; }
+        else if (strcmp(a, "--consumer") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.consumer = argv[++i]; }
+        else if (strcmp(a, "--group") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.group = argv[++i]; }
+        else if (strcmp(a, "--max-attempts") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.max_attempts = atoi(argv[++i]); }
+        else if (strcmp(a, "--backoff") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.backoff = atoi(argv[++i]); }
+        else if (strcmp(a, "--max-backoff") == 0) { if (i + 1 >= argc) fail_missing_value(a); o.max_backoff = atoi(argv[++i]); }
         else if (strcmp(a, "--drafts") == 0) o.drafts = 1;
         else if (strcmp(a, "--future") == 0) o.future = 1;
         else if (strcmp(a, "--host") == 0) o.expose = 1;
+        else if (looks_like_option(a)) fail_unknown_option(a);
         else o.root_arg = a;
     }
     /* One line at a time on stdout, whatever it is: the JavaScript writes
