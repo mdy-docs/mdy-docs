@@ -70,7 +70,7 @@ what those checks do not reach.
 | B46 | ~~Medium~~ **fixed** | `markdown.c` | Raw HTML inside a `.md` paragraph was escaped rather than passed through; block-level was already right |
 | B47 | ~~Medium~~ **fixed** | `engine.c` / md4c | The sweep never saw a `.md`: three unchecked `strdup`s, and an allocation failure md4c discards |
 | B48 | ~~Low~~ **fixed** | md4c | A bracket that is not a footnote after all lost its `^`: `[^a b]` rendered `a b`, not `^a b` |
-| B49 | Medium | `check-markdown` | It compares a tree that has not been through rehype-raw, so it under-reports by 126 documents |
+| B49 | **High** | `.md` raw HTML | The `.md` tree keeps `raw` nodes — no rehype-raw here — so an ill-formed tag is never repaired and an unclosed one escapes its document |
 | B50 | Low | md4c | A link reference whose label ends in whitespace does not match its definition |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
@@ -1142,8 +1142,9 @@ interesting one: the 21 that stopped escaping are the spec's hairiest HTML
 blocks, and they have OTHER divergences besides. What this fixes is the whole
 of the inline-raw-HTML rule; what it does not fix is those documents.
 
-**`check-markdown` cannot see any of it** — see **B49**, which this is the
-second finding to run into.
+**`check-markdown` still calls most of these different**, and it is right to:
+the tag reaches the tree as a `raw` node here where node has an element, which
+is **B49** and the stage after this one.
 
 `fixture-awkward` carries a `.md` with a tag in a paragraph, one with
 attributes, tags beside markdown emphasis, tags in list items, one in a TABLE
@@ -1153,41 +1154,94 @@ escaped ([main.mdy:55](../fixture-awkward/main.mdy#L55)). `raw_html_checks`
 which is a `.mdy` document escaping the same bytes — so a change that reached
 across the two front ends would fail rather than pass quietly.
 
-#### B49 — `check-markdown` compares a tree that has not been through rehype-raw (Medium)
+#### B49 — the `.md` tree keeps `raw` nodes: there is no rehype-raw on this side (High)
 
-Found twice: B45 was invisible to it for one reason and B46 for another, and
-the second is this.
+**This finding was filed backwards, and the correction is the whole of it.**
+It said `check-markdown` "compares a tree that has not been through
+rehype-raw, so it under-reports by 126 documents", and offered the measurement
+that those documents are "identical through a real build". The HTML is
+identical. The TREE is not, and the tree is what a document's own code is
+handed.
 
-`make check-markdown` runs `build/mdcat`
-([Makefile:364](../Makefile#L364)), which is the bare parse library, and
-compares its tree against `markdownToHast` — which is the WHOLE node pipeline,
-`rehypeRaw` included. Raw HTML is exactly where those two disagree by
-construction: this side leaves a `raw` node for something later to re-parse,
-node has already re-parsed it into elements. Every document containing a tag
-therefore reads as a failure whether or not a real build agrees.
+```
+a <b>x</b> b
+```
 
-**Measured** by building every document it calls different as a real site,
-both ways:
+A document that walks its own composed tree — `transform`, then `visit`:
 
-| | reported by check-markdown | identical through a real build | true |
-| --- | --- | --- | --- |
-| commonmark | 544/652 | 25 of the 108 | **569/652** |
-| real | 233/868 | 101 of the 635 | **334/868** |
+```
+node   root, element:p, text, element:b, text, text
+C      root, element:p, text, raw,       text, raw,  text
+```
 
-So the front end is 126 documents better than the number the check prints, and
-the printed number moves for reasons that are not always about the parser.
-That matters because this is the only check in the repository that sees the
-`.md` front end at all — §4's argument — and it has been the thing quoted when
-deciding what to work on next.
+So `check-markdown` was right all along and `commonmark 544/652` and
+`real 233/868` are honest numbers. What it has been reporting is this, and the
+previous entry talked me out of believing it.
 
-Not fixed here because the fix is a decision about what to compare, and there
-are two shapes and no obvious winner. Either the C side gains a tool that runs
-the engine's rehype-raw emulation before comparing — the emulation exists, it
-is what makes a real build agree — or the node side compares against the
-pipeline WITHOUT `rehypeRaw` and the raw nodes are matched as raw nodes. The
-first measures what a user gets; the second measures what this file is
-responsible for. They answer different questions and it is worth picking on
-purpose.
+**There is no rehype-raw here at all.** A `raw` node is written through
+verbatim by the HTML writer ([html.c:317](../src/parse/html.c#L317)) and
+handed to the VM as `{ type: "raw" }`
+([engine_value.c:202](../src/engine_value.c#L202)). Nothing re-parses it.
+`docs/parser.md` already said so about `ext-tables` — "either an HTML5 parser
+in C (lexbor) doing the same round trip, or a deliberate divergence" — and §4's
+foster-parenting fix was one HTML5 rule done by hand for one case. This is the
+general statement of it, and it reaches further than tables.
+
+**It is not invisible in the HTML either**, which is the part the first entry
+got most wrong. Every ill-formed input diverges, because node's tree has been
+through an HTML5 parser that repaired it and this one has not:
+
+| | node | C |
+| --- | --- | --- |
+| `a <b>unclosed` | `<p>a <b>unclosed</b></p>` | `<p>a <b>unclosed</p>` |
+| `a <b>x</i> b` | `<p>a <b>x b</b></p>` | `<p>a <b>x</i> b</p>` |
+| `<p>a <div>b</div> c</p>` | `<p>a </p><div>b</div> c<p></p>` | `<p>a <div>b</div> c</p>` |
+| `a <b><i>x</b></i> b` | `<p>a <b><i>x</i></b> b</p>` | `<p>a <b><i>x</b></i> b</p>` |
+| `<table><b>stray</b><tr>…` | `<b>stray</b><table><tbody>…` | `<table><b>stray</b><tr>…` |
+
+**And an unclosed tag escapes its own document**, which is the consequence
+worth taking seriously. mdy-docs runs rehype-raw per document deliberately —
+its own comment says so: *"it runs on one document's own text, at that
+document's own boundary, so an unclosed tag can reach the end of the file it
+was written in and no further."* Two `.md` documents composed onto one page:
+
+```
+node   <p>first, with an unclosed </p><div><p></p></div><p>second document…</p>
+C      <p>first, with an unclosed <div></p><p>second document…</p>
+```
+
+The `<div>` is closed at the boundary on one side and left open on the other,
+so on this side the second document renders inside the first document's
+mistake. That is a containment property the JavaScript has and this does not.
+
+**How much of the corpus this is**, counting documents whose C tree still
+holds a `raw` node:
+
+```
+real          526 of 869      commonmark     72 of 652
+gfm             1 of  39      ext-tables      0 of  12
+```
+
+Sixty per cent of real-world markdown. Every one of those has a tree that
+differs from node's.
+
+**Not fixed, and not a morning.** The fix is HTML5 tree construction — the
+algorithm, not a tag matcher — either by vendoring a parser (`docs/parser.md`
+names lexbor, and notes the writer for the round trip already exists here) or
+by writing one. A partial measure is worse than none: this file's own opening
+comment says a port that reasons the shapes out rather than taking them from
+the reference "gets them subtly wrong", and the five rows above are five
+different HTML5 rules, not one.
+
+What is cheap and worth doing first is the containment half on its own —
+closing at the document boundary what a document opened — because that is the
+one row with a consequence beyond a wrong tree. It would still be a
+divergence from node's output, so it is a decision rather than a fix.
+
+**B46 and B48 are not undone by this.** They fixed what `markdown.c` emits —
+an inline tag now reaches the tree as a `raw` node instead of escaped text,
+which is what node has before rehype-raw runs. This is the stage after that,
+and it is missing for the block kind exactly as much as for the inline kind.
 
 #### B47 — sweeping the awkward fixture: three unchecked `strdup`s, and an allocation failure md4c drops (Medium) — FIXED
 
@@ -2912,6 +2966,11 @@ document order, to immediately before the table. `foster_parent_table`
 with the text already there, because an HTML parser produces one run of
 character data rather than two adjacent ones.
 
+That is ONE of rehype-raw's rules, written out by hand for the one case that
+had a fixture. There is no HTML5 parse on this side at all, and the rest of
+what it would do — repairing an unclosed tag, un-crossing two, splitting a
+paragraph around a block — is **B49**.
+
 It is worth being precise about why nothing else could see it. `check-html`
 compares a serialiser against a tree, so identical trees serialise identically
 whatever is wrong with them. `check-markdown` compares trees and would have
@@ -3044,15 +3103,19 @@ date.
 
 **What is left, in the order it is worth doing.**
 
-1. **B49**, and it is first because it is what the next decision will be made
-   with. `check-markdown` is the only check that sees the `.md` front end, and
-   it compares `mdcat`'s tree — no rehype-raw — against node's finished one,
-   so it reads every document containing a tag as a failure. Measured, it
-   under-reports by 126 documents. Deciding what it should compare is a
-   morning; believing its numbers while choosing what to fix has already cost
-   more than that. B46 was filed on the guess that it accounted for much of
-   `commonmark 544/652`; measured after the fix, it was 21 documents' worth of
-   escaping and 2 documents' worth of agreement.
+1. **B49**, and it is first because it is the largest thing left and the one
+   with a consequence outside a tree comparison: there is no rehype-raw on
+   this side, so 526 of 869 real documents keep `raw` nodes where node has
+   elements, no ill-formed tag is ever repaired, and an unclosed one escapes
+   its own document onto the page. It is HTML5 tree construction, by
+   vendoring a parser or writing one — not a morning, and not something a
+   partial measure improves. The containment half alone (closing at the
+   document boundary what a document opened) is separable and cheap, and is a
+   decision rather than a fix, because it would still not be node's output.
+
+   It is also the correction that matters most in this file: B49 was filed
+   saying `check-markdown` measured the wrong thing, and it does not. Its
+   numbers are honest and had been reporting this all along.
 2. ~~**The public API that `test/engine.c` never calls.**~~ **Done** —
    `api_checks`, 23 assertions over all twelve, with the knobs tested as
    contrasts so that an engine ignoring one would fail rather than pass. See
@@ -3065,9 +3128,9 @@ date.
    it is the only check in the repository that would have SEEN the bug:
    `check-html` compares a serialiser against a tree, and `check-sites` has
    only the documents somebody happened to write. It is still a question about
-   where the corpus lives rather than about writing a test, and B49 is the
-   second question stacked on top of it — the corpus has no home AND the check
-   that reads it measures the wrong thing.
+   where the corpus lives rather than about writing a test — and B49 is the
+   argument for settling it, since a check that has been correctly reporting a
+   High finding for this long, to nobody, is the expensive kind of unrun.
 3. **`struct mdy_engine`'s 56 fields** ([engine_internal.h:97](../src/engine_internal.h#L97)),
    still 56. It is grouped and commented — the VM, the open set, composition,
    the callbacks, the knobs, identity, the walk — so what is wanted is those
