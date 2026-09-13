@@ -11,37 +11,42 @@ reason stb is here as headers and lamassu and nisaba as source.
                            which scripts-build-corpus.mjs turns into the
                            corpus check-markdown runs over
 
-Pinned at the commit in `COMMIT`. MIT; the licence is LICENSE.md, and the spec
-files carry their own (CC-BY-SA 4.0) in test/LICENSE.md. Nothing else of the
-upstream tree — the CMake build, md2html, the fuzzers — is used here.
+Vendored from **https://github.com/mdy-docs/md4c**, which is this project's
+fork of `mity/md4c`, pinned at the commit in `COMMIT`. MIT; the licence is
+LICENSE.md, and the spec files carry their own (CC-BY-SA 4.0) in
+test/LICENSE.md. Nothing else of the upstream tree — the CMake build, md2html,
+the fuzzers — is used here.
 
-## Local patches
+## The fork, and what is in it
 
-Kept deliberately small, and listed here so that re-pinning does not drop one
-silently. Anything that can be worked around from OUR side is — B47's dropped
-allocation failure is heard through `debug_log` in `src/parse/markdown.c`
-rather than patched here — so this list is the cases where the information is
-destroyed inside the parser and nothing outside it can see what happened.
+There are no local patches. Anything this project needs from md4c is a COMMIT
+in the fork, so `COMMIT` names a tree that is exactly what is here and a
+re-pin cannot silently drop a fix. Anything that can be worked around from OUR
+side still is — B47's dropped allocation failure is heard through `debug_log`
+in `src/parse/markdown.c` rather than changed here — so what reaches the fork
+is the cases where the information is destroyed inside the parser and nothing
+outside it can see what happened.
 
-Check a patch before removing it: `grep -n "LOCAL PATCH" src/md4c.c`.
+Ours so far, both of them bugs against CommonMark rather than differences of
+opinion, and both still live on `mity/md4c`'s master when they were written:
 
-- **`md_resolve_bracket_footnote`, the `^` (B48).** The opener was expanded to
-  eat the `^` BEFORE checking that the label has a definition. Both checks
-  after it return false, the bracket pair then goes on to be resolved as an
-  ordinary link, and an opener already moved past the `^` takes it out of that
-  link's text: `[^a b]` with a matching `[^a b]: n` rendered `a b` where
-  CommonMark says `^a b`. The mutation moved after the checks. Verified inert:
-  it changes the tree of **none** of the 1,773 documents in
-  `make corpus`, and `ext-footnotes` stays at 25/26.
+- **`md_resolve_bracket_footnote`: do not eat the `^` until the label
+  resolves (B48).** The opener was expanded past the `^` before three checks
+  that can each fail; on any of them the bracket pair goes on to be resolved
+  as an ordinary link, whose text is taken from `opener->end`. `[^a b]` with a
+  matching `[^a b]: n` rendered `a b` where CommonMark says `^a b`.
 
-- **`md_label_hash`, a trailing space (B50).** The hash of a link label did
-  not strip a TRAILING run of whitespace where `md_label_cmp` does — that
-  function treats the end of a label as whitespace, so `[x ]` and `[x]` are
-  equal to it. The hash is consulted first, so a reference written `[x ]`
-  never reached the comparison and found no definition at all: it came out as
-  literal text where CommonMark and remark both give a link. The trailing run
-  is no longer hashed. Verified inert the same way: **none** of the 1,774
-  corpus documents' trees change.
+- **`md_label_hash`: do not hash a label's trailing whitespace (B50).**
+  `md_label_cmp` treats the end of a label as whitespace, so `[x ]` and `[x]`
+  are equal to it; the hash did not, so they landed in different buckets and
+  the comparison was never reached. A reference written `[x ]` found no
+  definition at all.
+
+Each was verified inert before it was committed: every document in
+`make corpus-specs` through a tree dump with and without the change, and zero
+differences beyond the case being fixed.
+
+Both are worth sending upstream.
 
 It is the markdown front end: `.md` documents arrive as hast through it the
 way `.mdy` ones do through the parser, and `make check-markdown` measures how

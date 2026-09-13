@@ -74,7 +74,7 @@
                 if(!(cond)) {                                           \
                     MD_LOG(__FILE__ ":" STRINGIZE(__LINE__) ": "        \
                            "Assertion '" STRINGIZE(cond) "' failed.");  \
-                    exit(1);                                            \
+                    exit(EXIT_FAILURE);                                 \
                 }                                                       \
             } while(0)
 
@@ -277,7 +277,7 @@ struct MD_CTX_tag {
     SZ code_fence_length;   /* For checking closing fence length. */
     int html_block_type;    /* For checking closing raw HTML condition. */
     int last_line_has_list_loosening_effect;
-    int last_list_item_starts_with_two_blank_lines;
+    int consecutive_blank_lines;
 };
 
 enum MD_LINETYPE_tag {
@@ -1488,10 +1488,21 @@ md_free_attribute(MD_CTX* ctx, MD_ATTRIBUTE_BUILD* build)
 {
     MD_UNUSED(ctx);
 
-    if(build->substr_alloc > 0) {
+    /* A trivial build aliases caller-owned storage and must not be freed.
+     * Every other build owns all three pointers from the moment
+     * md_build_attribute() leaves the trivial branch, even if a growth
+     * realloc later failed while substr_alloc was still 0. Clearing them
+     * keeps this idempotent, which matters because md_build_attribute()
+     * frees on its own abort path before the caller frees again. */
+    if(build->substr_types != build->trivial_types) {
         free(build->text);
         free(build->substr_types);
         free(build->substr_offsets);
+        build->text = NULL;
+        build->substr_types = NULL;
+        build->substr_offsets = NULL;
+        build->substr_alloc = 0;
+        build->substr_count = 0;
     }
 }
 
@@ -1623,14 +1634,16 @@ md_label_hash(const CHAR* label, SZ size)
         is_whitespace = ISUNICODEWHITESPACE_(codepoint) || ISNEWLINE_(label[off]);
 
         if(is_whitespace) {
-            /* LOCAL PATCH (mdy-native, B50). A TRAILING run of whitespace is
-             * not hashed, because md_label_cmp does not compare one: it treats
-             * the end of a label as whitespace, so `[x ]` and `[x]` are equal
-             * to it and were not equal to this. The hash is consulted first,
-             * so a reference written `[x ]` found no definition at all. */
             off = md_skip_unicode_whitespace(label, off, size);
+
+            /* A TRAILING run of whitespace is not hashed, because
+             * md_label_cmp() does not compare one: it treats the end of a
+             * label as whitespace, so "[foo ]" and "[foo]" are equal to it.
+             * Hashing the trailing run put them in different buckets and the
+             * comparison that would have matched them was never reached. */
             if(off >= size)
                 break;
+
             codepoint = ' ';
             hash = md_fnv1a(hash, &codepoint, sizeof(unsigned));
         } else {
@@ -2014,6 +2027,26 @@ struct MD_FOOTNOTE_DEF_tag {
     MD_SIZE n_content_lines;
 };
 
+static int
+md_is_footnote_label(MD_CTX* ctx, OFF beg, OFF* p_end)
+{
+    OFF end = beg;
+
+    /* No whitespace, no nested square brackets and length below 75 characters.
+     * See https://github.com/mity/md4c/issues/380 */
+    while(end < ctx->size  &&  end - beg <= 75  &&
+            !ISWHITESPACE(end)  &&  !ISANYOF2(end, _T('['), _T(']')))
+        end++;
+
+    if(end - beg > 0  &&  end < ctx->size  &&  CH(end) == _T(']')) {
+        if(p_end != NULL)
+            *p_end = end;
+        return true;
+    } else {
+        return false;
+    }
+}
+
 /* Returns 0 if not a footnote definition.
  * Returns N > 0 (number of lines consumed) if it is one and the definition
  * was stored successfully.
@@ -2036,13 +2069,10 @@ md_is_footnote_definition(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines)
     MD_ASSERT(CH(off) == _T('[')  &&  CH(off+1) == _T('^'));
     off += 2;
 
-    /* Label: non-empty sequence of non-whitespace, non-bracket chars. */
     label_beg = off;
-    while(off < lines[0].end  &&  CH(off) != _T(']')  &&  !ISWHITESPACE(off)  &&  CH(off) != _T('['))
-        off++;
-    label_end = off;
-    if(label_end == label_beg)
+    if(!md_is_footnote_label(ctx, label_beg, &off))
         return false;
+    label_end = off;
 
     /* Closing bracket. */
     if(off >= lines[0].end  ||  CH(off) != _T(']'))
@@ -2469,6 +2499,7 @@ md_is_link_reference_definition(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lin
                     _T(' '), &label, &label_size));
         def = (MD_REF_DEF*) md_add_label_def(ctx, &ctx->ref_def_hashtable, label, label_size);
         if(def == NULL) {
+            ret = -1;
             free(label);
             goto abort;
         }
@@ -2476,8 +2507,10 @@ md_is_link_reference_definition(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lin
     } else {
         def = (MD_REF_DEF*) md_add_label_def(ctx, &ctx->ref_def_hashtable,
                     STR(label_contents_beg), label_contents_end - label_contents_beg);
-        if(def == NULL)
+        if(def == NULL) {
+            ret = -1;
             goto abort;
+        }
     }
 
     if(title_is_multiline) {
@@ -2497,11 +2530,9 @@ md_is_link_reference_definition(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lin
     return line_index + 1;
 
 abort:
-    /* Failure. */
-    if(def != NULL  &&  def->label_needs_free)
-        free((CHAR*) def->entry.label);
-    if(def != NULL  &&  def->title_needs_free)
-        free(def->title);
+    /* Failure. A non-NULL def is already committed to ctx->ref_def_hashtable,
+     * which owns its label and title and frees them in md_free_ref_defs().
+     * The def == NULL path frees its local label itself, above. */
     return ret;
 }
 
@@ -3523,21 +3554,22 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                 continue;
             }
 
-            /* A potential spoiler delimiter: || ... ||
-             * Checked before the single-| handler so a double pipe is consumed
-             * as one mark and does not become two cell boundaries. */
-            if(ch == _T('|') && (ctx->parser.flags & MD_FLAG_SPOILERS)) {
-                if(off + 1 < line->end && CH(off+1) == _T('|')) {
-                    ADD_MARK(ch, off, off+2, MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER);
-                    off += 2;
-                    continue;
-                }
-            }
-
-            /* A potential table cell boundary or wiki link label delimiter. */
-            if((table_mode || (ctx->parser.flags & MD_FLAG_WIKILINKS)) && ch == _T('|')) {
-                ADD_MARK(ch, off, off+1, 0);
-                off++;
+            /* We may need pipes for tables (cell delimiter), for wiki-links
+             * Note we coalesce spans of pipes into a single mark.
+             *
+             *  - Tables may use spans of any length.
+             *  - Wiki-links use only (unresolved) spans of length 1.
+             *  - Spoilers use use only (unresolved) spans of length 2.
+             */
+            if(ch == _T('|')) {
+                OFF tmp = off + 1;
+                while(tmp < line->end  &&  CH(tmp) == _T('|'))
+                    tmp++;
+                if(table_mode  ||
+                   (tmp - off == 1 && (ctx->parser.flags & MD_FLAG_WIKILINKS))  ||
+                   (tmp - off == 2 && (ctx->parser.flags & MD_FLAG_SPOILERS)))
+                    ADD_MARK(ch, off, tmp, MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER);
+                off = tmp;
                 continue;
             }
 
@@ -3786,7 +3818,7 @@ md_resolve_bracket_wikilink(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
     delim_index = opener_index + 1;
     while(delim_index < closer_index) {
         MD_MARK* m = &ctx->marks[delim_index];
-        if(m->ch == _T('|')) {
+        if(m->ch == _T('|')  &&  m->end - m->beg == 1  &&  !(m->flags & MD_MARK_RESOLVED)) {
             delim = m;
             break;
         }
@@ -3855,11 +3887,11 @@ md_resolve_bracket_footnote(MD_CTX* ctx, MD_MARK* opener, MD_MARK* closer,
 
     closer = &ctx->marks[opener->next];
 
-    /* Label is the raw text between the opener end and the closer begin.
-     * opener->end points at the '[', one past that is the '^', and
-     * closer->beg points to the ']'. */
+    /* Verify the label satisfies the label rules. The label begins one past
+     * the opener's end, which is the '^'. */
     label_beg = opener->end + 1;
-    label_end = closer->beg;
+    if(!md_is_footnote_label(ctx, label_beg, &label_end)  ||  label_end != closer->beg)
+        return false;
 
     if(label_beg >= label_end)
         return false;   /* empty label */
@@ -3868,12 +3900,12 @@ md_resolve_bracket_footnote(MD_CTX* ctx, MD_MARK* opener, MD_MARK* closer,
     if(def == NULL)
         return false;
 
-    /* LOCAL PATCH (mdy-native, B48). Expand the opener to eat the '^' -- and
-     * not before the two checks above, which is where it used to be. Both of
-     * them return false, the bracket pair then goes on to be resolved as an
-     * ordinary link, and an opener already moved past the '^' takes it out of
-     * that link's text: `[^a b]` with a matching `[^a b]: n` definition
-     * rendered `a b` where CommonMark says `^a b`. See third_party/md4c/README.md. */
+    /* Expand the opener to eat the '^'.
+     *
+     * Deliberately not before the three checks above: each of them can fail,
+     * and the bracket pair then goes on to be resolved as an ordinary link by
+     * md_resolve_bracket_link(), which takes the link's text from opener->end.
+     * An opener already moved past the '^' loses it from that text. */
     opener->end++;
 
     /* Assign index on first reference. */
@@ -4157,6 +4189,13 @@ static void
 md_analyze_table_cell_boundary(MD_CTX* ctx, int mark_index)
 {
     MD_MARK* mark = &ctx->marks[mark_index];
+
+    /* FIXME: With MD_FLAG_SPOILERS, we reserve double "||" for spoiler marks
+     * (potentially inside the table). But is it worth it the incompatibility
+     * with GFM? Perhaps it would be better to disallow spoilers in a table? */
+    if((ctx->parser.flags & MD_FLAG_SPOILERS) && mark->end - mark->beg == 2)
+        return;
+
     mark->flags |= MD_MARK_RESOLVED;
     mark->next = -1;
 
@@ -4165,7 +4204,7 @@ md_analyze_table_cell_boundary(MD_CTX* ctx, int mark_index)
     else
         ctx->marks[ctx->table_cell_boundaries_tail].next = mark_index;
     ctx->table_cell_boundaries_tail = mark_index;
-    ctx->n_table_cell_boundaries++;
+    ctx->n_table_cell_boundaries += mark->end - mark->beg;
 }
 
 /* Split a longer mark into two. The new mark takes the given count of
@@ -4326,8 +4365,8 @@ md_analyze_spoiler(MD_CTX* ctx, int mark_index)
 {
     MD_MARK* mark = &ctx->marks[mark_index];
 
-    /* Only "||" are recognized as spiler marks. */
-    if(mark->end - mark->beg != 2)
+    /* Only double "||" are recognized as spoiler marks. */
+    if((mark->flags & MD_MARK_RESOLVED)  ||  mark->end - mark->beg != 2)
         return;
 
     if((mark->flags & MD_MARK_POTENTIAL_CLOSER)  &&  PIPE_OPENERS.top >= 0) {
@@ -4531,6 +4570,14 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
         if(md_analyze_permissive_autolink_segment(ctx, beg, line_beg, &beg, true,
                 _T('\0'), NULL, _T(".-_+"), &left_cursor) < 1)
             return;
+
+        /* Swallow optional "mailto:" or "xmpp:" before it. */
+        if(beg >= 7  &&  md_ascii_eq(_T("mailto:"), STR(beg-7), 7))
+            beg -= 7;
+        else if(beg >= 5  &&  md_ascii_eq(_T("xmpp:"), STR(beg-5), 5))
+            beg -= 5;
+        else
+            opener->flags |= MD_MARK_AUTOLINK_MISSING_MAILTO;
     }
 
     /* Verify there's line boundary, whitespace, allowed punctuation or
@@ -4690,9 +4737,7 @@ md_analyze_inlines(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table
         MD_ASSERT(n_lines == 1);
         ctx->n_table_cell_boundaries = 0;
         for(i = 0; i < ctx->n_marks; i++) {
-            MD_MARK* mark = &ctx->marks[i];
-            if(!(mark->flags & MD_MARK_RESOLVED) &&
-               mark->ch == '|' && mark->end - mark->beg == 1)
+            if(!(ctx->marks[i].flags & MD_MARK_RESOLVED)  &&  ctx->marks[i].ch == '|')
                 md_analyze_table_cell_boundary(ctx, i);
         }
         return ret;
@@ -5074,8 +5119,8 @@ md_process_inlines(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines)
                     if(mark->flags & MD_MARK_OPENER)
                         closer->flags |= MD_MARK_VALIDPERMISSIVEAUTOLINK;
 
-                    if(opener->ch == '@' || opener->ch == '.' ||
-                        (opener->ch == '<' && (opener->flags & MD_MARK_AUTOLINK_MISSING_MAILTO)))
+                    if(opener->ch == '.' ||
+                        (ISANYOF2_(opener->ch, _T('@'), _T('<')) && (opener->flags & MD_MARK_AUTOLINK_MISSING_MAILTO)))
                     {
                         dest_size += 7;
                         MD_TEMP_BUFFER(dest_size * sizeof(CHAR));
@@ -5241,9 +5286,10 @@ md_process_table_row(MD_CTX* ctx, MD_BLOCKTYPE cell_type, OFF beg, OFF end,
                      const MD_ALIGN* align, int col_count)
 {
     MD_LINE line;
-    OFF* pipe_offs = NULL;
+    OFF* cell_begs = NULL;
     int i, j, k, n;
     int ret = 0;
+    MD_MARK* mark = NULL;
 
     line.beg = beg;
     line.end = end;
@@ -5255,35 +5301,38 @@ md_process_table_row(MD_CTX* ctx, MD_BLOCKTYPE cell_type, OFF beg, OFF end,
     /* We have to remember the cell boundaries in local buffer because
      * ctx->marks[] shall be reused during cell contents processing. */
     n = ctx->n_table_cell_boundaries + 2;
-    pipe_offs = (OFF*) malloc(n * sizeof(OFF));
-    if(pipe_offs == NULL) {
+    cell_begs = (OFF*) malloc(n * sizeof(OFF));
+    if(cell_begs == NULL) {
         MD_LOG("malloc() failed.");
         ret = -1;
         goto abort;
     }
     j = 0;
-    pipe_offs[j++] = beg;
+
+    /* First cell of the row may or may not be started with '|'. */
+    if(ctx->table_cell_boundaries_head < 0  ||
+       ctx->marks[ctx->table_cell_boundaries_head].beg > beg)
+        cell_begs[j++] = beg;
     for(i = ctx->table_cell_boundaries_head; i >= 0; i = ctx->marks[i].next) {
-        MD_MARK* mark = &ctx->marks[i];
-        pipe_offs[j++] = mark->end;
+        mark = &ctx->marks[i];
+        for(k = 0; k < (int)(mark->end - mark->beg); k++)
+            cell_begs[j++] = mark->beg + k + 1;
     }
-    pipe_offs[j++] = end+1;
+    if(mark == NULL || mark->end < end)
+        cell_begs[j++] = end+1;
 
     /* Process cells. */
     MD_ENTER_BLOCK(MD_BLOCK_TR, NULL);
-    k = 0;
-    for(i = 0; i < j-1  &&  k < col_count; i++) {
-        if(pipe_offs[i] < pipe_offs[i+1]-1)
-            MD_CHECK(md_process_table_cell(ctx, cell_type, align[k++], pipe_offs[i], pipe_offs[i+1]-1));
-    }
-    /* Make sure we call enough table cells even if the current table contains
+    for(i = 0; i < j-1 && i < col_count; i++)
+        MD_CHECK(md_process_table_cell(ctx, cell_type, align[i], cell_begs[i], cell_begs[i+1]-1));
+    /* Make sure we report enough table cells even if the current table contains
      * too few of them. */
-    while(k < col_count)
-        MD_CHECK(md_process_table_cell(ctx, cell_type, align[k++], 0, 0));
+    while(i < col_count)
+        MD_CHECK(md_process_table_cell(ctx, cell_type, align[i++], 0, 0));
     MD_LEAVE_BLOCK(MD_BLOCK_TR, NULL);
 
 abort:
-    free(pipe_offs);
+    free(cell_begs);
 
     ctx->table_cell_boundaries_head = -1;
     ctx->table_cell_boundaries_tail = -1;
@@ -5791,6 +5840,10 @@ md_start_new_block(MD_CTX* ctx, const MD_LINE_ANALYSIS* line)
     return 0;
 }
 
+/* Forward declarations */
+static int md_is_hr_line(MD_CTX* ctx, OFF beg, OFF* p_end, OFF* p_killer);
+static void* md_push_block_bytes(MD_CTX* ctx, int n_bytes);
+
 /* Eat from start of current (textual) block any reference definitions and/or
  * footnote definitions, and remember them.
  *
@@ -5803,6 +5856,8 @@ md_consume_link_reference_definitions(MD_CTX* ctx)
     MD_LINE* lines = (MD_LINE*) (ctx->current_block + 1);
     MD_SIZE n_lines = ctx->current_block->n_lines;
     MD_SIZE n = 0;
+    bool inject_hr = false;
+    OFF ignored;
 
     while(n < n_lines) {
         int n_consumed = 0;
@@ -5831,20 +5886,45 @@ md_consume_link_reference_definitions(MD_CTX* ctx)
         n += n_consumed;
     }
 
-    /* If there was at least one definition, we need to remove its lines from
-     * the block, or perhaps even the whole block. */
-    if(n > 0) {
-        if(n == n_lines) {
-            /* Remove complete block. */
-            ctx->n_block_bytes -= n * sizeof(MD_LINE);
-            ctx->n_block_bytes -= sizeof(MD_BLOCK);
-            ctx->current_block = NULL;
-        } else {
-            /* Remove just some initial lines from the block. */
-            memmove(lines, lines + n, (n_lines - n) * sizeof(MD_LINE));
-            ctx->current_block->n_lines -= n;
-            ctx->n_block_bytes -= n * sizeof(MD_LINE);
+    /* If no link ref. def. was detected, leave the block intact. */
+    if(n == 0)
+        return 0;
+
+    /* We may need to turn the first line after the link ref. def(s) into HR.
+     * (https://github.com/mity/md4c/issues/414) */
+    if(n < n_lines  &&  md_is_hr_line(ctx, lines[n].beg, &ignored, &ignored)) {
+        inject_hr = true;
+        n++;    /* Remove one more line below. */
+    }
+
+    if(n == n_lines) {
+        /* Undo the whole block. */
+        ctx->n_block_bytes -= n_lines * sizeof(MD_LINE);
+        ctx->n_block_bytes -= sizeof(MD_BLOCK);
+        ctx->current_block = NULL;
+    } else {
+        /* Remove some initial lines from the block. */
+        memmove(lines, lines + n, (n_lines - n) * sizeof(MD_LINE));
+        ctx->current_block->n_lines -= n;
+        ctx->n_block_bytes -= n * sizeof(MD_LINE);
+    }
+
+    if(inject_hr) {
+        MD_BLOCK* hr_block;
+
+        hr_block = md_push_block_bytes(ctx, sizeof(MD_BLOCK));
+        if(hr_block == NULL)
+            return -1;
+
+        if(ctx->current_block != NULL) {
+            memmove(ctx->current_block + 1, ctx->current_block,
+                    (sizeof(MD_BLOCK) + ctx->current_block->n_lines * sizeof(MD_LINE)));
+            hr_block = ctx->current_block;
+            ctx->current_block++;
         }
+
+        memset(hr_block, 0, sizeof(MD_BLOCK));
+        hr_block->type = MD_BLOCK_HR;
     }
 
     return 0;
@@ -5980,6 +6060,9 @@ md_is_hr_line(MD_CTX* ctx, OFF beg, OFF* p_end, OFF* p_killer)
 {
     OFF off = beg + 1;
     int n = 1;
+
+    if(!ISANYOF(beg, _T("-_*")))
+        return false;
 
     while(off < ctx->size  &&  (CH(off) == CH(beg) || CH(off) == _T(' ') || CH(off) == _T('\t'))) {
         if(CH(off) == CH(beg))
@@ -6200,6 +6283,7 @@ static const TAG s6[] = { X("search"), X("section"), X("summary"), Xend };
 static const TAG t6[] = { X("table"), X("tbody"), X("td"), X("tfoot"), X("th"),
                           X("thead"), X("title"), X("tr"), X("track"), Xend };
 static const TAG u6[] = { X("ul"), Xend };
+static const TAG v6[] = { X("video"), Xend };
 static const TAG xx[] = { Xend };
 
 #undef X
@@ -6215,7 +6299,7 @@ md_is_html_block_start_condition(MD_CTX* ctx, OFF beg)
      * tree to speed-up the search. */
     static const TAG* map6[26] = {
         a6, b6, c6, d6, xx, f6, xx, h6, i6, xx, xx, l6, m6,
-        n6, o6, p6, xx, xx, s6, t6, u6, xx, xx, xx, xx, xx
+        n6, o6, p6, xx, xx, s6, t6, u6, v6, xx, xx, xx, xx
     };
     OFF off = beg + 1;
     int i;
@@ -6430,7 +6514,7 @@ md_enter_child_containers(MD_CTX* ctx, int n_children)
             case _T('*'):
                 /* Remember offset in ctx->block_bytes so we can revisit the
                  * block if we detect it is a loose list. */
-                md_end_current_block(ctx);
+                MD_CHECK(md_end_current_block(ctx));
                 c->block_byte_off = ctx->n_block_bytes;
 
                 MD_CHECK(md_push_container_bytes(ctx,
@@ -6708,40 +6792,17 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
                 ctx->last_line_has_list_loosening_effect = false;
             } else {
                 line->type = MD_LINE_BLANK;
+                ctx->consecutive_blank_lines++;
                 ctx->last_line_has_list_loosening_effect = (n_parents > 0  &&
                         n_brothers + n_children == 0  &&
                         ctx->containers[n_parents-1].ch != _T('>'));
-
-    #if 1
-                /* See https://github.com/mity/md4c/issues/6
-                 *
-                 * This ugly checking tests we are in (yet empty) list item but
-                 * not its very first line (i.e. not the line with the list
-                 * item mark).
-                 *
-                 * If we are such a blank line, then any following non-blank
-                 * line which would be part of the list item actually has to
-                 * end the list because according to the specification, "a list
-                 * item can begin with at most one blank line."
-                 */
-                if(n_parents > 0  &&  ctx->containers[n_parents-1].ch != _T('>')  &&
-                   n_brothers + n_children == 0  &&  ctx->current_block == NULL  &&
-                   ctx->n_block_bytes > (int) sizeof(MD_BLOCK))
-                {
-                    MD_BLOCK* top_block = (MD_BLOCK*) ((char*)ctx->block_bytes + ctx->n_block_bytes - sizeof(MD_BLOCK));
-                    if(top_block->type == MD_BLOCK_LI)
-                        ctx->last_list_item_starts_with_two_blank_lines = true;
-                }
-    #endif
             }
             break;
         } else {
-    #if 1
-            /* This is the 2nd half of the hack. If the flag is set (i.e. there
-             * was a 2nd blank line at the beginning of the list item) and if
-             * we would otherwise still belong to the list item, we enforce
-             * the end of the list. */
-            if(ctx->last_list_item_starts_with_two_blank_lines) {
+            /* CommonMark requires a list item cannot begin with two (or more)
+             * blank lines so we may need to forcefully end the list.
+             * (See https://github.com/mity/md4c/issues/6) */
+            if(ctx->consecutive_blank_lines >= 2) {
                 if(n_parents > 0  &&  n_parents == ctx->n_containers  &&
                    ctx->containers[n_parents-1].ch != _T('>')  &&
                    n_brothers + n_children == 0  &&  ctx->current_block == NULL  &&
@@ -6756,10 +6817,9 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
                             line->indent -= MIN(line->indent, ctx->containers[n_parents-1].contents_indent);
                     }
                 }
-
-                ctx->last_list_item_starts_with_two_blank_lines = false;
             }
-    #endif
+            ctx->consecutive_blank_lines = 0;
+
             ctx->last_line_has_list_loosening_effect = false;
         }
 
@@ -6779,8 +6839,7 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
 
         /* Check for thematic break line. */
         if(line->indent < ctx->code_indent_offset
-            &&  off < ctx->size  &&  off >= hr_killer
-            &&  ISANYOF(off, _T("-_*")))
+            &&  off < ctx->size  &&  off >= hr_killer)
         {
             if(md_is_hr_line(ctx, off, &off, &hr_killer)) {
                 line->type = MD_LINE_HR;
@@ -7243,7 +7302,7 @@ md_process_doc(MD_CTX *ctx)
         MD_CHECK(md_process_line(ctx, &pivot_line, line));
     }
 
-    md_end_current_block(ctx);
+    MD_CHECK(md_end_current_block(ctx));
 
     MD_CHECK(md_build_ref_def_hashtable(ctx));
     if(ctx->parser.flags & MD_FLAG_FOOTNOTES)
