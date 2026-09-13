@@ -926,12 +926,12 @@ build/wasm/allocfail.o: src/allocfail.c src/allocfail.h
 # mdy_af_arm and mdy_af_total are exported because emscripten's getenv reads
 # its own ENV and cannot see the host's environment.
 $(WASM_AF_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o src/allocfail.h \
-                build/wasm/libmdyparse-af.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
+                build/wasm/libmdyparse-af.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
 	@mkdir -p build/wasm
 	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
 	  -include src/allocfail.h \
 	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o \
-	  build/wasm/libmdyparse-af.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
+	  build/wasm/libmdyparse-af.a build/wasm/liblexbor.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
 	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
 	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
 	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \

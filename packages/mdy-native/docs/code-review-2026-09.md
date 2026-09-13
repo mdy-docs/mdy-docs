@@ -70,8 +70,9 @@ what those checks do not reach.
 | B46 | ~~Medium~~ **fixed** | `markdown.c` | Raw HTML inside a `.md` paragraph was escaped rather than passed through; block-level was already right |
 | B47 | ~~Medium~~ **fixed** | `engine.c` / md4c | The sweep never saw a `.md`: three unchecked `strdup`s, and an allocation failure md4c discards |
 | B48 | ~~Low~~ **fixed** | md4c | A bracket that is not a footnote after all lost its `^`: `[^a b]` rendered `a b`, not `^a b` |
-| B49 | **High** | `.md` raw HTML | The `.md` tree keeps `raw` nodes — no rehype-raw here — so an ill-formed tag is never repaired and an unclosed one escapes its document |
+| B49 | ~~**High**~~ **fixed** | `.md` raw HTML | The `.md` tree kept `raw` nodes — no rehype-raw here — so no ill-formed tag was repaired and an unclosed one escaped its document |
 | B50 | Low | md4c | A link reference whose label ends in whitespace does not match its definition |
+| B51 | ~~Medium~~ **fixed** | `raw.c` / lexbor | The HTML parse was outside `check-alloc`, and segfaulted on 490 refusals when put inside |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -348,7 +349,7 @@ cycle 3:  4 hits, 34 misses    cycle 3:  34 hits,  4 misses
 RSS over 400 of them is 12.9 MB where B5's fix alone left it at 15.8 — a hit
 is a parse that does not happen.
 
-Regression test: `memo_key_checks` ([test/engine.c:690](../test/engine.c#L690)).
+Regression test: `memo_key_checks` ([test/engine.c:770](../test/engine.c#L770)).
 The key is not reachable from the API but its shadow is: a composed document's
 token carries the key of the render it stands for, and `$.text` hands the token
 back in the text. Two builds of one source name that render the same now and
@@ -561,7 +562,7 @@ than the eight bytes a header needs.
 **Fixed** with B3, as one change: the index check is a `FAIL` now and leaves
 through `done:`, which gives back the depth, the `current` and the `taint` it
 had taken. Pinned in the block that already asked for an index that is not
-there ([test/engine.c:3185](../test/engine.c#L3185)) — forty times over, and
+there ([test/engine.c:3310](../test/engine.c#L3310)) — forty times over, and
 then the document that IS there still renders. On the old engine the
 thirty-third of those exhausted the cycle guard and nothing rendered again.
 
@@ -977,7 +978,7 @@ The reference vanished and the definition's text came out behind the list as
 if it were a paragraph.
 
 **md4c had been parsing them all along.** This file asks for
-`MD_DIALECT_GITHUB` ([markdown.c:1214](../src/parse/markdown.c#L1214)), which
+`MD_DIALECT_GITHUB` ([markdown.c:1171](../src/parse/markdown.c#L1171)), which
 includes `MD_FLAG_FOOTNOTES`, so md4c reports `MD_SPAN_FOOTNOTE_REF`,
 `MD_BLOCK_FOOTNOTE_DEF_SECTION` and `MD_BLOCK_FOOTNOTE_DEF` — and there was a
 handler for none of the three. They fell through both switches, which is why
@@ -1012,7 +1013,7 @@ of its own:
   are appended to a tail `<p>`, so with no tail they go straight onto the item
   and the space that would have separated them goes too. The paragraph is
   built here either way and placed on the way out only if it earned it
-  ([markdown.c:853](../src/parse/markdown.c#L853)) — whether it earned it is
+  ([markdown.c:780](../src/parse/markdown.c#L780)) — whether it earned it is
   not known until the content has been seen.
 
 **Two things had to be true elsewhere before any of it worked.**
@@ -1091,7 +1092,7 @@ after    <p>a <b>x</b> b</p>     = node
 **One missing case**, and the same shape as B45's three:
 `MD_TEXT_HTML` had no `case` in the text callback, so it fell through
 `default:` into an ordinary text node and the writer escaped it
-([markdown.c:1116](../src/parse/markdown.c#L1116)). It makes a RAW node now,
+([markdown.c:1041](../src/parse/markdown.c#L1041)). It makes a RAW node now,
 which is what `MD_BLOCK_HTML` had been doing all along
 ([markdown.c:927](../src/parse/markdown.c#L927)).
 
@@ -1150,11 +1151,11 @@ is **B49** and the stage after this one.
 attributes, tags beside markdown emphasis, tags in list items, one in a TABLE
 cell (which goes through §4's foster-parenting), and the two that must stay
 escaped ([main.mdy:55](../fixture-awkward/main.mdy#L55)). `raw_html_checks`
-([test/engine.c:690](../test/engine.c#L690)) is five assertions, the last of
+([test/engine.c:770](../test/engine.c#L770)) is five assertions, the last of
 which is a `.mdy` document escaping the same bytes — so a change that reached
 across the two front ends would fail rather than pass quietly.
 
-#### B49 — the `.md` tree keeps `raw` nodes: there is no rehype-raw on this side (High)
+#### B49 — the `.md` tree kept `raw` nodes: there was no rehype-raw on this side (High) — FIXED
 
 **This finding was filed backwards, and the correction is the whole of it.**
 It said `check-markdown` "compares a tree that has not been through
@@ -1252,19 +1253,57 @@ without being re-tokenized. Matching it means matching a specification, which
 is the case for vendoring rather than writing: `docs/parser.md` already names
 lexbor, and the writer for the round trip exists here.
 
-A partial measure is worse than none. This file's own opening comment says a
-port that reasons the shapes out rather than taking them from the reference
-"gets them subtly wrong", and the rows above are separate rules, not one.
+A partial measure would have been worse than none. This file's own opening
+comment says a port that reasons the shapes out rather than taking them from
+the reference "gets them subtly wrong", and the rows above are separate rules,
+not one.
 
-What is cheap and worth doing first is the containment half on its own —
-closing at the document boundary what a document opened — because that is the
-one row with a consequence beyond a wrong tree. It would still be a
-divergence from node's output, so it is a decision rather than a fix.
+**Fixed by vendoring it.** `third_party/lexbor` is the HTML5 tokenizer and
+tree construction — five of lexbor's modules and one port file, 3.1 MB — and
+`src/parse/raw.c` is the bridge. Every row of the table above now agrees with
+node, the containment case included, and
+[test/engine.c:770](../test/engine.c#L770) pins all five.
 
-**B46 and B48 are not undone by this.** They fixed what `markdown.c` emits —
-an inline tag now reaches the tree as a `raw` node instead of escaped text,
-which is what node has before rehype-raw runs. This is the stage after that,
-and it is missing for the block kind exactly as much as for the inline kind.
+```
+check-markdown   1002/1774 -> 1193/1774
+commonmark        544/652  -> 598/652
+real              233/870  -> 370/870
+```
+
+with no category below its old number, and `check-sites`, `check-html` and
+`check-golden` unchanged — six real sites still byte-identical and golden
+needing no regeneration, because this fixes the TREE and the HTML those sites
+produce was already right. The binary is 3.3 MB to 4.2 MB.
+
+**What the bridge had to get right**, and each was measured rather than
+reasoned:
+
+- **Not serialise-and-reparse.** Serialising the tree and parsing it back
+  disagrees with rehype-raw on 373 of 869 real documents. rehype-raw drives
+  parse5's tree construction directly, so raw.c drives lexbor's dispatcher —
+  the same layer of the same algorithm.
+- **Text is pushed as a token; a start tag is written out and TOKENIZED.**
+  parse5 cannot do the second and lexbor can, so the tokenizer interns the
+  attribute names and manages its own state instead of this file reaching in
+  to do it by hand, which is what hast-util-raw must.
+- **A table's whitespace.** parse5 decides whitespace by the TOKEN TYPE and
+  hast-util-raw only ever sends `CHARACTER`, so node hoists a markdown table's
+  newlines out — that is hast-util-raw, not HTML5. lexbor looks at the
+  characters and is spec-correct, which took `ext-tables` to 1/12 until raw.c
+  set the flag that decision hangs on ([raw.c:128](../src/parse/raw.c#L128)).
+  §4's `foster_parent_table`, which wrote that one rule out by hand, is 73
+  lines deleted.
+- **No fallback.** "If the parse fails, keep the tree we had" is the obvious
+  shape and it is wrong: that tree is a different site, and 453 of
+  `check-alloc`'s ordinals said so on the first run
+  ([raw.c:368](../src/parse/raw.c#L368)).
+
+**B46 and B48 were not undone by it.** They fixed what `markdown.c` emits —
+an inline tag reaching the tree as a `raw` node rather than escaped text,
+which is what node has BEFORE rehype-raw runs. This was the stage after.
+
+581 of the corpus still differs, and that is now a question about what is in
+those documents rather than about a missing stage.
 
 #### B47 — sweeping the awkward fixture: three unchecked `strdup`s, and an allocation failure md4c drops (Medium) — FIXED
 
@@ -1397,6 +1436,56 @@ first two and leaves the third passing.
 
 The footnote differential is **15/15** now, where the entry was filed at
 14/15 and this was the one.
+
+#### B51 — lexbor could not be swept: it segfaults on a refused allocation (Medium) — FIXED
+
+Found by B49's bridge on its first run, and filed before it was understood.
+`check-alloc` swept 2,597 allocations of a `fixture-awkward` build and none of
+them were the HTML parse, because `liblexbor.a` is its own archive and the
+shim reaches the parse library by a forced `-include`. So the newest and
+largest thing in a `.md` document's making was the one stage outside the
+invariant.
+
+**Putting it inside took one line and did not work.** lexbor allocates through
+four function pointers it lets a caller replace, and under the shim `malloc`
+in this file already IS the shim's — so
+`lexbor_memory_setup(malloc, realloc, calloc, free)` is the whole of it. It
+counts: 2,597 allocations became 3,747. It also **segfaults on 490 of them**,
+inside lexbor.
+
+That is not a surprise on inspection. lexbor's own error paths return a status
+and its callers check one; what they do not do is survive a NULL from every
+allocation site, and surviving one is not a property upstream claims. Reading
+163 files to add it would be the wrong shape of work and a fork to maintain —
+`third_party/lexbor/README.md` says when patching a pinned dependency is the
+right answer, and this is not one of the cases.
+
+**The right answer was already in the tree.** xalloc.h states the rule in
+general: *if a NULL reaches something that reports it and stops, propagate; if
+a NULL turns into different output, it must not be NULL.* A NULL that turns
+into a SEGFAULT is the second case with the volume turned up. So lexbor is
+handed four functions that do not return NULL
+([raw.c:81](../src/parse/raw.c#L81)), each calling `mdy_oom_exit`
+([arena.c:12](../src/parse/arena.c#L12)) — which prints `mdy: out of memory`
+and exits 1, and that is precisely what the sweep asks a run that cannot
+produce the site to do.
+
+```
+lexbor handed the failing allocator     490 of 3,747 crash
+lexbor handed one that cannot fail      3,747 refusals, every one reported
+```
+
+Control: putting `malloc` back brings the same 490 back.
+
+**It is better outside the sweep too**, which is the part that makes this a
+fix rather than a way of passing a check. A real out-of-memory during an HTML
+parse used to be a segfault in a parser's inner loop; it is a build that says
+so and stops.
+
+The wasm sweep needed the archive too — `check-alloc-wasm` was linking the
+instrumented parse library without lexbor beside it, so the module did not
+link at all once raw.c referenced it. Both wasm targets carry it now:
+`check-alloc-wasm` is 3,744.
 
 #### B50 — a link reference whose label ends in whitespace does not match its definition (Low)
 
@@ -2425,7 +2514,7 @@ reach it.
   nowhere else, so a scalar that could not grow came back **truncated** — a
   title that meant something its author did not write. Same in `html.c`, where
   a `class` list was built in a temporary buffer whose `ok` nobody read
-  ([html.c:274](../src/parse/html.c#L274)). And `mdy_alloc` — B24's "sixteen
+  ([html.c:281](../src/parse/html.c#L281)). And `mdy_alloc` — B24's "sixteen
   sites in block.c" — had a contract that twenty-six of its forty-two callers
   relied on and which was **not true**: it ends the process now
   ([arena.c:22](../src/parse/arena.c#L22)), and `internal.h` says why. A
@@ -3126,19 +3215,23 @@ date.
 
 **What is left, in the order it is worth doing.**
 
-1. **B49**, and it is first because it is the largest thing left and the one
-   with a consequence outside a tree comparison: there is no rehype-raw on
-   this side, so 526 of 869 real documents keep `raw` nodes where node has
-   elements, no ill-formed tag is ever repaired, and an unclosed one escapes
-   its own document onto the page. It is HTML5 tree construction, by
-   vendoring a parser or writing one — not a morning, and not something a
-   partial measure improves. The containment half alone (closing at the
-   document boundary what a document opened) is separable and cheap, and is a
-   decision rather than a fix, because it would still not be node's output.
+1. ~~**B49**, the missing rehype-raw.~~ **Done** — lexbor is vendored and
+   `src/parse/raw.c` is the bridge. `check-markdown` went 1002/1774 to
+   1193/1774 with no category falling, and B51 came out of it.
 
-   It is also the correction that matters most in this file: B49 was filed
-   saying `check-markdown` measured the wrong thing, and it does not. Its
-   numbers are honest and had been reporting this all along.
+   It is also the correction that mattered most in this file: B49 was filed
+   saying `check-markdown` measured the wrong thing, and it did not. Its
+   numbers were honest and had been reporting a High finding all along, to
+   nobody, which is what item 2 is about.
+
+   **What is left of it is 581 documents** the corpus still calls different,
+   and that is now a question about what is IN them rather than about a
+   missing stage. The categories say where to look first: `ext-admonitions`
+   0/5 has never worked at all, `ext-subscripts` 7/11 and
+   `ext-permissive-autolinks` 9/14 are md4c extensions against remark
+   plugins, and `gfm` 31/39 is the specification this engine most claims to
+   implement. Counting those before opening any of them is the same mistake
+   B46 was filed on, so: measure what the 581 have in common first.
 2. ~~**The public API that `test/engine.c` never calls.**~~ **Done** —
    `api_checks`, 23 assertions over all twelve, with the knobs tested as
    contrasts so that an engine ignoring one would fail rather than pass. See

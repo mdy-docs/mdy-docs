@@ -54,6 +54,48 @@ typedef struct {
     int failed;
 } Raw;
 
+/* ---- lexbor's allocator ---------------------------------------------------
+ *
+ * lexbor is given four functions that do not return NULL, for the reason
+ * xalloc.h states in general: if a NULL turns into different output, or into
+ * a crash, it must not be NULL.
+ *
+ * It was measured rather than assumed. Handing lexbor the failing allocator
+ * directly — under the shim `malloc` here IS the shim's, so
+ * `lexbor_memory_setup(malloc, …)` is all it takes — refuses the nth
+ * allocation of a build and then segfaults on 490 of 3,747 ordinals, inside
+ * lexbor. Its own error paths return a status and its callers check one; what
+ * they do not do is survive a NULL from every site, and surviving one is not
+ * a property upstream claims. Reading 163 files to add it to a pinned
+ * dependency is the wrong shape of work, and a fork to maintain.
+ *
+ * `mdy_oom_exit` is the right answer and was already here: it says so on
+ * stderr and exits non-zero, which is exactly what the sweep's invariant asks
+ * a run that cannot produce the site to do. The 490 crashes are 490 clean
+ * refusals now, and the HTML parse is inside check-alloc rather than the one
+ * stage of a `.md` document's making that it could not reach. (B51.)
+ *
+ * It is better in a real out-of-memory too: a build that cannot allocate says
+ * so instead of dying in a parser's inner loop.
+ */
+static void *raw_malloc(size_t n) {
+    void *p = malloc(n);
+    if (p == NULL) mdy_oom_exit();
+    return p;
+}
+
+static void *raw_realloc(void *p, size_t n) {
+    void *q = realloc(p, n);
+    if (q == NULL && n != 0) mdy_oom_exit();
+    return q;
+}
+
+static void *raw_calloc(size_t n, size_t size) {
+    void *p = calloc(n, size);
+    if (p == NULL) mdy_oom_exit();
+    return p;
+}
+
 /* ---- out: the tree we have, into the parser ------------------------------ */
 
 /* The dispatcher answers false when the token must be re-dispatched — a mode
@@ -326,22 +368,7 @@ static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n) {
 int mdy_raw_reparse(mdy_doc *doc, mdy_node *root) {
     if (!doc || !root) return 0;
 
-    /*
-     * NOT `lexbor_memory_setup(malloc, realloc, calloc, free)`, which would
-     * put lexbor's allocations under the failing allocator — the shim renames
-     * those four here — and is the obvious thing to want.
-     *
-     * Measured: it works, and lexbor cannot take it. Refusing the nth
-     * allocation across a build of fixture-awkward then segfaults on 490 of
-     * 3,747 ordinals, inside lexbor rather than here. Its own error paths
-     * return a status and its callers check one; what they do not do is
-     * survive a NULL from every allocation site, which is a property upstream
-     * has not claimed and this project cannot add to a pinned dependency.
-     *
-     * So the HTML parse is the one stage of a `.md` document's making that
-     * check-alloc does not reach, and that is a gap rather than a decision.
-     * It is B51.
-     */
+    lexbor_memory_setup(raw_malloc, raw_realloc, raw_calloc, free);
 
     Raw r = { .doc = doc };
     r.parser = lxb_html_parser_create();
