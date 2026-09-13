@@ -70,9 +70,21 @@ static void on_object_end(void *c) { pop(c); }
 
 bjv *bjv_decode(const uint8_t *data, size_t len) {
     Builder b = { 0 };
+    /*
+     * By NAME. This was positional, with `on_num` appearing four times — for
+     * int, float, date and pointer — so a field reordered or inserted in
+     * binjson's header would have kept compiling and quietly bound the wrong
+     * callback to the wrong type. engine_value.c fills the same struct with
+     * designated initialisers; binjson is a separate repository and has been
+     * edited from here (B37), which is exactly the case this guards. (§4.)
+     */
     bj_visitor v = {
-        on_null, on_bool, on_num, on_num, on_string, on_binary, on_oid, on_num, on_num,
-        on_array_begin, on_array_end, on_object_begin, on_key, on_object_end, &b
+        .on_null = on_null, .on_bool = on_bool,
+        .on_int = on_num, .on_float = on_num, .on_date = on_num, .on_pointer = on_num,
+        .on_string = on_string, .on_binary = on_binary, .on_oid = on_oid,
+        .on_array_begin = on_array_begin, .on_array_end = on_array_end,
+        .on_object_begin = on_object_begin, .on_key = on_key, .on_object_end = on_object_end,
+        .ctx = &b,
     };
     int rc = bj_decode(data, len, &v, NULL);
     free(b.pending_key);

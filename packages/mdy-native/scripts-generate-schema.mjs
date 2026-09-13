@@ -15,10 +15,20 @@
  * The two regex rules (`aria-`, `data-`) stay as code in attrs.c; everything
  * else is a sorted table here so the lookups can bisect.
  */
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 const base = process.argv[2];
 if (!base) throw new Error('usage: scripts-generate-schema.mjs <path to mdy-docs>');
+/*
+ * pathToFileURL, not `file://` + the path. A RELATIVE base — which is what
+ * the line above documents — makes `file://../..`, and a URL reads what
+ * follows `//` as the HOST: node answers ERR_INVALID_FILE_URL_HOST and the
+ * generator has never run as its own instructions say. (§4.)
+ */
+const root = pathToFileURL(resolve(base) + '/');
 const { defaultSchema: s } = await import(
-  new URL('src/parse/sanitize.js', `file://${base.replace(/\/?$/, '/')}`)
+  new URL('src/parse/sanitize.js', root)
 );
 
 const sorted = (a) => [...a].sort();

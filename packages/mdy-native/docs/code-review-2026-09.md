@@ -62,6 +62,7 @@ what those checks do not reach.
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
 | B35 | ~~Low~~ **fixed** | `cli.c` dev server | The publish dedupe list grew without bound — and silently dropped a value that changed back |
 | B43 | ~~Low~~ **fixed** | `check-alloc` | The sweep covered `mdy build` alone; document mode and the server held fourteen more |
+| B44 | Low | `markdown.c` | A list item holding one non-paragraph block is tight where node's is loose |
 | B36 | ~~Medium~~ **fixed** | `engine_value.c` | `.inf`/`.nan` crossed into a document as numbers; node sends `null` |
 | B37 | ~~High~~ **fixed** | **binjson** encoder | A YAML integer at or above 2^53 silently drops the document's WHOLE front matter |
 | B38 | ~~Low~~ **fixed** | `yaml.c` | `core_int` accumulates digits in a double: a 17-digit integer lands on the wrong one |
@@ -91,7 +92,7 @@ and `test/yaml.c`.)
 and the mapping travels beside the document in a new `ident_data`
 ([engine_internal.h:227](../src/engine_internal.h#L227)), merged in `mdy_engine_open` after the
 document's own fields and before `path`
-([engine.c:580](../src/engine.c#L628)) — which is where mdy-docs puts a
+([engine.c:580](../src/engine.c#L646)) — which is where mdy-docs puts a
 source's `meta` (`parseDocuments`, `src/mdy.js`). The file's document is now
 the same placeholder every other non-MDY file gets, so a `---` or a `+++` line
 among its bytes can no longer be read as document structure, and the identity
@@ -158,7 +159,7 @@ text needed a `\n` folded into each separator to keep it, which is gone — and
 a directory with no source files in it is a set of zero documents rather than
 one empty one, which is also what node reports. `mdy_engine_open` splits and
 then hands the documents to a shared `open_documents`
-([engine.c:435](../src/engine.c#L450)), so both ways in run the same code.
+([engine.c:435](../src/engine.c#L468)), so both ways in run the same code.
 
 Regression test: `blank_file_checks`
 ([test/engine.c:343](../test/engine.c#L343)), which fails on the old code in
@@ -188,14 +189,14 @@ source, it is just no longer at risk of being re-split.
 #### B3 — `$.render` of a `.md` document returns an empty or wrong token (High) — FIXED
 
 **Fixed.** `render_tree_out` has one exit. The markdown branch sets `out` and
-jumps to `done:` ([engine.c:3003](../src/engine.c#L3131)) like every other
+jumps to `done:` ([engine.c:3003](../src/engine.c#L3148)) like every other
 path, so `e->last_render_key` is written for it too and `render_native` parks
 the tree under the key of the render that actually made it.
 
 The other two exits went with it, which is B12 below. The index check is a
-`FAIL` ([engine.c:2992](../src/engine.c#L3120)) and gives back the depth and
+`FAIL` ([engine.c:2992](../src/engine.c#L3137)) and gives back the depth and
 the `current` it had already taken; the cycle guard moved ABOVE everything
-`done:` restores ([engine.c:2957](../src/engine.c#L3084)), which is what
+`done:` restores ([engine.c:2957](../src/engine.c#L3101)), which is what
 earns it the right to skip the label — there is nothing yet to give back.
 Before the move it silently cleared the enclosing render's `taint` on its way
 out.
@@ -241,13 +242,13 @@ The five `check-sites` sites never render a `.md` through `$.render`
 #### B4 — `$.find` is O(N³) in the number of documents (High) — FIXED
 
 **Fixed.** The set carries a map from `_id` to document index
-([engine.c:789](../src/engine.c#L854)) — open addressing on the 24 hex
+([engine.c:789](../src/engine.c#L872)) — open addressing on the 24 hex
 characters, built the first time a query asks and freed with the set, so it is
 exactly as valid as `ids` is. `index_of_id`
-([engine.c:809](../src/engine.c#L880)) is a lookup rather than a scan.
+([engine.c:809](../src/engine.c#L898)) is a lookup rather than a scan.
 
 The ordering pass reads each hit's `_id` ONCE
-([engine.c:870](../src/engine.c#L962)) and sorts the hits by the index it
+([engine.c:870](../src/engine.c#L980)) and sorts the hits by the index it
 resolves to, instead of walking every document position against every hit.
 Two allocations per inner step went with it: the `_id` atom was being interned
 again on every one of them, and the id itself converted to UTF-8 — the units
@@ -280,7 +281,7 @@ and `$.render` by document, by query and by index.
 #### B5 — The nisaba collection is never closed (Medium) — FIXED
 
 **Fixed.** `close_set` closes the collection and puts the handle back to -1
-([engine.c:411](../src/engine.c#L426)), so a set's data dies with the set.
+([engine.c:411](../src/engine.c#L444)), so a set's data dies with the set.
 `nis_close` was finished first ([nis.c:232](../src/nis.c#L232)): it freed the
 stores but never the B+trees over them, which is a tree's buffers per index
 plus one for the primary store. The two open paths that could leak a tree on
@@ -312,8 +313,8 @@ is the whole set. On the old engine two of its three assertions fail.
 #### B6 — The memo never hits across builds (Medium) — FIXED
 
 **Fixed.** `document_fingerprint` hashes the record without `_id`
-([engine.c:2898](../src/engine.c#L3023)). `canonical_hash` grew one parameter
-for it ([engine.c:2804](../src/engine.c#L2929)) — a single key left out, of
+([engine.c:2898](../src/engine.c#L3040)). `canonical_hash` grew one parameter
+for it ([engine.c:2804](../src/engine.c#L2947)) — a single key left out, of
 the TOP object only, since a value nested inside may legitimately be called
 the same thing and is the document's own business. mdy-docs hashes
 `doc.data`, which is this record before nisaba puts an id on it.
@@ -322,7 +323,7 @@ Enabling cross-set hits needed one thing more. The memo is shared by every set
 in the process, and two documents with the same text and the same record still
 render differently under a different element allowlist, a different task form
 or different values in scope — so those go into the fingerprint beside the
-record ([engine.c:2885](../src/engine.c#L3010)). mdy-docs folds in its own
+record ([engine.c:2885](../src/engine.c#L3027)). mdy-docs folds in its own
 equivalent, the native names a set offers, and gives the same reason. Nothing
 had needed it before because `_id` was keeping every set's keys apart by
 accident.
@@ -376,7 +377,7 @@ Four places enforce it, which is every way a value gets deep:
   sixty-thousand-deep tree in two lines of its own code. Past the limit the
   branch is dropped, which is the answer the parser gives text nested that
   deep.
-- `canonical_hash` ([engine.c:2813](../src/engine.c#L2938)) — the same document
+- `canonical_hash` ([engine.c:2813](../src/engine.c#L2955)) — the same document
   can hand such an object to `$.render` as its request, and the memo key walks
   it. Past the limit there is NO key: hashing a marker and carrying on would
   make two different requests hash alike, and a key that cannot tell them
@@ -501,12 +502,12 @@ before the routing, not be folded into it. `dev_drain`, the in-process path,
 does not take messages it cannot render either
 ([cli.c:1500](../src/cli.c#L1536)); they stay queued for the drain after the
 next good build. And `mdy_engine_page_index` and `mdy_engine_document_path`
-tolerate a NULL engine ([engine.c:3261](../src/engine.c#L3389)), which is the
+tolerate a NULL engine ([engine.c:3261](../src/engine.c#L3406)), which is the
 convention `mdy_engine_count` already sets in that file.
 
 **The dev server has a test now** — its first, which is the real reason this
 went unnoticed. `test/dev.test.js` with a `check-dev` target
-([Makefile:271](../Makefile#L295)) and a CI step: it spawns the binary on a
+([Makefile:271](../Makefile#L296)) and a CI step: it spawns the binary on a
 site that does not compile, waits for the banner, POSTs a delivery, and
 asserts 500, the `[hold]` line, and that the process is still running. Then it
 fixes the site, waits for the rebuild and POSTs again, which is the half that
@@ -589,11 +590,11 @@ in the tree has noticed.
 
 **Fixed, in three places rather than one.** `$` is built in the guest by
 `wrap()`, and `count` is the only member of it that is not a call
-([engine.c:2510](../src/engine.c#L2636)). mdy-docs can write the number in as a
+([engine.c:2510](../src/engine.c#L2654)). mdy-docs can write the number in as a
 literal because it builds a program per document; this wrapper is compiled once
 and reused for every render of the document — that is what makes the request an
 argument — so the number arrives on `$$` beside `__scope` and `__wantResponse`
-([engine.c:3098](../src/engine.c#L3226)) and is read at object construction, so
+([engine.c:3098](../src/engine.c#L3243)) and is read at object construction, so
 `$.count` is a plain number to the document either way.
 
 The third place is the memo, and it is the half that was not obvious. **The
@@ -603,7 +604,7 @@ second build in the same process — which is what `mdy dev` is — would then
 serve each of them the render made when the set was smaller, with `$.count`
 frozen at the old number in a page that is otherwise correct and reports
 nothing. So the size goes into the fingerprint beside the knobs
-([engine.c:3069](../src/engine.c#L3086)), which is the same argument that
+([engine.c:3069](../src/engine.c#L3103)), which is the same argument that
 comment already makes for the element allowlist: what the ENGINE brings to a
 render belongs in the key.
 
@@ -694,7 +695,7 @@ Three changes, each matching a decision node makes for a reason:
   wins over a data file's own — checked, with a `.yaml` that declares
   `path: i-said-this` and still resolves to `note.yaml` on both engines.
 - **`$.data` and `res.data` carry no store id**
-  ([engine.c:955](../src/engine.c#L1070)) — the rule `wrap()`'s `__answer`
+  ([engine.c:955](../src/engine.c#L1088)) — the rule `wrap()`'s `__answer`
   already applied to the response, now applied where the document reads it.
 
 Seven checks in `test/engine.c`, four in document mode and three over a
@@ -762,7 +763,7 @@ changed. The first fails without the fix; the second passes either way, on
 purpose. 778 pass in mdy-docs' suite.
 
 **The engines agree now.** This engine already put `e->count` in its memo key
-with B29 ([engine.c:3081](../src/engine.c#L3098)), and `count_checks` in
+with B29 ([engine.c:3081](../src/engine.c#L3115)), and `count_checks` in
 `test/engine.c` has this test's twin — written when the divergence was real,
 and now the two sides of one behaviour. The comments in `engine.c` and
 `test/engine.c` saying mdy-docs *has* this bug are corrected: it had it. The
@@ -879,6 +880,42 @@ is satisfied by a broken implementation: "always send" passes the first,
 "never send" the second. Against the old rule it fails on exactly the
 changed-back assertion.
 
+#### B44 — a list item holding one non-paragraph block is tight where node's is loose (Low)
+
+Found while checking the table shapes for §4's foster-parenting fix, and
+separate from it: it has nothing to do with tables.
+
+```
+- > quoted
+```
+
+```
+node  li: [ text("\n"), blockquote, text("\n") ]
+C     li: [ blockquote ]
+```
+
+remark-rehype wraps a list item's children either LOOSE — a newline before the
+first, between each pair, and after the last — or TIGHT, which is between each
+pair and nowhere else. The two engines disagree about which a list item gets
+when its single child is a block that is not a paragraph. A `- hi` agrees
+(both tight), and `- hi\n\n- there` agrees (both loose); what differs is the
+one-block case.
+
+It shows for a blockquote, and for a table, and would for any block a list
+item can hold alone. The visible effect is whitespace in the tree and in the
+HTML around it, which is what B3's class of bug was made of: nothing looks
+wrong until a document indexes its own `$.text`.
+
+Not fixed here because the fix is in `list_tight`'s rule rather than in the
+table path, and §4's change was already the table path. What decides it on
+node's side is mdast-util-to-hast's `listItem` handler — its `loose` is the
+list's `spread`, ORed with whether the item has more than one child *or* a
+single child that is not a paragraph — and that last clause is the one this
+engine does not have.
+
+`check-sites` does not see it: no site here puts a bare block in a list item.
+The table shapes that do are in §4's differential, eleven of twelve agreeing.
+
 #### B43 — the allocation sweep covered one command (Low) — FIXED
 
 Filed after B35, where two unchecked allocations turned up in a file B24 had
@@ -910,13 +947,13 @@ reallocs and writes on the next line. Both segfault.
 The other two are in shared code and matter more:
 
 - `mdy_data_extract` returning NULL was taken as "this body has no ```data
-  fences" ([engine.c:539](../src/engine.c#L539)). A body with none comes back
+  fences" ([engine.c:539](../src/engine.c#L557)). A body with none comes back
   as an empty set; NULL means it could not allocate. So a document lost every
   fence it had — its data and its tags simply were not there — on a build that
   reported success. `examples/hashtags.mdy` lost a tag line at fifteen
   different ordinals.
 - `oid_map_build` failing made `index_of_id` answer −1
-  ([engine.c:870](../src/engine.c#L870)), which is a real answer meaning "no
+  ([engine.c:870](../src/engine.c#L888)), which is a real answer meaning "no
   document of this set has that id". Every hit was then dropped and `$.find`
   quietly returned fewer documents than matched. It does not fail now.
 
@@ -962,7 +999,7 @@ HTTP round trip and a report, and `test/dev.test.js` already drives it against
 a wedged one. That is a gap, and a small one, stated rather than closed.
 
 `make check-alloc-doc` and `make check-alloc-dev`
-([Makefile:684](../Makefile#L684)) run these; `check-alloc-all` is all of it,
+([Makefile:684](../Makefile#L698)) run these; `check-alloc-all` is all of it,
 about eight minutes, and CI runs that.
 
 #### B36 — `.inf` and `.nan` crossed into a document as numbers (Medium) — FIXED
@@ -1129,7 +1166,7 @@ after   <img src="http://a?x" alt="i" title="cap">      node the same
 `alt` is not known until the span closes — it is the children, gathered — so
 it was set last. But `new_prop` replaces a repeated name **in place**, so
 claiming the slot between `src` and `title` on the way in and filling it on
-the way out is enough ([markdown.c:577](../src/parse/markdown.c#L672)).
+the way out is enough ([markdown.c:577](../src/parse/markdown.c#L753)).
 
 Every `<img>` with a title differed before. Three checks: with a title, without
 one, and an empty `alt` that still holds its place. `check-html`'s 642
@@ -1230,9 +1267,9 @@ them back beside the status. If that status were ever lost, a caller would be
 given a half-written site with nothing to say it was half-written, which is
 the exact failure B24 was about.
 
-`build/wasm/mdy-native-af.mjs` ([Makefile:773](../Makefile#L803)) is the wasm
+`build/wasm/mdy-native-af.mjs` ([Makefile:773](../Makefile#L847)) is the wasm
 module built against the same shim, and `make check-alloc-wasm`
-([Makefile:800](../Makefile#L830)) sweeps it. Two things it needed that the
+([Makefile:800](../Makefile#L874)) sweeps it. Two things it needed that the
 native sweep did not:
 
 - **Arming from outside.** emscripten's `getenv` reads its own `ENV` object and
@@ -1272,7 +1309,7 @@ cores there are:
 All four corpora are clean, `fixture-pkg` (2,125) included — which had never
 been swept before and is the only one with an import graph.
 `make check-alloc ALLOC_SITE=<dir>` picks one; `make check-alloc-all`
-([Makefile:670](../Makefile#L697)) is all three at about seven minutes.
+([Makefile:670](../Makefile#L711)) is all three at about seven minutes.
 
 **And they run.** Both are in `.github/workflows/native.yml` now —
 `check-alloc-all` on the Linux matrix leg, `check-alloc-wasm` in the wasm job.
@@ -1680,7 +1717,7 @@ reach it.
   both the model for the others and the evidence that `null` is the answer.
   The real sites were [ingest.c:34](../src/ingest.c#L34),
   [engine_value.c:375](../src/engine_value.c#L380),
-  [bjval.c](../src/bjval.c#L115), [ast.c](../src/parse/ast.c#L258) and
+  [bjval.c](../src/bjval.c#L127), [ast.c](../src/parse/ast.c#L258) and
   [html.c](../src/parse/html.c#L193).
 
   The reordering is not the same change at each. Where a double becomes JSON
@@ -1757,7 +1794,7 @@ reach it.
   compiled against an allocator that refuses the *n*th request and only that
   one ([allocfail.c](../src/allocfail.c#L7)); a force-included header does the
   renaming, so no source file knows it exists and the real build is untouched.
-  `check-alloc` ([Makefile:655](../Makefile#L667)) sweeps *n* across a whole
+  `check-alloc` ([Makefile:655](../Makefile#L681)) sweeps *n* across a whole
   build of `fixture` — 1,809 of them, 54 seconds — against one invariant:
 
   > a run that exits 0 produced the **same site** as an uninterfered one; a run
@@ -1826,23 +1863,23 @@ reach it.
   ([engine_walk.c:356](../src/engine_walk.c#L340)), `cache_put`
   ([engine_walk.c:662](../src/engine_walk.c#L638)), the composition tokens
   ([engine_compose.c:95](../src/engine_compose.c#L95)), `tokenize_native`
-  ([engine.c:39](../src/engine.c#L39)), the contents list and the text walk it
-  uses ([collect_headings](../src/engine.c#L1694),
-  [collect_text_into](../src/engine.c#L295)), `canonical_hash_deep`
-  ([engine.c:3013](../src/engine.c#L3030)), `set_context_json`
-  ([engine.c:703](../src/engine.c#L715)), the resize dedupe table
-  ([engine.c:2230](../src/engine.c#L2247)) and `absolute`
+  ([engine.c:39](../src/engine.c#L57)), the contents list and the text walk it
+  uses ([collect_headings](../src/engine.c#L1712),
+  [collect_text_into](../src/engine.c#L313)), `canonical_hash_deep`
+  ([engine.c:3013](../src/engine.c#L3047)), `set_context_json`
+  ([engine.c:703](../src/engine.c#L733)), the resize dedupe table
+  ([engine.c:2230](../src/engine.c#L2265)) and `absolute`
   ([cli.c:261](../src/cli.c#L262)).
 
   **Three that needed a new channel.**
 
-  `run_query_in` ([engine.c:888](../src/engine.c#L905)) is the one worth
+  `run_query_in` ([engine.c:888](../src/engine.c#L923)) is the one worth
   naming: nisaba reports an exhausted allocation properly, all the way out
   through `dc_find`'s negative return — and this **threw that away** and
   answered with an empty array. It is the only place in the engine where a
   foreign error code was dropped rather than missing, which is why it survived
   reading. `$.find`, `$.findOne`, `$.render` and `$.text` now say which
-  happened. `document_record` ([engine.c:1023](../src/engine.c#L1040)) did the
+  happened. `document_record` ([engine.c:1023](../src/engine.c#L1058)) did the
   same with `{}` for a document looked up by its *own* id — never "not found",
   always a page built with no data.
 
@@ -1967,7 +2004,7 @@ reach it.
   FIXED.** `snprintf` returns `int`, so a document over two gigabytes overflows
   it and the cast to `size_t` makes `out + o` an address nowhere near the
   buffer — AddressSanitizer's `negative-size-param` on a 3.6 GB input. The big
-  pieces are `memcpy` now ([engine.c:2605](../src/engine.c#L2731)), which has
+  pieces are `memcpy` now ([engine.c:2605](../src/engine.c#L2749)), which has
   no `int` in the path and reads more plainly besides.
 
   The scope lines keep `snprintf`: each is one short identifier twice, the
@@ -2228,7 +2265,7 @@ than a live one — every caller uses the result before anything can call the
 function again — and are left as they are.
 
 **Long functions with several exits.** `render_tree_out`
-([2925–3234](../src/engine.c#L3141-L3451), ~300 lines) manages seven GC roots
+([2925–3234](../src/engine.c#L3158-L3468), ~300 lines) manages seven GC roots
 and a `FAIL` macro that jumps to `done:`. It had three early returns that
 *bypassed* `done:` — one was B3, another B12, the third silently cleared the
 enclosing render's `taint` — and it has one exit now. Length is what let three
@@ -2247,9 +2284,9 @@ what is left is the risk that a fourth arrives, against the risk of putting
 one there while refactoring. That trade is worth taking when there is a
 behavioural reason to open the function, and it has not come up.
 
-**Process-global state.** The memo tables ([engine.c:2857](../src/engine.c#L3050))
+**Process-global state.** The memo tables ([engine.c:2857](../src/engine.c#L3067))
 and `mdy_engine_rotate_memo(void)`, the nisaba slot table (`nis.c`),
-`lookup_import`'s `static char path[1024]` ([1145](../src/engine.c#L1305)),
+`lookup_import`'s `static char path[1024]` ([1145](../src/engine.c#L1323)),
 `seen_sources` in cli.c, the OID statics in ingest.c.
 
 **Also not done, and for a better reason than the first pass had.** Taking the
@@ -2307,7 +2344,7 @@ prerequisite now.
 
 ~~What is still true: every engine binary compiles from source in one `cc`
 invocation, with no object files~~ — **also fixed, and it was the larger
-half.** One object per source ([Makefile:484](../Makefile#L509)), and three
+half.** One object per source ([Makefile:484](../Makefile#L516)), and three
 binaries that link them; `build/mdy` and `build/engine-test` share theirs,
 ASan has its own because its flags differ.
 
@@ -2326,7 +2363,7 @@ that was wrong in the safe direction is still wrong, and editing
 `fsx.h` exactly seven.
 
 Rules are generated per source with `$(eval)` rather than found by a `vpath`
-([Makefile:498](../Makefile#L530)): the sources come from four directories, two
+([Makefile:498](../Makefile#L537)): the sources come from four directories, two
 outside this tree, and a global `vpath %.c` would also be consulted for the
 parser's and the tests', which resolve by exact path and should keep doing so.
 Object names are basenames, so two sources may not share one — thirty-one are
@@ -2356,7 +2393,7 @@ self-inflicted. Each time the result described a different binary than the one
 named.
 
 There is nothing a Makefile can do about it, so the Makefile says so
-([Makefile:60](../Makefile#L64)) — and only when a `check-` target is what was
+([Makefile:60](../Makefile#L65)) — and only when a `check-` target is what was
 asked for, since that is where believing a stale result costs something.
 Ordinary builds stay quiet.
 
@@ -2376,30 +2413,117 @@ and the broker; it never calls `render_text`, `render_json`, `page_index`,
 `document_path`, `set_scope_json`, `set_response`, `on_message`,
 `set_split`/`sanitize`/`tasks`, `set_context_json`, `encode_json`,
 `root_count`/`root_at` or `rotate_memo` — those are covered only by the 34
-CLI cases, which CI runs on Linux alone. `httpd.c`, `http.c` and `watch.c`
-have no test of any kind. `mdy dev` (about 900 lines across four files) has
-ONE, `test/dev.test.js`, added with B10's fix and covering exactly the path
-that bug was on — `test/serve.test.js` exists upstream and `docs/cli-plan.md`
-names running it as Phase 5's exit criterion, and nothing still wires that up.
-The
-differential harnesses (`compare`, `check-html`, `check-script`,
-`check-yaml`, `check-links`, `check-markdown`) depend on a corpus outside the
-repository and never run in CI; `test/compare.mjs` exits 0 whatever it finds.
+CLI cases, which CI runs on Linux alone. The differential harnesses
+(`compare`, `check-html`, `check-script`, `check-yaml`, `check-links`,
+`check-markdown`) depend on a corpus outside the repository and never run in
+CI; `test/compare.mjs` exits 0 whatever it finds.
 
-The most valuable single addition is a sixth `check-sites` fixture built from
-the awkward cases: an empty `.mdy`, a `.yaml` starting with `---` and one
-containing `+++`, a file name with a quote, a `.md` rendered through
-`$.render` and another passed to `$.text`, a 70-column table, a corrupt
-`.tif`, and a `$.find({})` over a few hundred documents with a time budget.
+`httpd.c`, `http.c` and `watch.c` had no test of any kind; `mdy dev` had one.
+That is less true than it was — `test/dev.test.js` is eleven tests now, and
+B43's sweep drives the server, the watcher and the HTTP layer through 1,889
+allocation failures apiece.
 
-**Generated tables have no guard.** `src/toolkit.h`, `emoji_table.h`,
-`props_table.h` and `schema_table.h` are generated from packages in
-`node_modules`, but no make target regenerates or compares them, and the
-invocation each file documents (`node scripts-generate-props.mjs ../..`) fails
-with `ERR_INVALID_FILE_URL_HOST` because the scripts build a `file://` URL
-from a relative path; they work only with an absolute one. (All four are
-currently in sync.) A `check-generated` target that diffs generator output
-against the checked-in headers would catch a `property-information` upgrade.
+**The sixth `check-sites` fixture is built** — `fixture-awkward`
+([Makefile:651](../Makefile#L651)), a site made of the inputs that WERE bugs:
+an empty `.mdy` and a whitespace-only one (B2), a `.yaml` whose first line is
+`---` and one carrying `+++` inside a block scalar (B1), a `.md` reached
+through both `$.render` and `$.text` (B3), a seventy-column table (B20), a
+`.tif` whose header points its IFD past the end of the file (B11), and the
+whole set's order emitted as JSON, which is what B1 and B2 moved. Its
+`main.mdy` names the finding each file stands on.
+
+**It found a bug on its first run**, which is the argument for it in one line.
+`wide.html` differed — and not by length: **1,892 bytes on both sides**, the
+same newlines in a different place.
+
+```
+node   <table><thead><tr><th>…       preceded by eleven newlines
+C      <table>\n<thead>\n<tr>\n…     with the newlines inside it
+```
+
+This engine reproduces remark-rehype's `wrap(nodes, loose)` exactly, which
+pads a `<table>`, its row groups and its rows with newlines the way it pads a
+`<ul>`. What it was missing is what happens NEXT in mdy-docs' `.md` pipeline:
+`rehypeRaw` re-parses the tree through an HTML parser, and an HTML parser may
+not keep character data inside a table — it **foster-parents** it out, in
+document order, to immediately before the table. `foster_parent_table`
+([markdown.c:615](../src/parse/markdown.c#L615)) does that now, and coalesces
+with the text already there, because an HTML parser produces one run of
+character data rather than two adjacent ones.
+
+It is worth being precise about why nothing else could see it. `check-html`
+compares a serialiser against a tree, so identical trees serialise identically
+whatever is wrong with them. `check-markdown` compares trees and would have
+caught it — and it needs a corpus outside the repo and never runs, which is
+this section's own complaint. Every `.md` document with a table was affected.
+
+Eleven table shapes now agree at the tree level. The twelfth — a table that is
+the only child of a list item — still differs, for a reason that has nothing
+to do with tables and is filed as **B44**.
+
+The fixture is in `GOLDEN_SITES` as well as `CHECK_SITES`, so it runs on every
+platform CI builds for rather than only where node can. It was checked for
+determinism first (`make check-determinism`), which is what that target is
+for.
+
+One thing is deliberately NOT in it: a file name carrying a `"`, which is B8.
+Windows forbids a quote in a file name, so committing one would break the
+checkout on a platform this project builds for. `test/engine.c` makes that
+file at run time in a temp directory, which is the only way to test it in a
+repository that has to clone everywhere.
+
+**~~Generated tables have no guard.~~ FIXED.** `make check-generated`
+([Makefile:734](../Makefile#L734)) runs each generator and diffs its output
+against the checked-in header. All four are in sync.
+
+Two of the generators had **never run as their own instructions said**. They
+built `` `file://${base}` `` from what the usage line documents as a relative
+path, and a URL reads what follows `//` as the HOST — so
+`node scripts-generate-props.mjs ../..` answered
+`ERR_INVALID_FILE_URL_HOST: File URL host must be "localhost" or empty`.
+`pathToFileURL(resolve(base))` is what that wanted
+([scripts-generate-props.mjs:36](../scripts-generate-props.mjs#L36)).
+
+Not in CI, for the reason `check-sites` is not: it needs node and the
+`node_modules` mdy-docs installs.
+
+**~~Fragile initialisers.~~ FIXED.** `bjval.c` filled `bj_visitor`
+positionally ([bjval.c:81](../src/bjval.c#L81)) while engine_value.c used
+designated initialisers for the same struct. `on_num` appeared four times in
+that list — for int, float, date and pointer — so a field reordered or
+inserted in binjson's header would have kept compiling and bound the wrong
+callback to the wrong type. binjson is a separate repository and has been
+edited from here (B37), which is exactly the case this guards. It is filled by
+name now; `memns.c`'s `bj_io` already was.
+
+**~~Debug switches are read in hot paths.~~ FIXED, and measured first.**
+`getenv("MDY_MEMO_DEBUG")` ran three times per render and
+`getenv("MDY_LINEMAP_DEBUG")` once per produced line; they are read once each
+now ([engine.c:20](../src/engine.c#L20)).
+
+Measured before changing it, because the claim deserved a number: `docs-site`
+built with **two thousand extra environment variables** was **1.9% slower**
+than with a normal one, median of nine runs. So the cost is real and small —
+this is not the hot path the heading implies. What it buys is that the cost is
+provably nothing, and that a switch cannot be read differently in two places.
+
+**Error reporting has four conventions.** `0/-1` with an error buffer
+(engine, fsx), `BJ_*` codes (memns, nis), `NULL` plus a static message buffer
+(cli), and `fprintf(stderr)` from inside the library
+([engine.c:2502](../src/engine.c#L2648), [2517](../src/engine.c#L2663)) even
+though `on_message` exists for exactly that. Pick two.
+
+**Not done**, and it is the same trade as §3's long functions: unifying them
+touches every error path in the engine, changes no behaviour, and is checked
+by nothing but the parity suite. The one part that is a defect rather than a
+preference — `fprintf` from inside a library that has a callback for it — is
+two call sites and worth doing on its own the next time that file is open.
+
+**Comments that no longer describe the code** are listed under §2. The rest
+of the commentary is unusually good — most functions say *why* and what was
+measured — which is worth protecting by keeping the stale ones from
+accumulating.
+
 
 **~~Warnings in a clean build.~~ Fixed, with §2.** `-Wall -Wextra` on a
 `make clean` build is silent now — and since the Makefile work in §3, so are
@@ -2414,31 +2538,11 @@ somebody else's header. What follows is what the warnings were.
 
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`
-([engine.c:282](../src/engine.c#L285), [1006](../src/engine.c#L1121),
-[3177](../src/engine.c#L3305)), the unused parameter above, and two from stb
+([engine.c:282](../src/engine.c#L303), [1006](../src/engine.c#L1139),
+[3177](../src/engine.c#L3322)), the unused parameter above, and two from stb
 under `STBI_ONLY_PNG`. A non-const `mdy_root_mut` in `mdybuild.h` (or
 `-Wno-unused-function` around the stb include) makes the build silent, which
 is the only state in which a *new* warning is noticed.
-
-**Error reporting has four conventions.** `0/-1` with an error buffer
-(engine, fsx), `BJ_*` codes (memns, nis), `NULL` plus a static message buffer
-(cli), and `fprintf(stderr)` from inside the library
-([engine.c:2376](../src/engine.c#L2502), [2391](../src/engine.c#L2517)) even
-though `on_message` exists for exactly that. Pick two.
-
-**Debug switches are read in hot paths.** `getenv("MDY_MEMO_DEBUG")` runs
-three times per render and `getenv("MDY_LINEMAP_DEBUG")` once per produced
-line ([engine.c:2676](../src/engine.c#L2801)); read them once in
-`mdy_engine_new`.
-
-**Fragile initialisers.** `bjval.c` fills `bj_visitor` positionally
-([72–75](../src/bjval.c#L73-L76)) while engine.c uses designated initialisers
-for the same struct; a field reorder in binjson breaks one silently.
-
-**Comments that no longer describe the code** are listed under §2. The rest
-of the commentary is unusually good — most functions say *why* and what was
-measured — which is worth protecting by keeping the stale ones from
-accumulating.
 
 ---
 

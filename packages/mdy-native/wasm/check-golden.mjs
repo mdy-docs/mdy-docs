@@ -23,6 +23,9 @@ const SITES = [
   { name: 'fixture',     mounts: [join(pkg, 'fixture')],                                  site: 'fixture' },
   { name: 'fixture-pkg', mounts: [join(pkg, 'fixture-pkg'), join(pkg, 'fixture-style')],  site: 'fixture-pkg' },
   { name: 'messaging',   mounts: [join(pkg, '..', '..', 'examples', 'messaging')],        site: 'messaging' },
+  /* The inputs that were bugs (§4). Its golden output is committed like the
+   * others', so the wasm build is held to it too. */
+  { name: 'fixture-awkward', mounts: [join(pkg, 'fixture-awkward')],                    site: 'fixture-awkward' },
 ];
 
 function* filesUnder(dir, base = dir) {

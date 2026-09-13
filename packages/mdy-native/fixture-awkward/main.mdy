@@ -1,0 +1,50 @@
++++
+title: The awkward cases
++++
+% // A site made of the inputs that were bugs.
+% //
+% // §4 called this the most valuable single addition, and the argument is
+% // that every unit test here passes against an engine that still builds the
+% // wrong SITE: what these files broke was identity, ordering and the walk,
+% // which only a whole build shows. Each line below names the finding it is
+% // standing on, and check-sites builds the lot both ways and diffs.
+%
+% // B1: a .yaml whose first line is `---` was read as a document separator and
+% // desynchronised every identity after it. B2: an empty .mdy and a
+% // whitespace-only one shifted every later document by one. If either is
+% // wrong, `city.yaml`'s fields land on some other file's record and this
+% // query answers with the wrong one — or with nothing.
+% const cities = $.find({ role: "city" })
+% $.emit("cities.json", JSON.stringify(cities.map((c) => c.who + "/" + c.era)))
+%
+% // B8 — a file name carrying a `"` — is NOT here, and deliberately: Windows
+% // forbids a quote in a file name, so committing one would break the
+% // checkout on a platform this project builds for. It is covered by
+% // test/engine.c, which makes the file at run time in a temp directory,
+% // which is the only way to test it on a repository that has to clone
+% // everywhere.
+%
+% // The `+++` inside a block scalar is data, not a front-matter marker.
+% const notes = $.find({ kind: "note" })
+% $.emit("note.json", JSON.stringify(notes.map((n) => n.body)))
+%
+% // B3: a .md reached through $.render came back an empty or wrong token, and
+% // the same document through $.text is the other half of that path.
+% $.emit("prose.html", $.render({ path: "pages/prose.md" }))
+% $.emit("prose.txt", $.text({ path: "pages/prose.md" }))
+%
+% // B20: a table of seventy columns, where the buffer held sixty-four.
+% $.emit("wide.html", $.render({ path: "pages/wide.md" }))
+%
+% // B11: a .tif whose header points its IFD past the end of the file. It is a
+% // real file and still gets a record; what it must not get is width/height
+% // read from off the end of it.
+% const img = $.findOne({ ext: ".tif" })
+% $.emit("image.json", JSON.stringify({ name: img.name, w: img.width ?? null, h: img.height ?? null }))
+%
+% // The whole set, in order, which is what B1 and B2 moved.
+% $.emit("order.json", JSON.stringify($.find({}).map((d) => d.path)))
+
+= {{ res.data.title }}
+
+{{ cities.length }} city, {{ $.count }} documents.

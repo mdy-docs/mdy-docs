@@ -22,10 +22,20 @@
  *
  * Both sorted by their key so the lookups can bisect.
  */
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 const base = process.argv[2];
 if (!base) throw new Error('usage: scripts-generate-props.mjs <dir containing node_modules/property-information>');
+/*
+ * pathToFileURL, not `file://` + the path. A RELATIVE base — which is what
+ * the line above documents — makes `file://../..`, and a URL reads what
+ * follows `//` as the HOST: node answers ERR_INVALID_FILE_URL_HOST and the
+ * generator has never run as its own instructions say. (§4.)
+ */
+const root = pathToFileURL(resolve(base) + '/');
 const { html } = await import(
-  new URL('node_modules/property-information/index.js', `file://${base.replace(/\/?$/, '/')}`)
+  new URL('node_modules/property-information/index.js', root)
 );
 
 const rows = [...new Set(Object.keys(html.normal))]

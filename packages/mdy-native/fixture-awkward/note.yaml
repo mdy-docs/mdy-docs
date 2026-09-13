@@ -1,0 +1,5 @@
+kind: note
+body: |
+  a line
+  +++
+  another line

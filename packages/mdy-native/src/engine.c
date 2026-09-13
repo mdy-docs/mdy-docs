@@ -2,6 +2,24 @@
 #include "engine_internal.h"
 #include "xalloc.h"
 
+/*
+ * The debug switches, read ONCE.
+ *
+ * MDY_MEMO_DEBUG was three getenv calls per render and MDY_LINEMAP_DEBUG one
+ * per produced line. Measured before changing it, because §4 filed this as a
+ * hot path and it is worth knowing by how much: `docs-site` built with two
+ * thousand extra environment variables was 1.9% slower than with a normal
+ * one, median of nine. So the cost is real and small. What this buys is that
+ * it is provably nothing, and that a switch cannot be read differently in two
+ * places — the same idiom `key()` already uses for MDY_GC_STRESS.
+ */
+static int debug_flag(const char *name, int *cache) {
+    if (*cache < 0) *cache = getenv(name) != NULL;
+    return *cache;
+}
+static int memo_debug(void)    { static int c = -1; return debug_flag("MDY_MEMO_DEBUG", &c); }
+static int linemap_debug(void) { static int c = -1; return debug_flag("MDY_LINEMAP_DEBUG", &c); }
+
 /* ---- the site's three small natives ------------------------------------------
  *
  * These are on `$` for the reason script-site.js gives: each is a primitive a
@@ -2872,7 +2890,7 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
                 map = grown;
             }
             for (size_t k = 0; k < lines_in; k++) map[map_len++] = file_line;
-            if (getenv("MDY_LINEMAP_DEBUG"))
+            if (linemap_debug())
                 fprintf(stderr, "linemap doc %zu: pair %u body %zu chunk %zu file %u (matter %zu, body lines %zu)\n",
                         e->current, i, body_line, chunk_line, file_line, d->matter_lines, body_count);
         }
@@ -2929,7 +2947,6 @@ static mdy_doc *render_tree(mdy_engine *e, size_t index, JsValue request,
 typedef struct { uint64_t key; mdy_doc *doc; char *text; } MemoEntry;
 typedef struct { MemoEntry slots[MEMO_SLOTS]; size_t count; } MemoTable;
 static MemoTable *memo_now, *memo_prev;
-
 static uint64_t fnv64(uint64_t h, const void *p, size_t n) {
     const unsigned char *b = p;
     for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211u;
@@ -3147,7 +3164,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         hit = memo_find(memo_prev, mkey);
         if (hit) { memo_put(memo_now, mkey, memo_copy(hit->doc), strdup(hit->text)); hit = memo_find(memo_now, mkey); }
     }
-    if (getenv("MDY_MEMO_DEBUG")) {
+    if (memo_debug()) {
         JsValue rec = document_record(e, index);
         js_gc_protect(e->vm, &rec);
         char *path = js_string_utf8(get_val(e, rec, "path"));
@@ -3221,7 +3238,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         if (!out) { free(text); FAIL("the markdown document could not be read"); }
         /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
         if (mkey) memo_put(memo_now, mkey, memo_copy(out), strdup(text ? text : ""));
-        if (getenv("MDY_MEMO_DEBUG")) fprintf(stderr, "memo kept #%zu\n", index);
+        if (memo_debug()) fprintf(stderr, "memo kept #%zu\n", index);
         if (wrote) *wrote = text; else free(text);
         /*
          * `done`, not a return of its own. The key this render is held under
@@ -3419,7 +3436,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         }
         memo_put(memo_now, mkey, memo_copy(out), text ? text : strdup(""));
     }
-    if (getenv("MDY_MEMO_DEBUG") && out) fprintf(stderr, "memo %s #%zu\n", e->taint ? "impure" : "kept", index);
+    if (memo_debug() && out) fprintf(stderr, "memo %s #%zu\n", e->taint ? "impure" : "kept", index);
 
 done:
 #undef FAIL

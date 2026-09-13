@@ -12,6 +12,7 @@
 #   make check-alloc              a build with each allocation refused in turn
 #   make check-alloc-all          every sweep a native build can run (~8 min)
 #   make check-alloc-doc          document mode; check-alloc-dev the server
+#   make check-generated          the four generated headers, against their generators
 #   make check-alloc-wasm         and through the wasm engine
 #   make wasm                     the same engine as WebAssembly (needs emcc)
 #   make check-wasm               the golden sites through it, under node
@@ -416,11 +417,17 @@ check-highlight: $(HL_OUT) $(LAMASSU)/build/lamassu
 # modules resolve against that package's directory rather than the site's.
 # That is the case Windows is most likely to get wrong, because imports.js
 # decides "inside the package" by string prefix on an absolute path.
-GOLDEN_SITES := fixture fixture-pkg ../../examples/messaging
+#
+# fixture-awkward earns its place for the opposite reason to fixture-pkg: it is
+# made of the inputs that WERE bugs, and check-sites — the only thing that
+# would otherwise build it — cannot run in CI at all. Committing its output
+# puts an empty .mdy, a `---`-leading .yaml, a `.md` through $.render and a
+# corrupt .tif in front of every platform this builds on.
+GOLDEN_SITES := fixture fixture-pkg ../../examples/messaging fixture-awkward
 
 .PHONY: golden check-golden check-determinism
 golden:
-	@rm -rf golden/fixture golden/fixture-pkg golden/messaging
+	@for d in $(GOLDEN_SITES); do rm -rf golden/`basename $$d`; done
 	@for d in $(GOLDEN_SITES); do \
 	  node ../../bin/mdy.js build $$d --out golden/`basename $$d` > /dev/null || exit 1; \
 	done
@@ -459,7 +466,7 @@ check-golden: build/mdy$(EXE)
 	done; \
 	exit $$fail
 
-.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc \
+.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc check-generated \
         check-alloc-all check-alloc-doc check-alloc-dev clean
 
 # A document from text into a nisaba collection, with no JavaScript in it:
@@ -633,8 +640,15 @@ check-site: build/mdy$(EXE)
 #                 md4c hands a raw block over with its final newline where
 #                 remark's `html` node has none — a blank line after every
 #                 raw block, until src/parse/markdown.c dropped it.
+# fixture-awkward is a site made of the inputs that WERE bugs — see its
+# main.mdy, which names the finding each file stands on. §4 called a fixture
+# like it the most valuable single addition, and it earned that on its first
+# run: it found the `.md` table divergence that is now fixed in markdown.c,
+# which no unit test could see because both sides had the same bytes in a
+# different order.
 CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
-               ../../examples/messaging:0 fixture:0 fixture-pkg:0
+               ../../examples/messaging:0 fixture:0 fixture-pkg:0 \
+               fixture-awkward:0
 #
 # Every allocation in a build, refused one at a time.
 #
@@ -702,6 +716,36 @@ check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
 	$(MAKE) --no-print-directory check-alloc-doc || fail=1; \
 	$(MAKE) --no-print-directory check-alloc-dev || fail=1; \
 	exit $$fail
+
+# The four generated headers, against their generators.
+#
+# src/toolkit.h, emoji_table.h, props_table.h and schema_table.h are generated
+# from mdy-docs' own sources and from `property-information` in node_modules.
+# They are checked in so a build never needs node — and nothing compared them,
+# so an upstream change to how an HTML attribute maps would have arrived as a
+# silent divergence from mdy-docs rather than a failing check (§4).
+#
+# Two of the generators had also never run as their own instructions said:
+# they built `file://` + a RELATIVE path, and a URL reads what follows `//`
+# as the host. Fixed with this.
+#
+# Needs node and the node_modules mdy-docs installs; not in CI for the reason
+# check-sites is not.
+check-generated:
+	@fail=0; tmp=$$(mktemp -d); \
+	for pair in scripts-generate-props.mjs:src/parse/props_table.h \
+	            scripts-generate-schema.mjs:src/parse/schema_table.h \
+	            scripts-generate-emoji.mjs:src/parse/emoji_table.h; do \
+	  g=$${pair%%:*}; h=$${pair##*:}; \
+	  node $$g "$(MDY_DOCS_ABS)" > "$$tmp/out.h" || { echo "  $$g FAILED to run"; fail=1; continue; }; \
+	  if diff -q "$$h" "$$tmp/out.h" >/dev/null; then printf '  %-22s in sync\n' "$$h"; \
+	  else printf '  %-22s DIFFERS from %s\n' "$$h" "$$g"; diff "$$h" "$$tmp/out.h" | head -20; fail=1; fi; \
+	done; \
+	node scripts-toolkit.mjs > "$$tmp/toolkit.h" 2>/dev/null && \
+	  { if diff -q src/toolkit.h "$$tmp/toolkit.h" >/dev/null; then printf '  %-22s in sync\n' src/toolkit.h; \
+	    else printf '  %-22s DIFFERS from scripts-toolkit.mjs\n' src/toolkit.h; fail=1; fi; } || \
+	  { echo "  scripts-toolkit.mjs FAILED to run"; fail=1; }; \
+	rm -rf "$$tmp"; exit $$fail
 
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \
