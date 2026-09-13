@@ -113,16 +113,18 @@ for (const file of extensions) {
   if (count) console.log(`  ext-${group.padEnd(9)} ${String(count).padStart(4)}  ${file}`);
 }
 
-/* ---- 3. the GFM spec, fetched once ---------------------------------------- */
+/* ---- 3. the GFM spec, vendored -------------------------------------------- */
 
-const gfmPath = join(cache, 'gfm-spec.txt');
-if (!existsSync(gfmPath) && !offline) {
-  try {
-    execFileSync('curl', ['-sSL', '--max-time', '60', '-o', gfmPath, GFM_SPEC_URL], { stdio: 'pipe' });
-  } catch {
-    console.log('  gfm          ---  could not fetch; run again with a network, or --offline to skip');
-  }
-}
+/*
+ * It used to be fetched once and cached under build/, which meant the corpus
+ * could not be built without a network and could not be built the same way
+ * twice — `make clean` took the cache. That is the whole of why this check had
+ * never run in CI. It is third_party/gfm-spec now; the old cache is still read
+ * if it happens to be there, so a tree that has one does not re-download.
+ */
+const gfmPath = existsSync(join(repo, 'third_party', 'gfm-spec', 'spec.txt'))
+  ? join(repo, 'third_party', 'gfm-spec', 'spec.txt')
+  : join(cache, 'gfm-spec.txt');
 if (existsSync(gfmPath)) {
   const gfm = readFileSync(gfmPath, 'utf8');
   const gfmVersion = /^version: ([\d.]+)/m.exec(gfm)?.[1] ?? '?';
@@ -130,7 +132,9 @@ if (existsSync(gfmPath)) {
   for (const [i, ex] of specExamples(gfm).entries()) {
     if (add('gfm', String(i).padStart(4, '0'), ex.markdown, `GFM spec ${gfmVersion}, example ${i + 1}`)) count += 1;
   }
-  console.log(`  gfm          ${String(count).padStart(4)}  spec ${gfmVersion} (CC-BY-SA 4.0, ${GFM_SPEC_URL})`);
+  console.log(`  gfm          ${String(count).padStart(4)}  spec ${gfmVersion} (CC-BY-SA 4.0, third_party/gfm-spec)`);
+} else {
+  console.log('  gfm          ---  third_party/gfm-spec/spec.txt is missing');
 }
 
 /* ---- 4. real documents, from whatever is on this machine ------------------ */

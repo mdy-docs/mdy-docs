@@ -1122,7 +1122,7 @@ static void identify_headings(mdy_doc *doc, mdy_node *n) {
             size_t len = 0;
             collect_text(c, text, sizeof text, &len);
             size_t id_len = 0;
-            const char *id = mdy_resolve_slug(doc, text, len, &id_len);
+            const char *id = mdy_heading_id(doc, text, len, &id_len);
             if (id && id_len) mdy_set_string(doc, c, "id", id, id_len);
         }
         identify_headings(doc, c);

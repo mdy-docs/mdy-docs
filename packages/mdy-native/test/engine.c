@@ -782,6 +782,77 @@ static void caret_bracket_checks(void) {
 }
 
 
+/* ---- a heading id that is already taken -------------------------------------
+ *
+ * `.mdy` headings were made unique against the ids a document had already
+ * handed out, and `.md` headings were not: three headings called "foo" were
+ * all `id="foo"` where mdy-docs gives foo, foo-1, foo-2. Duplicate ids are
+ * invalid HTML and every `#anchor` past the first points at the wrong one.
+ * (B52.)
+ *
+ * One function does it for both front ends now, so the two cases here are the
+ * same assertion twice — which is the point: they were different code, and
+ * that is why only one of them was right. The third heading is `Foo`, because
+ * the collision is between SLUGS and not between headings.
+ */
+static void heading_id_checks(void) {
+    printf("\n--- engine: a heading id that is already taken ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-hid", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "dup.md",  "# foo\n## foo\n### Foo\n");
+    write_file(root, "dup.mdy", "= foo\n== foo\n=== Foo\n");
+    write_file(root, "main.mdy",
+        "% $.emit('md.html',  $.html($.render({ path: 'dup.md' })))\n"
+        "% $.emit('mdy.html', $.html($.render({ path: 'dup.mdy' })))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of headings\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    ok_("a repeated heading id is numbered in a .md",
+        emitted("md.html") &&
+            strcmp(emitted("md.html"),
+                   "<h1 id=\"foo\">foo</h1>\n<h2 id=\"foo-1\">foo</h2>\n"
+                   "<h3 id=\"foo-2\">Foo</h3>") == 0,
+        emitted("md.html"));
+    ok_("...and in a .mdy, which is where the rule already was",
+        emitted("mdy.html") &&
+            strcmp(emitted("mdy.html"),
+                   "<h1 id=\"foo\">foo</h1><h2 id=\"foo-1\">foo</h2>"
+                   "<h3 id=\"foo-2\">Foo</h3>") == 0,
+        emitted("mdy.html"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- raw HTML inside a .md paragraph ----------------------------------------
  *
  * `MD_TEXT_HTML` had no case in the text callback and fell through to
@@ -3365,6 +3436,7 @@ int main(void) {
     markdown_render_checks();
     footnote_checks();
     raw_html_checks();
+    heading_id_checks();
     caret_bracket_checks();
     query_order_checks();
     reopen_checks();

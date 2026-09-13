@@ -1,0 +1,91 @@
+# Documents whose tree does not match mdy-docs' JavaScript.
+#
+# Written by `make corpus-baseline`, read by `make check-markdown`. Every
+# line is a document the C front end gets wrong and that somebody has
+# looked at; a line LEAVING this file is as much a reason to stop as a
+# line arriving, because it means a fix landed that nobody wrote down.
+#
+# `real/` is not here: that group is whatever markdown is on the machine.
+#
+#   commonmark                 46
+#   ext-admonitions            5
+#   ext-footnotes              1
+#   ext-permissive-autolinks   5
+#   ext-spoilers               1
+#   ext-subscripts             4
+#   ext-superscripts           1
+#   ext-tables                 2
+#   gfm                        8
+commonmark/0015.md
+commonmark/0033.md
+commonmark/0125.md
+commonmark/0129.md
+commonmark/0143.md
+commonmark/0147.md
+commonmark/0149.md
+commonmark/0150.md
+commonmark/0154.md
+commonmark/0164.md
+commonmark/0169.md
+commonmark/0171.md
+commonmark/0172.md
+commonmark/0173.md
+commonmark/0175.md
+commonmark/0176.md
+commonmark/0177.md
+commonmark/0178.md
+commonmark/0179.md
+commonmark/0181.md
+commonmark/0182.md
+commonmark/0183.md
+commonmark/0217.md
+commonmark/0225.md
+commonmark/0236.md
+commonmark/0238.md
+commonmark/0239.md
+commonmark/0299.md
+commonmark/0519.md
+commonmark/0572.md
+commonmark/0573.md
+commonmark/0574.md
+commonmark/0575.md
+commonmark/0576.md
+commonmark/0584.md
+commonmark/0588.md
+commonmark/0601.md
+commonmark/0605.md
+commonmark/0626.md
+commonmark/0632.md
+commonmark/0633.md
+commonmark/0634.md
+commonmark/0635.md
+commonmark/0636.md
+commonmark/0637.md
+commonmark/0638.md
+ext-admonitions/0000.md
+ext-admonitions/0001.md
+ext-admonitions/0002.md
+ext-admonitions/0003.md
+ext-admonitions/0004.md
+ext-footnotes/0011.md
+ext-permissive-autolinks/0002.md
+ext-permissive-autolinks/0004.md
+ext-permissive-autolinks/0007.md
+ext-permissive-autolinks/0008.md
+ext-permissive-autolinks/0012.md
+ext-spoilers/0027.md
+ext-subscripts/0000.md
+ext-subscripts/0001.md
+ext-subscripts/0002.md
+ext-subscripts/0011.md
+ext-superscripts/0014.md
+ext-tables/0006.md
+ext-tables/0011.md
+gfm/0199.md
+gfm/0202.md
+gfm/0609.md
+gfm/0622.md
+gfm/0624.md
+gfm/0625.md
+gfm/0626.md
+gfm/0651.md

@@ -327,39 +327,9 @@ static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t l
      * and `king-s-list` under the other, and only the first is a link that
      * works.
      */
-    const char *id = mdy_resolve_slug(doc, text, len, NULL);
-    if (!id || !*id) return;
-
-    size_t taken = 0;
-    for (size_t k = 0; k < doc->heading_count; k++)
-        if (strcmp(doc->heading_ids[k], id) == 0) taken++;
-
-    /*
-     * The id, whatever its length. `char unique[256]` cut it at 255 bytes and
-     * said nothing, so a long heading got an id this engine had invented and
-     * node did not — and a `[[ link ]]` written from the same text then
-     * pointed at nothing. Room for the `-N` a repeat adds. (B20.)
-     */
-    size_t id_len = strlen(id);
-    char stack_id[256];
-    size_t id_cap = id_len + 32 > sizeof stack_id ? id_len + 32 : sizeof stack_id;
-    char *unique = id_cap > sizeof stack_id ? malloc(id_cap) : stack_id;
-    if (!unique) return;
-    if (taken) snprintf(unique, id_cap, "%s-%zu", id, taken);
-    else snprintf(unique, id_cap, "%s", id);
-
-    if (doc->heading_count == doc->heading_cap) {
-        size_t grown = doc->heading_cap ? doc->heading_cap * 2 : 32;
-        const char **next = mdy_alloc(&doc->arena, sizeof(char *) * grown);
-        if (next) {
-            for (size_t k = 0; k < doc->heading_count; k++) next[k] = doc->heading_ids[k];
-            doc->heading_ids = next;
-            doc->heading_cap = grown;
-        }
-    }
-    if (doc->heading_count < doc->heading_cap) doc->heading_ids[doc->heading_count++] = id;
-    mdy_set_string(doc, h, "id", unique, strlen(unique));
-    if (unique != stack_id) free(unique);
+    size_t id_len = 0;
+    const char *id = mdy_heading_id(doc, text, len, &id_len);
+    if (id && id_len) mdy_set_string(doc, h, "id", id, id_len);
 }
 
 /* ---- list markers -------------------------------------------------------- */

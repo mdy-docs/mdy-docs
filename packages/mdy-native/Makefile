@@ -407,11 +407,29 @@ check-links: build/linkify$(EXE)
 # The markdown front end against remark, over a borrowed corpus — the
 # CommonMark and GFM specs, md4c's extension specs, and real .md files found
 # under SITE's parent. Nothing is committed; see scripts-build-corpus.mjs.
+# CORPUS_ROOTS is where the `real` group is found — whatever markdown is on
+# this machine. Empty builds the SPEC groups alone: 904 documents in 23 KB,
+# every one of them from a file in this tree, so it is the same corpus on any
+# machine and in CI. That is what `check-markdown` is gated on.
+CORPUS_ROOTS ?= $(SITE_ABS)/..
+
 corpus:
-	@node scripts-build-corpus.mjs --roots "$(SITE_ABS)/.."
+	@node scripts-build-corpus.mjs --roots "$(CORPUS_ROOTS)"
+
+corpus-specs:
+	@node scripts-build-corpus.mjs --roots ""
+
+# The baseline is the 81 spec documents this front end still gets wrong, named
+# one per line. Rewriting it is deliberate: see test/markdown-baseline.txt.
+corpus-baseline: build/mdcat$(EXE)
+	@node test/compare-markdown.mjs --mdy-docs "$(MDY_DOCS_ABS)" \
+	  --tool "$(if $(TOOL),$(TOOL),build/mdcat$(EXE))" \
+	  --write-baseline test/markdown-baseline.txt
 
 check-markdown: build/mdcat$(EXE)
-	@node test/compare-markdown.mjs --mdy-docs "$(MDY_DOCS_ABS)" --tool "$(if $(TOOL),$(TOOL),build/mdcat$(EXE))"
+	@node test/compare-markdown.mjs --mdy-docs "$(MDY_DOCS_ABS)" \
+	  --tool "$(if $(TOOL),$(TOOL),build/mdcat$(EXE))" \
+	  --baseline test/markdown-baseline.txt
 
 bench: build/mdyast$(EXE)
 	@node test/compare.mjs --mdy-docs "$(MDY_DOCS_ABS)" --corpus "$(CORPUS_ABS)" --bench

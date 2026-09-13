@@ -20,7 +20,7 @@
  *   node test/compare-markdown.mjs --mdy-docs <path> [--tool <binary>] [--first]
  */
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,6 +32,8 @@ const flag = (name, fallback) => {
   return i === -1 ? fallback : argv[i + 1];
 };
 const has = (name) => argv.includes(`--${name}`);
+const baselineFile = flag('baseline');
+const writeBaseline = flag('write-baseline');
 
 const mdyDocs = flag('mdy-docs');
 const tool = flag('tool');
@@ -90,6 +92,7 @@ walk(corpus);
 files.sort();
 
 const groups = {};
+const differing = [];
 let bytes = 0;
 let nodes = 0;
 let failed = 0;
@@ -127,6 +130,7 @@ for (const file of files) {
     got = `ERROR: ${String(error.stderr ?? error.message).trim().split('\n')[0]}`;
   }
   if (got === expected) { same += 1; groups[group].same += 1; continue; }
+  differing.push(file.slice(corpus.length + 1));
 
   if (has('first') && shown < 3) {
     shown += 1;
@@ -156,4 +160,79 @@ console.log(`\n${same}/${files.length} trees identical (${pct}%)`);
 for (const [g, s] of Object.entries(groups).sort()) {
   console.log(`  ${g.padEnd(26)} ${String(s.same).padStart(5)}/${String(s.total).padEnd(5)}`);
 }
-process.exit(same === files.length ? 0 : 1);
+
+/*
+ * THE BASELINE, which is what lets a check with known failures run in CI.
+ *
+ * Every `.md` finding this year was measured here and reported to nobody,
+ * because the corpus needed a network and this exited non-zero whatever it
+ * found — a check that cannot pass is a check nobody runs. It passes now when
+ * the set of differing documents is EXACTLY the set written down, so a
+ * document that starts differing fails the build and a document that starts
+ * agreeing fails it too, until somebody says so on purpose.
+ *
+ * `real/` is left out of it. Those documents are whatever markdown is on the
+ * machine, so the set is not the same twice and not the same anywhere else;
+ * they are reported above and gated by nothing.
+ */
+const gated = differing.filter((f) => !f.startsWith('real/')).sort();
+
+if (writeBaseline) {
+  const header = [
+    '# Documents whose tree does not match mdy-docs\' JavaScript.',
+    '#',
+    '# Written by `make corpus-baseline`, read by `make check-markdown`. Every',
+    '# line is a document the C front end gets wrong and that somebody has',
+    '# looked at; a line LEAVING this file is as much a reason to stop as a',
+    '# line arriving, because it means a fix landed that nobody wrote down.',
+    '#',
+    '# `real/` is not here: that group is whatever markdown is on the machine.',
+    '#',
+  ];
+  const counts = {};
+  for (const f of gated) counts[f.split('/')[0]] = (counts[f.split('/')[0]] ?? 0) + 1;
+  for (const [g, n] of Object.entries(counts).sort()) header.push(`#   ${g.padEnd(26)} ${n}`);
+  writeFileSync(writeBaseline, header.join('\n') + '\n' + gated.join('\n') + '\n');
+  console.log(`\nwrote ${gated.length} documents to ${writeBaseline}`);
+  process.exit(0);
+}
+
+if (!baselineFile) process.exit(same === files.length ? 0 : 1);
+
+if (!existsSync(baselineFile)) {
+  console.error(`\ncompare-markdown: no baseline at ${baselineFile} — run \`make corpus-baseline\``);
+  process.exit(2);
+}
+const expected = new Set(
+  readFileSync(baselineFile, 'utf8').split('\n')
+    .map((l) => l.trim()).filter((l) => l && !l.startsWith('#')));
+
+const now = new Set(gated);
+const appeared = [...now].filter((f) => !expected.has(f)).sort();
+const gone = [...expected].filter((f) => !now.has(f)).sort();
+const present = new Set(files.map((f) => f.slice(corpus.length + 1).split('/')[0]));
+const absent = [...expected].filter((f) => !present.has(f.split('/')[0]));
+
+if (absent.length) {
+  console.log(`\n${absent.length} baselined document(s) are not in this corpus — ` +
+              'build it with the spec groups before believing the result');
+  process.exit(2);
+}
+
+if (appeared.length === 0 && gone.length === 0) {
+  console.log(`\nas the baseline says: ${gated.length} known different, nothing new`);
+  process.exit(0);
+}
+if (appeared.length) {
+  console.log(`\n${appeared.length} document(s) that USED to match and no longer do:`);
+  for (const f of appeared.slice(0, 20)) console.log(`  ${f}`);
+  if (appeared.length > 20) console.log(`  … and ${appeared.length - 20} more`);
+}
+if (gone.length) {
+  console.log(`\n${gone.length} document(s) in the baseline that now MATCH — ` +
+              'that is a fix, and the baseline has to say so:');
+  for (const f of gone.slice(0, 20)) console.log(`  ${f}`);
+  if (gone.length > 20) console.log(`  … and ${gone.length - 20} more`);
+  console.log('\n  make corpus-baseline');
+}
+process.exit(1);

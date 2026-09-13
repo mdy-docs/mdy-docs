@@ -225,6 +225,10 @@ int mdy_is_letter_or_number_cp(uint32_t cp);
  * `slugify`, which hyphenates what this deletes. */
 const char *mdy_resolve_slug(mdy_doc *doc, const char *s, size_t len, size_t *out_len);
 
+/* A heading's id: the slug above, made unique against this document's other
+ * headings and recorded. Both front ends call it; see inline.c. (B52.) */
+const char *mdy_heading_id(mdy_doc *doc, const char *text, size_t len, size_t *out_len);
+
 /* ---- links (src/linkify.c) ----------------------------------------------- */
 
 /* One autolinked span, as byte offsets into the text. */

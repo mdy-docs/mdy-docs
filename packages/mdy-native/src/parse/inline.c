@@ -634,6 +634,60 @@ const char *mdy_resolve_slug(mdy_doc *doc, const char *s, size_t len, size_t *ou
     return out;
 }
 
+/*
+ * The id a heading gets: its slug, made UNIQUE against the ids this document
+ * has already handed out, and recorded so that the next heading sees it.
+ *
+ * Both front ends want this and only one had it. `.mdy` headings went through
+ * the whole of it in block.c; `.md` headings called mdy_resolve_slug and used
+ * what came back, so three headings called "foo" were all `id="foo"` where
+ * mdy-docs gives `foo`, `foo-1`, `foo-2`. Duplicate ids are invalid HTML and
+ * every `#anchor` past the first points at the wrong one. (B52.)
+ *
+ * The suffix counts the BASE id, so it is the base that is recorded rather
+ * than the unique form — otherwise a document containing `foo`, `foo` and a
+ * literal heading called `foo-1` would number them wrongly.
+ *
+ * The id is arena-allocated at whatever length it needs. A `char unique[256]`
+ * cut it at 255 bytes and said nothing, which gave a long heading an id this
+ * engine had invented and node did not. (B20.)
+ */
+const char *mdy_heading_id(mdy_doc *doc, const char *text, size_t len, size_t *out_len) {
+    if (out_len) *out_len = 0;
+
+    size_t base_len = 0;
+    const char *base = mdy_resolve_slug(doc, text, len, &base_len);
+    if (!base || !base_len) return NULL;
+
+    size_t taken = 0;
+    for (size_t k = 0; k < doc->heading_count; k++)
+        if (strcmp(doc->heading_ids[k], base) == 0) taken++;
+
+    const char *id = base;
+    size_t id_len = base_len;
+    if (taken) {
+        char *unique = mdy_alloc(&doc->arena, base_len + 24);
+        int n = snprintf(unique, base_len + 24, "%s-%zu", base, taken);
+        if (n < 0) return NULL;
+        id = unique;
+        id_len = (size_t)n;
+    }
+
+    if (doc->heading_count == doc->heading_cap) {
+        size_t grown = doc->heading_cap ? doc->heading_cap * 2 : 32;
+        const char **next = mdy_alloc(&doc->arena, sizeof(char *) * grown);
+        if (next) {
+            for (size_t k = 0; k < doc->heading_count; k++) next[k] = doc->heading_ids[k];
+            doc->heading_ids = next;
+            doc->heading_cap = grown;
+        }
+    }
+    if (doc->heading_count < doc->heading_cap) doc->heading_ids[doc->heading_count++] = base;
+
+    if (out_len) *out_len = id_len;
+    return id;
+}
+
 /* JavaScript's notion of whitespace, not C's — see mdy_trim. A label ending
  * in a no-break space is real, and an ASCII-only trim keeps it. */
 static void cut(const char **s, size_t *len) { mdy_trim(s, len); }
