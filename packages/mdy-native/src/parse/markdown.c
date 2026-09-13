@@ -44,9 +44,6 @@ typedef struct {
     mdy_doc *doc;
     Frame stack[STACK_MAX];
     int depth;
-    /* A list's tightness, carried to its items. */
-    int list_tight[STACK_MAX];
-    int list_depth;
     /* Inside a code block or raw HTML, text arrives in pieces and has to be
      * gathered before it becomes one node. */
     char *pending;
@@ -119,7 +116,24 @@ static void text_node(Build *b, const char *s, size_t len) {
 static void newline(Build *b) {
     flush_text(b);
     mdy_node *parent = top(b);
-    if (parent) mdy_append(parent, mdy_new_text(b->doc, "\n", 1));
+    if (!parent) return;
+    /*
+     * Onto the text already there, if there is any. A hast tree has no two
+     * adjacent text nodes — nothing produces them and the serialiser would
+     * not tell them apart — so `- hi\n  > q` has to give t("hi\n") and not
+     * t("hi") t("\n"). It only arises where inline content is followed by a
+     * block, which is a tight list item and nowhere else. (B44.)
+     */
+    if (parent->last && parent->last->type == MDY_TEXT && parent->last->text) {
+        size_t n = strlen(parent->last->text);
+        char *joined = mdy_alloc(&b->doc->arena, n + 2);
+        memcpy(joined, parent->last->text, n);
+        joined[n] = '\n';
+        joined[n + 1] = '\0';
+        parent->last->text = joined;
+        return;
+    }
+    mdy_append(parent, mdy_new_text(b->doc, "\n", 1));
 }
 
 /* Before a BLOCK child goes in: a newline between siblings, and one before
@@ -434,12 +448,10 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
         }
 
         case MD_BLOCK_UL: {
-            const MD_BLOCK_UL_DETAIL *d = detail;
             before_block(b);
             mdy_node *ul = mdy_new_element(b->doc, "ul", 2);
             append(b, ul);
             push(b, ul, 1);
-            if (b->list_depth < STACK_MAX) b->list_tight[b->list_depth++] = d->is_tight;
             return 0;
         }
 
@@ -451,7 +463,6 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             if (d->start != 1) mdy_set_number(b->doc, ol, "start", (double)d->start);
             append(b, ol);
             push(b, ol, 1);
-            if (b->list_depth < STACK_MAX) b->list_tight[b->list_depth++] = d->is_tight;
             return 0;
         }
 
@@ -471,9 +482,24 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
                 }
             }
             append(b, li);
-            /* A tight item's content is inline and unpadded; a loose one's is
-             * a paragraph, wrapped like any other block parent. */
-            push(b, li, b->list_depth > 0 && !b->list_tight[b->list_depth - 1]);
+            /*
+             * ALWAYS wrapped, tight or loose. (B44.)
+             *
+             * The other block parents take `wrap(nodes, loose)`, and a list
+             * item does not: mdast-util-to-hast's listItem walks its children
+             * and pads each one, skipping the padding only for a PARAGRAPH
+             * that is tight — which it also unwraps. In a tight list md4c
+             * never reports that paragraph at all and hands the inline
+             * content straight over, so the skip is already done here by the
+             * shape of the callbacks. What was left was the other half: every
+             * child that IS a block still gets its newline before, and a
+             * trailing one after the last, whether the item is tight or not.
+             *
+             * `- > quoted` was the shortest case — [blockquote] here against
+             * [\n, blockquote, \n] there — and it is the same for a table, a
+             * nested list, a fence and a heading.
+             */
+            push(b, li, 1);
             if (d->is_task) {
                 mdy_node *box = mdy_new_element(b->doc, "input", 5);
                 mdy_set_string(b->doc, box, "type", "checkbox", 8);
@@ -702,7 +728,6 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
         case MD_BLOCK_UL:
         case MD_BLOCK_OL:
             close_block(b);
-            if (b->list_depth > 0) b->list_depth--;
             return 0;
 
         case MD_BLOCK_HR:

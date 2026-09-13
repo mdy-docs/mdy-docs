@@ -36,6 +36,12 @@ title: The awkward cases
 % // B20: a table of seventy columns, where the buffer held sixty-four.
 % $.emit("wide.html", $.render({ path: "pages/wide.md" }))
 %
+% // B44: a tight list item holding a BLOCK — a quote, a fence, a heading, a
+% // table, or text followed by one. Each gets a newline before it and after
+% // the last, which is mdast-util-to-hast's listItem rather than the
+% // wrap(loose) every other block parent takes.
+% $.emit("nested.html", $.render({ path: "pages/nested.md" }))
+%
 % // B11: a .tif whose header points its IFD past the end of the file. It is a
 % // real file and still gets a record; what it must not get is width/height
 % // read from off the end of it.
