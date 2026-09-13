@@ -19,6 +19,9 @@ import {
   createProcessor,
   toHtml,
 } from '../index.js';
+// Package-internal: build.js calls this between builds, and the memo's
+// behaviour across two of them is what the B33 test below is about.
+import { rotateRenderMemo } from '../src/mdy.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const example = (name) => readFileSync(join(here, '..', 'examples', name), 'utf8');
@@ -635,6 +638,39 @@ test('$.render on an unmatched query rejects', async () => {
 test('$.data and $.count expose the document set', async () => {
   const src = 'count={{ $.count }} second={{ $.data(1).x }}\n---\n+++\nx: 42\n+++\nsecond doc';
   assert.equal((await renderText(src)).trim(), 'count=2 second=42');
+});
+
+/*
+ * The render memo is keyed on what a document IS, and `$.count` is part of
+ * that: buildProgram bakes the number into the program text rather than
+ * offering a native, so a document that reads it is a different program in a
+ * set of three than in a set of two.
+ *
+ * The fingerprint left the set's size out, so the second render below was
+ * served the first one's answer — `count is 2` with three documents on disk,
+ * in a page that is otherwise correct and reports nothing. It needs a
+ * long-lived process (`mdy dev`, `--watch`, an embedder calling renderSite
+ * twice) and a document whose render is memoised at all, which is why it went
+ * unnoticed. rotateRenderMemo is what build.js calls between builds. B33.
+ */
+test('the render memo keys on the set size: $.count is not served stale', async () => {
+  const doc = 'count is {{ $.count }}';
+  rotateRenderMemo();
+  const two = await renderText([doc, 'second']);
+  rotateRenderMemo();
+  const three = await renderText([doc, 'second', 'third']);
+  assert.equal(two.trim(), 'count is 2');
+  assert.equal(three.trim(), 'count is 3');
+});
+
+test('...and the memo still HITS when nothing about the set changed', async () => {
+  // The other half: keying on the size must not stop a second build reusing
+  // the first one's renders, which is the whole point of the memo.
+  const set = await openDocumentSet('{{ $.count }} {{ 1 + 1 }}');
+  const first = await set.renderText(0);
+  rotateRenderMemo();
+  const again = await openDocumentSet('{{ $.count }} {{ 1 + 1 }}');
+  assert.equal((await again.renderText(0)).trim(), first.trim());
 });
 
 test('$.render on a missing index rejects', async () => {

@@ -723,9 +723,9 @@ static void memo_key_checks(void) {
  * size of the set is not part of any document's text or record, so adding a
  * file leaves every other document's fingerprint alone; a second build in the
  * same process would then serve each of them the render made when the set was
- * smaller, with `$.count` frozen at the old number. mdy-docs does exactly that
- * (B33). Here the size is in the fingerprint, so the two builds below disagree
- * on purpose.
+ * smaller, with `$.count` frozen at the old number. mdy-docs did exactly that
+ * until B33 was fixed there too; both fingerprints carry the size now, and the
+ * two builds below disagree on purpose. test/mdy.test.js has this test's twin.
  */
 static char *count_of(const char *source, int *docs) {
     mdy_engine *e = mdy_engine_new();
@@ -775,7 +775,8 @@ static void count_checks(void) {
      * And the bug itself. Document 0 is byte-identical in both sets and sits
      * at the same index; only the SET is bigger. Without the size in the
      * fingerprint the second build hits the first build's entry and answers 2
-     * — which is what mdy-docs does (B33), measured, not inferred.
+     * — which is what mdy-docs did until B33 was fixed there, measured on both
+     * sides rather than inferred.
      */
     char *html_small = NULL, *html_big = NULL;
     const char *set2 = "= {{ $.count }}\n---\n= b\n";

@@ -844,10 +844,19 @@ async function buildDocumentSet(source, options = {}) {
   // the process and two sets built from identical text would otherwise share
   // its entries — including when one of them offers `$.resize` and the other
   // does not, which is a different program for the same document.
+  //
+  // And the SET'S SIZE, for the same reason one step further on. `$.count` is
+  // not a native: buildProgram bakes `count: ${documents.length}` into the
+  // program text, so it is part of what the document IS for this build in
+  // exactly the way its body is. Leaving it out meant a document that reads
+  // `$.count` had a fingerprint that did not change when the count did, and a
+  // second build in the same process — `mdy dev`, `--watch`, or an embedder
+  // calling renderSite twice — was served the previous build's render, with
+  // the old number, in a page that was otherwise correct and reported nothing.
   const setSignature = extraNativeNames.join(',');
   for (const doc of docs) {
     doc.fingerprint = hashString(
-      `${setSignature}\u0000${doc.data?.path ?? doc.index}\u0000${doc.body ?? ''}\u0000${JSON.stringify(doc.data ?? null)}`
+      `${setSignature}\u0000${documents.length}\u0000${doc.data?.path ?? doc.index}\u0000${doc.body ?? ''}\u0000${JSON.stringify(doc.data ?? null)}`
     );
   }
 

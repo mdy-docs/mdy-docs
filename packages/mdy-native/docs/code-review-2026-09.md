@@ -58,7 +58,7 @@ what those checks do not reach.
 | B30 | ~~Low~~ **part fixed** | `doc.c` | A CRLF source: the splitter normalises line endings, node keeps them |
 | B31 | ~~Low~~ **fixed** | `engine.c` records | A record's keys come back in a different order, and `$.data` carries an `_id` node hides |
 | B32 | ~~Medium~~ **fixed** | `fsx.c` listing | A file name containing a newline was split in two and the file disappeared |
-| B33 | Medium | **mdy-docs** | The render memo serves a stale `$.count`: a rebuild after a file is added keeps the old number |
+| B33 | ~~Medium~~ **fixed** | **mdy-docs** | The render memo served a stale `$.count`: a rebuild after a file was added kept the old number |
 | B34 | ~~Low~~ **fixed** | `cli.c` | `mdy build` had five exits and no two freed the same things: up to 118 KB a run |
 | B35 | Low | `cli.c` dev server | The publish dedupe list grows for the life of the process and is never freed |
 | B36 | ~~Medium~~ **fixed** | `engine_value.c` | `.inf`/`.nan` crossed into a document as numbers; node sends `null` |
@@ -187,12 +187,12 @@ source, it is just no longer at risk of being re-split.
 #### B3 — `$.render` of a `.md` document returns an empty or wrong token (High) — FIXED
 
 **Fixed.** `render_tree_out` has one exit. The markdown branch sets `out` and
-jumps to `done:` ([engine.c:3003](../src/engine.c#L3113)) like every other
+jumps to `done:` ([engine.c:3003](../src/engine.c#L3114)) like every other
 path, so `e->last_render_key` is written for it too and `render_native` parks
 the tree under the key of the render that actually made it.
 
 The other two exits went with it, which is B12 below. The index check is a
-`FAIL` ([engine.c:2992](../src/engine.c#L3102)) and gives back the depth and
+`FAIL` ([engine.c:2992](../src/engine.c#L3103)) and gives back the depth and
 the `current` it had already taken; the cycle guard moved ABOVE everything
 `done:` restores ([engine.c:2957](../src/engine.c#L3067)), which is what
 earns it the right to skip the label — there is nothing yet to give back.
@@ -500,7 +500,7 @@ before the routing, not be folded into it. `dev_drain`, the in-process path,
 does not take messages it cannot render either
 ([cli.c:1500](../src/cli.c#L1524)); they stay queued for the drain after the
 next good build. And `mdy_engine_page_index` and `mdy_engine_document_path`
-tolerate a NULL engine ([engine.c:3261](../src/engine.c#L3371)), which is the
+tolerate a NULL engine ([engine.c:3261](../src/engine.c#L3372)), which is the
 convention `mdy_engine_count` already sets in that file.
 
 **The dev server has a test now** — its first, which is the real reason this
@@ -534,7 +534,7 @@ does its arithmetic in `size_t` bounded by `n`, `webp_size` reads fixed
 offsets behind length guards, and `isobmff_size` walks with `i + 20 <= n`.
 
 Regression test: `bad_image_checks`
-([test/engine.c:858](../test/engine.c#L858)) — the wrapping offset in both
+([test/engine.c:858](../test/engine.c#L859)) — the wrapping offset in both
 byte orders, one just past the end, a directory count that would walk entries
 off it, a header cut short, an empty file, and a real PNG beside them so the
 reader is not merely refusing everything. Each broken one costs the file its
@@ -553,7 +553,7 @@ than the eight bytes a header needs.
 **Fixed** with B3, as one change: the index check is a `FAIL` now and leaves
 through `done:`, which gives back the depth, the `current` and the `taint` it
 had taken. Pinned in the block that already asked for an index that is not
-there ([test/engine.c:1392](../test/engine.c#L1435)) — forty times over, and
+there ([test/engine.c:1392](../test/engine.c#L1436)) — forty times over, and
 then the document that IS there still renders. On the old engine the
 thirty-third of those exhausted the cycle guard and nothing rendered again.
 
@@ -592,7 +592,7 @@ in the tree has noticed.
 literal because it builds a program per document; this wrapper is compiled once
 and reused for every render of the document — that is what makes the request an
 argument — so the number arrives on `$$` beside `__scope` and `__wantResponse`
-([engine.c:3098](../src/engine.c#L3208)) and is read at object construction, so
+([engine.c:3098](../src/engine.c#L3209)) and is read at object construction, so
 `$.count` is a plain number to the document either way.
 
 The third place is the memo, and it is the half that was not obvious. **The
@@ -709,54 +709,67 @@ nondeterministic test) before noticing that `make check-engine` runs the binary
 twice and the second run is the stressed one. That is the mode earning its
 place inside a week of existing.
 
-#### B33 — mdy-docs: the render memo serves a stale `$.count` (Medium)
+#### B33 — mdy-docs: the render memo served a stale `$.count` (Medium) — FIXED, in mdy-docs
 
-This one is node's, not this engine's. It was found by asking what B29's fix
+This one was node's, not this engine's. It was found by asking what B29's fix
 had to do about the memo, and then checking what mdy-docs does about it.
 
 `buildProgram` embeds the count in the program text as a literal
-(`src/mdy.js`, `count: ${count}` from `documents.length`). The render memo is
-keyed on `doc.fingerprint`, which is
+(`src/mdy.js:687`, `count: ${count}` from `documents.length`). The render memo
+is keyed on `doc.fingerprint`, which was the native names, the path, the body
+and the record — **not the size of the set**. So a document that reads
+`$.count` had a fingerprint that did not change when the count did, and
+`renderMemoPrev` handed the previous build's render back.
 
-```js
-`${setSignature}\u0000${doc.data?.path ?? doc.index}\u0000${doc.body ?? ''}\u0000${JSON.stringify(doc.data ?? null)}`
-```
-
-— the native names, the path, the body and the record. **Not the size of the
-set.** So a document that reads `$.count` has a fingerprint that does not
-change when the count does, and `renderMemoPrev` hands the previous build's
-render back.
-
-Two builds in one process, a file added between them:
-
-```js
-import { renderSite } from 'mdy-docs/src/build.js';
-await build('two documents:');            // main.mdy emits $.html($.render({ path: "card.mdy" }))
-fs.writeFileSync(dir + '/c.mdy', '= c\n'); // card.mdy is `= count is {{ $.count }}`
-await build('after adding a third:');
-```
+Reproduced: a directory whose `main.mdy` emits `$.render({ path: "card.mdy" })`,
+whose `card.mdy` is `= count is {{ $.count }}`, with `renderSite` called twice
+in one process and a file written between the calls.
 
 ```
-two documents:           <h1 id="count-is-2">count is 2</h1>   (files on disk: 2)
-after adding a third:    <h1 id="count-is-2">count is 2</h1>   (files on disk: 3)
+three documents:        <h1 id="count-is-3">count is 3</h1>   (files on disk: 3)
+after adding a fourth:  <h1 id="count-is-3">count is 3</h1>   (files on disk: 4)
 ```
 
 The page is otherwise correct and nothing is reported. It needs all three of:
 a long-lived process (`mdy dev`, `--watch`, or an embedder calling
 `renderSite` twice), a document whose render is memoised at all — one that
 emits or otherwise taints re-runs every build and so hides this — and a
-document that reads `$.count`. The last is rare, which is the same reason
-B29 went unnoticed here.
+document that reads `$.count`. The last is rare, which is the same reason B29
+went unnoticed here.
 
-**This engine deliberately does not reproduce it** (B29): `e->count` is in the
-fingerprint. That makes `mdy dev` a place where the two engines disagree, and
-it is the one divergence in this document where the C answer is the right one
-by construction rather than by accident. `check-sites` does not see it: it
-builds each site once per process, where the two agree.
+**The fix is `documents.length` in the fingerprint**, next to `setSignature`
+and for the same reason one step further on: `$.count` is not a native, so
+there is no call to taint the render — the number is part of what the document
+IS for this build, exactly as its body is. One term in one template string
+(`src/mdy.js:859`). After it: `count is 3`, then `count is 4`.
 
-The fix in node is one term in one template string — the fingerprint wants
-`documents.length` in it, next to `setSignature`, for the reason the comment
-above `setSignature` already gives about two sets meeting in one process.
+**The half that had to be checked too.** A key that is more specific can only
+*prevent* hits, never cause wrong ones — but preventing too many would undo
+B6, which is about the memo hitting across builds at all. Four `renderSite`
+calls on `examples/docs-site` in one process:
+
+| | 1st | 2nd | 3rd | 4th |
+| --- | --- | --- | --- | --- |
+| without the fix | 460 ms | 223 | 219 | 219 |
+| with it | 478 ms | 223 | 215 | 221 |
+
+The cross-build hit is untouched, because the size only changes when it should.
+
+Two tests in `test/mdy.test.js`, beside mdy-docs' other `$.count` tests: the
+bug itself, and the guard that the memo still hits when nothing about the set
+changed. The first fails without the fix; the second passes either way, on
+purpose. 778 pass in mdy-docs' suite.
+
+**The engines agree now.** This engine already put `e->count` in its memo key
+with B29 ([engine.c:3081](../src/engine.c#L3081)), and `count_checks` in
+`test/engine.c` has this test's twin — written when the divergence was real,
+and now the two sides of one behaviour. The comments in `engine.c` and
+`test/engine.c` saying mdy-docs *has* this bug are corrected: it had it. The
+one divergence in this document where the C answer was right by construction
+rather than by accident is closed from the other side.
+
+`check-sites` never saw it and still does not: it builds each site once per
+process, where the two always agreed.
 
 #### B34 — `mdy build` had five exits and no two freed the same things (Low) — FIXED
 
@@ -1052,7 +1065,7 @@ engines: an `.mdy` link to `http://a?é` keeps the `é` on both.
 
 **Verification.** A differential over 53 URL shapes × link and image, against
 `markdownToHast` (`uridiff`): **54/106 before, 106/106 after**. Ten checks in
-`attr_entity_checks` ([test/engine.c:930](../test/engine.c#L930)), every
+`attr_entity_checks` ([test/engine.c:930](../test/engine.c#L931)), every
 expectation read off mdy-docs' own `render()`. Seven of the ten fail without
 the fix; the other three — an already-encoded sequence, `%zz`, and a title —
 pass either way **on purpose**: they are the guards against an implementation
@@ -1902,7 +1915,7 @@ move, `resolve_path`, moved to `engine_walk.c` and is still not somewhere
   escaper ([engine_walk.c:184](../src/engine_walk.c#L191)), which `put_quoted` from
   B8's fix also uses — so everything this file emits as YAML is escaped by the
   same code. Regression test: `tag_checks`
-  ([test/engine.c:939](../test/engine.c#L939)), a quote, a backslash and a tab
+  ([test/engine.c:939](../test/engine.c#L940)), a quote, a backslash and a tab
   in one document's tags, byte-identical to node.
 - ~~`ref_id` called twice for the same string — two arena copies per
   footnote.~~ **FOLDED.** Called once, into a local.
@@ -1954,7 +1967,7 @@ keeps `engine_walk.c` out of the render memo's. That is the next structural
 item and the split did not make it easier; it made it visible.
 
 **Long functions with several exits.** `render_tree_out`
-([2925–3234](../src/engine.c#L3035-L3344), ~300 lines) manages seven GC roots
+([2925–3234](../src/engine.c#L3035-L3345), ~300 lines) manages seven GC roots
 and a `FAIL` macro that jumps to `done:`. It had three early returns that
 *bypassed* `done:` — one was B3, another B12, the third silently cleared the
 enclosing render's `taint` — and it has one exit now. Length is what let three
@@ -2109,7 +2122,7 @@ somebody else's header. What follows is what the warnings were.
 **Warnings in a clean build.** `-Wall -Wextra` produces six: three
 const-discards where the engine mutates the tree behind `mdy_root`'s `const`
 ([engine.c:282](../src/engine.c#L285), [1006](../src/engine.c#L1104),
-[3177](../src/engine.c#L3287)), the unused parameter above, and two from stb
+[3177](../src/engine.c#L3288)), the unused parameter above, and two from stb
 under `STBI_ONLY_PNG`. A non-const `mdy_root_mut` in `mdybuild.h` (or
 `-Wno-unused-function` around the stb include) makes the build silent, which
 is the only state in which a *new* warning is noticed.

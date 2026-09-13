@@ -3072,9 +3072,10 @@ static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
      * a directory and every OTHER document keeps its fingerprint, so a second
      * build in the same process serves each of them the render made when the
      * set was one document smaller — `$.count` frozen at the old number, in a
-     * page that is otherwise correct. mdy-docs has this bug (B33); it embeds
-     * the count in the program text and then keys the memo on the text it had
-     * before the count was substituted in.
+     * page that is otherwise correct. mdy-docs had this bug (B33) for the same
+     * reason in reverse: it embeds the count in the program text and keyed the
+     * memo on the text it had BEFORE the count was substituted in. Its
+     * fingerprint carries the set's size now, so the two agree here.
      */
     char knobs[32];
     int klen = snprintf(knobs, sizeof knobs, "s%dt%dn%zu", e->sanitize ? 1 : 0, e->tasks ? 1 : 0, e->count);
