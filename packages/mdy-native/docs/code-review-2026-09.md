@@ -69,8 +69,9 @@ what those checks do not reach.
 | B45 | ~~Medium~~ **fixed** | `markdown.c` | GFM footnotes in a `.md` document were dropped: the reference vanished, the definition leaked out |
 | B46 | ~~Medium~~ **fixed** | `markdown.c` | Raw HTML inside a `.md` paragraph was escaped rather than passed through; block-level was already right |
 | B47 | ~~Medium~~ **fixed** | `engine.c` / md4c | The sweep never saw a `.md`: three unchecked `strdup`s, and an allocation failure md4c discards |
-| B48 | Low | md4c | A link label beginning with `^` loses it: `[^a b]` renders `a b` where node renders `^a b` |
+| B48 | ~~Low~~ **fixed** | md4c | A bracket that is not a footnote after all lost its `^`: `[^a b]` rendered `a b`, not `^a b` |
 | B49 | Medium | `check-markdown` | It compares a tree that has not been through rehype-raw, so it under-reports by 126 documents |
+| B50 | Low | md4c | A link reference whose label ends in whitespace does not match its definition |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -442,7 +443,7 @@ Identity is still written out and read back, which is the part of §3's
 built as values and handed to `mdy_bj_document` — that wants a way to make an
 `mdy_yaml` mapping from C, which there is not.
 
-Regression test: `odd_name_checks` ([test/engine.c:1858](../test/engine.c#L1858)),
+Regression test: `odd_name_checks` ([test/engine.c:1938](../test/engine.c#L1938)),
 guarded out on Windows, where none of these characters is legal in a file name
 and so there is nothing to carry. On the old engine it reports
 `slash=a.mdy|a.mdy` — the `\b` read as a backspace — and `quote=it|it`.
@@ -541,7 +542,7 @@ does its arithmetic in `size_t` bounded by `n`, `webp_size` reads fixed
 offsets behind length guards, and `isobmff_size` walks with `i + 20 <= n`.
 
 Regression test: `bad_image_checks`
-([test/engine.c:1834](../test/engine.c#L1834)) — the wrapping offset in both
+([test/engine.c:2011](../test/engine.c#L2011)) — the wrapping offset in both
 byte orders, one just past the end, a directory count that would walk entries
 off it, a header cut short, an empty file, and a real PNG beside them so the
 reader is not merely refusing everything. Each broken one costs the file its
@@ -1069,10 +1070,12 @@ md4c hands over the text, having already decided it is not a block. That is the
 one remaining `ext-footnotes` failure too: on `[^1]:` followed by an unindented
 line, md4c continues the definition where micromark ends it.
 
-Two things the same differential turned up that are NOT this and are filed on
-their own: a label with a space in it loses its `^` (**B48**), and inline raw
-HTML in a `.md` paragraph is escaped rather than parsed (**B46**) — which has
-nothing to do with footnotes and is as old as the front end.
+Two things the same differential turned up that are NOT this were filed on
+their own and are both fixed since: a bracket that is not a footnote after all
+losing its `^` (**B48**, which turned out to be a pointer md4c moves and does
+not put back), and inline raw HTML in a `.md` paragraph being escaped
+(**B46**, which has nothing to do with footnotes and was as old as the front
+end). With B48 the footnote differential is 15/15.
 
 #### B46 — raw HTML inside a `.md` paragraph was escaped (Medium) — FIXED
 
@@ -1255,10 +1258,7 @@ wasm, fixture-awkward   7 of 2,299 — the same seven
 The old sites do not merely find fewer bugs. They find *none* of these, and
 say so in the confident voice of a check that passed.
 
-#### B48 — a link label beginning with `^` loses it (Low)
-
-The last shape in B45's differential, and the only one of seven in its family
-that differs.
+#### B48 — a bracket that is not a footnote after all loses its `^` (Low) — FIXED
 
 ```
 a[^a b]
@@ -1267,22 +1267,99 @@ a[^a b]
 ```
 
 ```
-node   <p>a<a href="n">^a b</a></p>
-C      <p>a<a href="n">a b</a></p>
+before   <p>a<a href="n">a b</a></p>
+after    <p>a<a href="n">^a b</a></p>   = node
 ```
 
-A label with a space in it is not a footnote to either engine — both read the
-pair as an ordinary link reference and its definition. What differs is the
-link's TEXT: md4c has already eaten the `^` deciding the label was not a
-footnote's, and does not put it back.
+A label with a space in it is not a footnote label to either engine, so both
+read the pair as an ordinary link reference and its definition. What differed
+was the link's TEXT.
 
-`[^x]` without a space, `[^a b]` with no definition, `[x]`, `[\^x]` and a bare
-`^` all agree, which is what makes it this narrow.
+**It was filed as unfixable, and that was wrong.** The entry said md4c "hands
+over the link's text and its destination, never the label it matched, so the
+missing character is not in anything this side can see". True, and beside the
+point: the character is not missing because md4c declined to report it. It is
+missing because md4c *moved a pointer past it* and did not put it back.
 
-Not fixable from here: md4c hands over the link's text and its destination,
-never the label it matched, so the missing character is not in anything this
-side can see. It would be a change to a vendored parser pinned at an upstream
-commit, for a shape a document is unlikely to contain on purpose.
+`md_resolve_bracket_footnote` (md4c.c:3836) opened with
+
+```c
+/* Expand the opener to eat the '^' */
+opener->end++;
+```
+
+and then made two checks that can fail — an empty label, and a label with no
+definition — each returning `false`. On either, the bracket pair goes on to be
+resolved as an ordinary link by `md_resolve_bracket_link`, which takes the
+link's text from `opener->end`: one past the `^`. The mutation belongs after
+the checks, which is where it is now.
+
+**Patching md4c, which is a decision and not a detail.** It is vendored at a
+pinned commit and B47 deliberately did NOT patch it — a dropped allocation
+failure could be heard from outside through `debug_log`, so it was. Here
+nothing outside can hear anything: the `^` is gone from the callback stream
+before any of this engine's code runs. So the rule this sets is the narrow one
+— patch only when the information is destroyed inside the parser — and
+`third_party/md4c/README.md` carries a **Local patches** section saying so,
+with `grep -n "LOCAL PATCH" src/md4c.c` to find them before a re-pin drops one
+silently.
+
+**Verified inert, which is what a vendored patch owes.** Every one of the
+**1,773** corpus documents was put through `build/mdcat` with and without the
+patch and the two outputs diffed: **zero lines differ**. Every
+`check-markdown` category is unchanged, `ext-footnotes` included at 25/26. The
+change can only reach a bracket that opens `[^`, has a definition to match,
+and fails to match it.
+
+Both failure paths are tested, because the mutation was before both: a label
+with a space, and an empty `[^]`. So is the SUCCEEDING path — a real footnote
+still has to eat its `^` — which is the assertion that would catch moving the
+mutation too far. `caret_bracket_checks`
+([test/engine.c:692](../test/engine.c#L692)); reverting the patch fails the
+first two and leaves the third passing.
+
+The footnote differential is **15/15** now, where the entry was filed at
+14/15 and this was the one.
+
+#### B50 — a link reference whose label ends in whitespace does not match its definition (Low)
+
+Found while testing B48's fix and separate from it — the patch neither causes
+nor cures it, and it has nothing to do with footnotes.
+
+```
+a[x ]
+
+[x ]: n
+```
+
+```
+node   <p>a<a href="n">x </a></p>
+C      <p>a[x ]</p>          — literal text; no link at all
+```
+
+CommonMark normalizes a link label by stripping and collapsing its whitespace,
+so `[x ]` and `[x ]: n` are the same label and `[x ]` with `[x]: n` is too.
+Nine shapes, measured:
+
+```
+[x] / [x]:            both link          [a b] / [a b]:      both link
+[ x] / [ x]:          both link          [a  b] / [a b]:     both link
+[x] / [x ]:           both link          collapsed inner ws  both link
+[x ] / [x ]:          node link, C text
+[x ] / [x]:           node link, C text
+[x<TAB>] / [x<TAB>]:  node link, C text
+```
+
+So the DEFINITION side normalizes correctly — `[x] / [x ]:` matches — and the
+REFERENCE side does not: a label ending in whitespace is looked up with that
+whitespace still on it and finds nothing. A leading space is fine, an inner
+run is collapsed fine; only the trailing one is kept.
+
+Not folded into B48 because it is a different function and a different defect,
+and because a second patch to a pinned parser in the same change would spend
+the argument B48 just made for the first. It is also narrower than it looks: a
+label with a trailing space is a thing a document does by accident, not on
+purpose, and `check-sites` and the corpus contain none.
 
 #### B43 — the allocation sweep covered one command (Low) — FIXED
 
@@ -1735,7 +1812,7 @@ All three paths were checked end to end against node: the document set
 (`new\nline.mdy` is a document with its own record), `mdy build`'s static copy
 (the file is written under its real name), and `--watch` (an edit to it
 rebuilds). Regression test: `odd_name_checks`
-([test/engine.c:1858](../test/engine.c#L1858)), which now carries a newline
+([test/engine.c:1938](../test/engine.c#L1938)), which now carries a newline
 beside the quote, the backslash and the control character.
 
 The original finding follows.

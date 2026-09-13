@@ -673,6 +673,86 @@ static void footnote_checks(void) {
 }
 
 
+/* ---- a bracket that is not a footnote after all ------------------------------
+ *
+ * md4c expanded the opener to eat the `^` BEFORE checking that the label has
+ * a definition. Both checks after it return false, the bracket pair then goes
+ * on to be resolved as an ordinary link, and an opener already moved past the
+ * `^` takes it out of that link's text. (B48, and the one local patch in
+ * third_party/md4c — see its README.)
+ *
+ * `[^a b]` is not a footnote to either engine: a label with a space in it is
+ * not a footnote label, so both read the pair as a link reference and its
+ * definition. What differed was the link's TEXT.
+ *
+ * Both failure paths are here, because the mutation was before both: a label
+ * with a space, and an empty one. So is a real footnote, which takes the
+ * SUCCEEDING path and must still eat its `^`.
+ */
+static void caret_bracket_checks(void) {
+    printf("\n--- engine: a bracket that is not a footnote after all ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-caret", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "space.md", "a[^a b]\n\n[^a b]: n\n");
+    write_file(root, "empty.md", "a[^]\n\n[^]: n\n");
+    write_file(root, "note.md",  "a[^1]\n\n[^1]: n\n");
+    write_file(root, "main.mdy",
+        "% $.emit('space.html', $.html($.render({ path: 'space.md' })))\n"
+        "% $.emit('empty.html', $.html($.render({ path: 'empty.md' })))\n"
+        "% $.emit('note.html',  $.html($.render({ path: 'note.md' })))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of markdown\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    ok_("a label with a space is a link, and keeps the `^` in its text",
+        emitted("space.html") &&
+            strcmp(emitted("space.html"), "<p>a<a href=\"n\">^a b</a></p>") == 0,
+        emitted("space.html"));
+    ok_("...and so does an empty one, the other path the mutation was before",
+        emitted("empty.html") &&
+            strcmp(emitted("empty.html"), "<p>a<a href=\"n\">^</a></p>") == 0,
+        emitted("empty.html"));
+    /* The succeeding path: a real footnote still eats its `^`, which is what
+     * moving the mutation could have broken. */
+    ok_("...while a real footnote still eats its `^` and is a reference",
+        emitted("note.html") &&
+            strstr(emitted("note.html"), "data-footnote-ref") != NULL &&
+            strstr(emitted("note.html"), "^") == NULL,
+        emitted("note.html"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- raw HTML inside a .md paragraph ----------------------------------------
  *
  * `MD_TEXT_HTML` had no case in the text callback and fell through to
@@ -3211,6 +3291,7 @@ int main(void) {
     markdown_render_checks();
     footnote_checks();
     raw_html_checks();
+    caret_bracket_checks();
     query_order_checks();
     reopen_checks();
     memo_key_checks();

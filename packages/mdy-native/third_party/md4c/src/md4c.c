@@ -3846,14 +3846,12 @@ md_resolve_bracket_footnote(MD_CTX* ctx, MD_MARK* opener, MD_MARK* closer,
     if(opener->ch != _T('[')  ||  opener->end >= ctx->size  ||  CH(opener->end) != _T('^'))
         return false;
 
-    /* Expand the opener to eat the '^' */
-    opener->end++;
-
     closer = &ctx->marks[opener->next];
 
     /* Label is the raw text between the opener end and the closer begin.
-     * opener->end points past [^, closer->beg points to ]. */
-    label_beg = opener->end;
+     * opener->end points at the '[', one past that is the '^', and
+     * closer->beg points to the ']'. */
+    label_beg = opener->end + 1;
     label_end = closer->beg;
 
     if(label_beg >= label_end)
@@ -3862,6 +3860,14 @@ md_resolve_bracket_footnote(MD_CTX* ctx, MD_MARK* opener, MD_MARK* closer,
     def = md_lookup_footnote_def(ctx, STR(label_beg), label_end - label_beg);
     if(def == NULL)
         return false;
+
+    /* LOCAL PATCH (mdy-native, B48). Expand the opener to eat the '^' -- and
+     * not before the two checks above, which is where it used to be. Both of
+     * them return false, the bracket pair then goes on to be resolved as an
+     * ordinary link, and an opener already moved past the '^' takes it out of
+     * that link's text: `[^a b]` with a matching `[^a b]: n` definition
+     * rendered `a b` where CommonMark says `^a b`. See third_party/md4c/README.md. */
+    opener->end++;
 
     /* Assign index on first reference. */
     if(def->index == 0)

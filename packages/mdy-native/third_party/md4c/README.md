@@ -15,6 +15,25 @@ Pinned at the commit in `COMMIT`. MIT; the licence is LICENSE.md, and the spec
 files carry their own (CC-BY-SA 4.0) in test/LICENSE.md. Nothing else of the
 upstream tree — the CMake build, md2html, the fuzzers — is used here.
 
+## Local patches
+
+Kept deliberately small, and listed here so that re-pinning does not drop one
+silently. Anything that can be worked around from OUR side is — B47's dropped
+allocation failure is heard through `debug_log` in `src/parse/markdown.c`
+rather than patched here — so this list is the cases where the information is
+destroyed inside the parser and nothing outside it can see what happened.
+
+Check a patch before removing it: `grep -n "LOCAL PATCH" src/md4c.c`.
+
+- **`md_resolve_bracket_footnote`, the `^` (B48).** The opener was expanded to
+  eat the `^` BEFORE checking that the label has a definition. Both checks
+  after it return false, the bracket pair then goes on to be resolved as an
+  ordinary link, and an opener already moved past the `^` takes it out of that
+  link's text: `[^a b]` with a matching `[^a b]: n` rendered `a b` where
+  CommonMark says `^a b`. The mutation moved after the checks. Verified inert:
+  it changes the tree of **none** of the 1,773 documents in
+  `make corpus`, and `ext-footnotes` stays at 25/26.
+
 It is the markdown front end: `.md` documents arrive as hast through it the
 way `.mdy` ones do through the parser, and `make check-markdown` measures how
 far its tree agrees with remark's. See docs/parser.md.
