@@ -2407,13 +2407,24 @@ silent now, not just the default one.
 
 ## 4. Maintainability going forward
 
-**Tests reach the parser and the renderer, not the edges.** `test/engine.c`
-exercises `open`, `open_dir`, `entry`, `render`, `count`, the three callbacks
-and the broker; it never calls `render_text`, `render_json`, `page_index`,
-`document_path`, `set_scope_json`, `set_response`, `on_message`,
-`set_split`/`sanitize`/`tasks`, `set_context_json`, `encode_json`,
-`root_count`/`root_at` or `rotate_memo` — those are covered only by the 34
-CLI cases, which CI runs on Linux alone. The differential harnesses
+**~~Tests reach the parser and the renderer, not the edges.~~ The edges are
+covered now.** `test/engine.c` exercised `open`, `open_dir`, `entry`,
+`render`, `count`, the three callbacks and the broker, and never called
+`render_text`, `render_json`, `page_index`, `document_path`,
+`set_scope_json`, `set_response`, `set_split`/`sanitize`/`tasks`,
+`encode_json` or `root_count`/`root_at` — twelve entry points reached only by
+the 34 CLI cases, which CI runs on Linux alone.
+
+`api_checks` ([test/engine.c:2329](../test/engine.c#L2329)) is 23 assertions
+over all twelve, each one the contract `engine.h` states and quoted where it
+is short enough to quote. The knobs are tested as CONTRASTS — `set_tasks(0)`
+against `set_tasks(1)`, `set_split(0)` against `set_split(1)` — because an
+assertion about one setting alone passes for an engine that ignores the knob;
+the `sanitize` one was checked the same way by flipping it and watching the
+assertion fail. `leaks` reports 0 over the suite, and it runs under
+`MDY_GC_STRESS` with the rest.
+
+Still true, and the harder half: the differential harnesses
 (`compare`, `check-html`, `check-script`, `check-yaml`, `check-links`,
 `check-markdown`) depend on a corpus outside the repository and never run in
 CI; `test/compare.mjs` exits 0 whatever it finds.
@@ -2585,13 +2596,12 @@ date.
 1. **B44**, the only open finding: a list item holding one non-paragraph block
    is tight here and loose in node. Small, local to `markdown.c`'s
    `list_tight`, and the rule is written down in the finding.
-2. **The public API that `test/engine.c` never calls** — `render_text`,
-   `render_json`, `page_index`, `document_path`, `set_scope_json`,
-   `set_response`, `set_split`/`sanitize`/`tasks`, `encode_json`,
-   `root_count`/`root_at`. They are exercised only by the 34 CLI cases, on one
-   platform. This is the cheapest remaining thing with real value: each is a
-   few lines of `test/engine.c`, and the surface is the one an embedder
-   actually holds.
+2. ~~**The public API that `test/engine.c` never calls.**~~ **Done** —
+   `api_checks`, 23 assertions over all twelve, with the knobs tested as
+   contrasts so that an engine ignoring one would fail rather than pass. See
+   §4. What is left of the testing gap is the differential harnesses, which
+   need a corpus outside the repository and so cannot run in CI; that is a
+   question about where the corpus lives, not about writing a test.
 3. **`struct mdy_engine`'s 56 fields** ([engine_internal.h:97](../src/engine_internal.h#L97)),
    still 56. It is grouped and commented — the VM, the open set, composition,
    the callbacks, the knobs, identity, the walk — so what is wanted is those

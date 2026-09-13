@@ -2326,6 +2326,239 @@ static void broker_checks(void) {
     ok_("closes with nothing left behind", 1, NULL);
 }
 
+/* ---- the public surface an embedder holds --------------------------------
+ *
+ * Ten of the twelve entry points below had NO test here at all; they were
+ * reached only through the 34 CLI cases, which CI runs on Linux alone (§4,
+ * and §5 called this the cheapest remaining thing worth doing). What an
+ * embedder holds is engine.h, and engine.h is what this exercises: the
+ * things a caller does BEFORE a render (the knobs, a scope, a response), the
+ * things it asks DURING one (a page by name, a document's path), and the
+ * things it reads AFTER (the roots, the response, JSON encoded the way
+ * nisaba wants it).
+ *
+ * Each assertion is the contract engine.h states, quoted where it is short
+ * enough to quote.
+ */
+static void api_checks(void) {
+    printf("\n--- engine: the public surface, from engine.h ---\n");
+
+    char err[512];
+
+    /* --- render_text and render_json ------------------------------------- */
+    {
+        mdy_engine *e = mdy_engine_new();
+        const char *src = "% $.emit(\"a.txt\", \"x\")\n= Title\n\nbody\n";
+        if (mdy_engine_open(e, src, strlen(src), err, sizeof err) != 0) {
+            ok_("open for render_text", 0, err);
+        } else {
+            char *text = mdy_engine_render_text(e, 0, err, sizeof err);
+            ok_("render_text gives the text the document's code wrote, not its HTML",
+                text && strstr(text, "= Title") != NULL && strstr(text, "<h1") == NULL,
+                text ? text : err);
+            free(text);
+        }
+        mdy_engine_free(e);
+    }
+    {
+        /* "mdy_engine_set_context_* are NOT added; the JSON is the whole
+         * request" — so `req` is exactly what was handed in. */
+        mdy_engine *e = mdy_engine_new();
+        const char *src = "= Hello {{ req.who }}\n";
+        if (mdy_engine_open(e, src, strlen(src), err, sizeof err) != 0) {
+            ok_("open for render_json", 0, err);
+        } else {
+            char *html = mdy_engine_render_json(e, 0, "{\"who\":\"world\"}", err, sizeof err);
+            ok_("render_json binds the JSON it was given as `req`",
+                html && strstr(html, "Hello world") != NULL, html ? html : err);
+            free(html);
+
+            char *bad = mdy_engine_render_json(e, 0, "{not json", err, sizeof err);
+            ok_("...and says so rather than rendering when the request is not JSON",
+                bad == NULL, bad ? bad : "(NULL, with an error)");
+            free(bad);
+        }
+        mdy_engine_free(e);
+    }
+
+    /* --- encode_json ------------------------------------------------------ */
+    {
+        mdy_engine *e = mdy_engine_new();
+        const char *src = "= x\n";
+        mdy_engine_open(e, src, strlen(src), err, sizeof err);
+        uint8_t *out = NULL;
+        size_t len = 0;
+        ok_("encode_json turns a JSON text into one binjson value",
+            mdy_engine_encode_json(e, "{\"a\":1}", &out, &len) == 0 && out && len > 0,
+            out ? "(encoded)" : "(nothing)");
+        free(out);
+        out = NULL; len = 0;
+        /* "-1 when the text is not JSON" */
+        ok_("...and answers -1 for a text that is not JSON",
+            mdy_engine_encode_json(e, "{nope", &out, &len) != 0, "(refused)");
+        free(out);
+        mdy_engine_free(e);
+    }
+
+    /* --- set_response / last_response ------------------------------------- */
+    {
+        mdy_engine *e = mdy_engine_new();
+        const char *src = "% res.answer = 42\n= x\n";
+        mdy_engine_set_response(e, 1);
+        if (mdy_engine_open(e, src, strlen(src), err, sizeof err) != 0) {
+            ok_("open for set_response", 0, err);
+        } else {
+            char *html = mdy_engine_render(e, 0, err, sizeof err);
+            const char *res = mdy_engine_last_response(e);
+            ok_("set_response keeps `res` and last_response gives it back as JSON",
+                res && strstr(res, "42") != NULL, res ? res : "(nothing)");
+            /* "minus `doc`, which is the tree and is the HTML's business" */
+            ok_("...without `doc`, which is the tree",
+                res && strstr(res, "\"doc\"") == NULL, res ? res : "(nothing)");
+            free(html);
+        }
+        mdy_engine_free(e);
+    }
+    {
+        mdy_engine *e = mdy_engine_new();
+        const char *src = "% res.answer = 42\n= x\n";
+        mdy_engine_open(e, src, strlen(src), err, sizeof err);
+        char *html = mdy_engine_render(e, 0, err, sizeof err);
+        ok_("...and nothing is kept when it was not asked for",
+            mdy_engine_last_response(e) == NULL, "(NULL)");
+        free(html);
+        mdy_engine_free(e);
+    }
+
+    /* --- set_scope_json ---------------------------------------------------- */
+    {
+        mdy_engine *e = mdy_engine_new();
+        const char *src = "= {{ site.name }}\n";
+        int ok = mdy_engine_set_scope_json(e, "site", "{\"name\":\"Uruk\"}");
+        mdy_engine_open(e, src, strlen(src), err, sizeof err);
+        char *html = mdy_engine_render(e, 0, err, sizeof err);
+        ok_("set_scope_json binds a name in the document's own scope",
+            ok == 0 && html && strstr(html, "Uruk") != NULL, html ? html : err);
+        free(html);
+        /* "The name must be an identifier and may not be one of the toolkit's
+         * (transform, visit, h, toText, slug); -1 when it is either." */
+        ok_("...refuses a name that is not an identifier",
+            mdy_engine_set_scope_json(e, "not a name", "1") == -1, "(-1)");
+        ok_("...and refuses one of the toolkit's own",
+            mdy_engine_set_scope_json(e, "slug", "1") == -1, "(-1)");
+        mdy_engine_free(e);
+    }
+
+    /* --- the knobs: split, sanitize, tasks ---------------------------------- */
+    {
+        /* tasks: "1: a task's box is a form carrying the line and column of
+         * its `[x]`; 0: a disabled checkbox." */
+        const char *src = "- [ ] a task\n";
+        mdy_engine *a = mdy_engine_new();
+        mdy_engine_set_tasks(a, 0);
+        mdy_engine_open(a, src, strlen(src), err, sizeof err);
+        char *off = mdy_engine_render(a, 0, err, sizeof err);
+
+        mdy_engine *b = mdy_engine_new();
+        mdy_engine_set_tasks(b, 1);
+        mdy_engine_open(b, src, strlen(src), err, sizeof err);
+        char *on = mdy_engine_render(b, 0, err, sizeof err);
+
+        ok_("set_tasks(0) gives a disabled checkbox",
+            off && strstr(off, "disabled") != NULL, off ? off : err);
+        ok_("set_tasks(1) gives a form instead",
+            on && strstr(on, "<form") != NULL, on ? on : err);
+        free(off); free(on);
+        mdy_engine_free(a); mdy_engine_free(b);
+    }
+    {
+        /* split: "1: a bare `---` starts a new document; 0: the whole source
+         * is one document and `---` is a thematic break". Before OPEN, which
+         * is what makes it visible in the COUNT rather than in the HTML. */
+        const char *src = "= one\n---\n= two\n";
+        mdy_engine *a = mdy_engine_new();
+        mdy_engine_set_split(a, 1);
+        mdy_engine_open(a, src, strlen(src), err, sizeof err);
+
+        mdy_engine *b = mdy_engine_new();
+        mdy_engine_set_split(b, 0);
+        mdy_engine_open(b, src, strlen(src), err, sizeof err);
+        char *one = mdy_engine_render(b, 0, err, sizeof err);
+
+        ok_("set_split(1) makes a bare `---` start a second document",
+            mdy_engine_count(a) == 2, mdy_engine_count(a) == 2 ? "(2)" : "(not 2)");
+        ok_("set_split(0) keeps one document, and `---` is a thematic break",
+            mdy_engine_count(b) == 1 && one && strstr(one, "<hr") != NULL,
+            one ? one : err);
+        free(one);
+        mdy_engine_free(a); mdy_engine_free(b);
+    }
+    {
+        /* sanitize: what a document may write as raw HTML. */
+        const char *src = "<script>x()</script>\n";
+        mdy_engine *a = mdy_engine_new();
+        mdy_engine_set_sanitize(a, 1);
+        mdy_engine_open(a, src, strlen(src), err, sizeof err);
+        char *on = mdy_engine_render(a, 0, err, sizeof err);
+        ok_("set_sanitize(1) drops a <script> a document wrote",
+            on && strstr(on, "<script") == NULL, on ? on : err);
+        free(on);
+        mdy_engine_free(a);
+    }
+
+    /* --- page_index and document_path -------------------------------------- */
+    {
+        char *tmp = fsx_tmpdir();
+        char prefix[1024];
+        snprintf(prefix, sizeof prefix, "%s/mdy-api", tmp ? tmp : ".");
+        free(tmp);
+        char *root = fsx_mkdtemp(prefix);
+        if (!root) { ok_("a temp directory for the directory checks", 0, "(none)"); return; }
+
+        write_file(root, "main.mdy", "= main\n");
+        write_file(root, "handlers/one.mdy", "+++\nmessageName: handlers.one\n+++\n= one\n");
+        write_file(root, "handlers/two.mdy", "= two\n");
+
+        mdy_engine *e = mdy_engine_new();
+        if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+            ok_("open_dir for the directory checks", 0, err);
+            mdy_engine_free(e);
+            free(root);
+            return;
+        }
+
+        /* "a page's own name — its path without the extension, `/` written as
+         * `.`, or the `messageName` it declares" */
+        int by_path = mdy_engine_page_index(e, "handlers.two");
+        int by_declared = mdy_engine_page_index(e, "handlers.one");
+        ok_("page_index finds a page by its path with `/` written as `.`",
+            by_path >= 0, by_path >= 0 ? "(found)" : "(-1)");
+        ok_("...and by the messageName a document declares",
+            by_declared >= 0, by_declared >= 0 ? "(found)" : "(-1)");
+        ok_("...and answers -1 for a name no document has",
+            mdy_engine_page_index(e, "handlers.nope") == -1, "(-1)");
+
+        char *p = by_declared >= 0 ? mdy_engine_document_path(e, (size_t)by_declared) : NULL;
+        ok_("document_path gives the path its record holds",
+            p && strcmp(p, "handlers/one.mdy") == 0, p ? p : "(NULL)");
+        free(p);
+
+        /* "Every directory in the import graph, in post-order" — one site with
+         * no imports is one root, and it is this one. */
+        size_t roots = mdy_engine_root_count(e);
+        const char *r0 = roots ? mdy_engine_root_at(e, 0) : NULL;
+        ok_("root_count is 1 for a site that imports nothing",
+            roots == 1, roots == 1 ? "(1)" : "(not 1)");
+        ok_("...and root_at(0) is the site itself",
+            r0 && strstr(r0, "mdy-api") != NULL, r0 ? r0 : "(NULL)");
+        ok_("...and an index past the end is NULL, not a crash",
+            mdy_engine_root_at(e, roots + 5) == NULL, "(NULL)");
+
+        mdy_engine_free(e);
+        free(root);
+    }
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("[main]\n");
@@ -2729,6 +2962,7 @@ int main(void) {
     memo_key_checks();
     count_checks();
     import_checks();
+    api_checks();
 #ifndef _WIN32
     unreadable_dir_checks();
 #endif
