@@ -1492,6 +1492,36 @@ static void import_checks(void) {
 
     free(html);
     mdy_engine_free(e);
+
+    /*
+     * A LONG specifier, which is the one that overflowed. The line the walk
+     * builds for an import carries the spec four times, so `import_line`'s
+     * limit of 1023 makes a line of about 4,500 characters — and it was
+     * assembled into a char[4096] with snprintf's RETURN used as the length to
+     * copy out of it. ASan: stack-buffer-overflow, READ of size 4277. (§3.)
+     *
+     * The import does not resolve, and does not need to: what is under test is
+     * the rewrite of the line, which happens before anything looks for the
+     * package. Failing to resolve is the correct outcome and the engine says
+     * so rather than crashing.
+     */
+    char spec[1200];
+    memset(spec, 'a', sizeof spec - 1);
+    spec[sizeof spec - 1] = '\0';
+    memcpy(spec, "../", 3);
+    char line[1400];
+    snprintf(line, sizeof line, "%% import x from \"%s\"\n= main\n", spec);
+
+    char site2[1100];
+    snprintf(site2, sizeof site2, "%s/long", root);
+    write_file(site2, "main.mdy", line);
+
+    mdy_engine *e2 = mdy_engine_new();
+    int opened = mdy_engine_open_dir(e2, site2, err, sizeof err);
+    ok_("an import specifier of a thousand characters does not overflow the line",
+        opened != 0 || mdy_engine_count(e2) > 0, err);
+    mdy_engine_free(e2);
+
     free(root);
 }
 

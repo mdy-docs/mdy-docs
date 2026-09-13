@@ -87,7 +87,7 @@ and `test/yaml.c`.)
 #### B1 — A `.yaml` file that begins with `---` corrupts the document set (High) — FIXED
 
 **Fixed.** A data file's bytes are no longer part of the concatenated source.
-`open_dir_inner` parses them once as YAML ([engine_walk.c:855](../src/engine_walk.c#L856))
+`open_dir_inner` parses them once as YAML ([engine_walk.c:855](../src/engine_walk.c#L868))
 and the mapping travels beside the document in a new `ident_data`
 ([engine_internal.h:227](../src/engine_internal.h#L227)), merged in `mdy_engine_open` after the
 document's own fields and before `path`
@@ -141,11 +141,11 @@ own source and is split on its own, which is what mdy-docs' `parseDocuments`
 does with an array: `mdy_split_sources`
 ([doc.c:173](../src/parse/doc.c#L173)) appends each source's documents to one
 list and says how many each became, and the walk asks it once
-([engine_walk.c:920](../src/engine_walk.c#L931)) instead of counting beforehand and
+([engine_walk.c:920](../src/engine_walk.c#L943)) instead of counting beforehand and
 re-deriving afterwards. Identity is collected per FILE while the walk runs
-(`WalkedFile`, [engine_walk.c:684–690](../src/engine_walk.c#L658-L664)) and expanded
+(`WalkedFile`, [engine_walk.c:684–690](../src/engine_walk.c#L670-L676)) and expanded
 to one entry per document once the count is known
-([engine_walk.c:943](../src/engine_walk.c#L954)). The two computations that had to
+([engine_walk.c:943](../src/engine_walk.c#L966)). The two computations that had to
 agree are one computation, so there is nothing left to disagree.
 
 The "when nothing survives, ONE empty document" rule is now applied per source
@@ -425,7 +425,7 @@ identity field as YAML with the value escaped the way `read_quoted` unescapes
 it — `\` and `"` named, control characters as `\xNN`, and everything else
 including UTF-8 through as bytes, since only what the reader would take for
 something else has to be named. The walk builds identity with it
-([engine_walk.c:769](../src/engine_walk.c#L757)) into a buffer that grows, which
+([engine_walk.c:769](../src/engine_walk.c#L769)) into a buffer that grows, which
 retires the fixed 4096-byte array as well: a long enough name and path would
 have been truncated mid-mapping and lost the document its `path` entirely. I
 could not construct one on macOS, where `PATH_MAX` is 1024, so that half is a
@@ -447,7 +447,7 @@ Byte-identical to node across `"`, `\`, a bell, an apostrophe, a semicolon,
 The original finding follows.
 
 Identity is written as YAML text by `snprintf` with no escaping
-([engine_walk.c:767–767](../src/engine_walk.c#L755-L755), [874](../src/engine_walk.c#L875)).
+([engine_walk.c:767–767](../src/engine_walk.c#L767-L767), [874](../src/engine_walk.c#L887)).
 A name like `it"s.mdy` produces `name: "it"s.mdy"`, which the YAML reader
 reads as `it` (see B9) — so the document's `path`, `name` and `ext` are all
 truncated at the quote. Node reports `it"s.mdy`. A backslash in a name would
@@ -493,7 +493,7 @@ process is gone: `curl` reports `http 000`, the connection closed with no
 response.
 
 **Fixed.** `dev_deliver` holds when there is no build
-([cli.c:1704](../src/cli.c#L1740)): 500 returns the messages to the broker,
+([cli.c:1704](../src/cli.c#L1750)): 500 returns the messages to the broker,
 which brings them back after a backoff, by which time a save may have fixed
 the build. Routing them with no engine would have found no page of that name,
 which is a different thing and settles them away — so the guard has to come
@@ -686,7 +686,7 @@ Three changes, each matching a decision node makes for a reason:
   insert adds it after spreading the document. The merge also skips an `_id` a
   mapping tries to declare — the store's id is the store's, and writing it
   twice was reachable before.
-- **`path` first** ([engine_walk.c:796](../src/engine_walk.c#L797)), because
+- **`path` first** ([engine_walk.c:796](../src/engine_walk.c#L809)), because
   mdy-docs builds the record as `{ ...meta, ...parsed, path }` and re-assigning
   a key in JS leaves it where it was first written. Safe because
   `mdy_bj_document` takes a key's *place* from the first mapping that has it
@@ -806,7 +806,7 @@ So the fix is not a `free` added to one path; it is the shape §3 names under
 for B3 and B12. `cmd_build` has one exit now
 ([cli.c:760](../src/cli.c#L766)), `rc` carries the answer to it
 ([697](../src/cli.c#L703)), and the cleanup is written once — the third copy
-in this file, after `mdy dev`'s ([1707](../src/cli.c#L1743)) and document
+in this file, after `mdy dev`'s ([1707](../src/cli.c#L1753)) and document
 mode's, and the first that runs on every path rather than some.
 
 Every message and exit code was compared before and after: identical.
@@ -1314,7 +1314,7 @@ engine.
 ([fsx.c:174](../src/fsx.c#L183)), `fsx_list`'s sort counts and splits on it
 ([fsx.c:253](../src/fsx.c#L260)), and all three readers became the same one
 line — `for (const char *rel = listing; *rel; rel += strlen(rel) + 1)` — in
-the engine's walk ([engine_walk.c:737](../src/engine_walk.c#L715)), `cli.c`'s static
+the engine's walk ([engine_walk.c:737](../src/engine_walk.c#L727)), `cli.c`'s static
 copier ([636](../src/cli.c#L622)) and `watch.c`'s snapshot
 ([48](../src/watch.c#L52)). Each of them lost a `strchr`, a mutation of the
 buffer and an empty-entry guard.
@@ -1454,7 +1454,7 @@ reach it.
   The `mdy dev` health probe had the same shape one guard weaker —
   `if (r.status) http_response_free(&r)` left behind the body of anything whose
   status line did not parse. Also unconditional now
-  ([cli.c:1999](../src/cli.c#L2037)). The other four `http_request` callers are
+  ([cli.c:1999](../src/cli.c#L2054)). The other four `http_request` callers are
   fine: each either `exit`s or calls `broker_fail`, which exits.
 
   `check-dev` had no coverage of the `--broker` path at all — every other test
@@ -1472,7 +1472,7 @@ reach it.
   **connect.** There is no socket option for this; the portable way is to go
   non-blocking, start the connect, wait for writability, then ask `SO_ERROR`
   whether it actually arrived — a writable socket is not a connected one, and
-  `connect_timeout` ([http.c:130](../src/http.c#L130)) is written out longhand
+  `connect_timeout` ([http.c:130](../src/http.c#L131)) is written out longhand
   to keep that straight. Reproduced with a listener whose accept queue is full,
   so its SYNs are dropped: **20s before, 5s after**.
 
@@ -1485,9 +1485,9 @@ reach it.
 
   **send.** The same deadline-on-the-whole-write as
   [httpd.c](../src/httpd.c#L200), for the same reason
-  ([http.c:201](../src/http.c#L201)).
+  ([http.c:201](../src/http.c#L202)).
 
-  Budgets: 5s to connect ([http.c:71](../src/http.c#L71)) and 15s for the
+  Budgets: 5s to connect ([http.c:71](../src/http.c#L72)) and 15s for the
   exchange, with **`MDY_HTTP_TIMEOUT_MS`** to move the second — a broker across
   a slow link is a real thing, and a hard limit with no way out is how a fix
   becomes somebody else's outage. The dev server's poll loop is what sets the
@@ -1496,13 +1496,13 @@ reach it.
   **The IPv6 literal**, which was the other half. `parse_url` split host from
   port on the first colon, so `http://[::1]:8080` asked the resolver for a host
   called `[`. Brackets are what tell an address's colons from a port's; they
-  are handled and stripped ([http.c:176](../src/http.c#L176)), since
+  are handled and stripped ([http.c:176](../src/http.c#L177)), since
   `getaddrinfo` wants the address without them, and an unclosed `[` is now a
   named error rather than a strange hostname. Error messages bracket the host
   again on the way out, because `::1:8080` is not something a reader can parse.
 
   While in the same loop: the response is capped at 64 MiB
-  ([http.c:69](../src/http.c#L69)) and `realloc`'s result is checked — it went
+  ([http.c:69](../src/http.c#L70)) and `realloc`'s result is checked — it went
   straight back into `buf`, so exhaustion arrived as a write through NULL. That
   closes one line of B24, not B24.
 
@@ -1523,7 +1523,7 @@ reach it.
   **The bind.** It bound `0.0.0.0`, so every machine on the network could reach
   a server that rebuilds a directory on disk and, with a broker, renders
   whatever a POST tells it to. It binds `127.0.0.1` now, and `--host`
-  ([cli.c:1960](../src/cli.c#L1998)) opts back in and says so on stderr when it
+  ([cli.c:1960](../src/cli.c#L2015)) opts back in and says so on stderr when it
   does. This is a deliberate divergence: node's `server.listen(port)` binds
   everything too, but node has no delivery endpoint to reach — the bus is
   native-only. Verified with `lsof`: `127.0.0.1:45311 (LISTEN)` by default,
@@ -1536,7 +1536,7 @@ reach it.
   ([httpd.c:141](../src/httpd.c#L144)), 19 bytes from `/dev/urandom` or
   `BCryptGenRandom`, and **there is no fallback**: if the OS will not supply
   randomness the server says so and serves without the bus
-  ([cli.c:1976](../src/cli.c#L2014)), because a token that looks random and is
+  ([cli.c:1976](../src/cli.c#L2031)), because a token that looks random and is
   not is worse than a refusal. `srand`/`rand` are gone from the program.
 
   **The request cap.** There was none: `recv` appended and the buffer doubled,
@@ -1805,14 +1805,14 @@ reach it.
   not allocations.
 
   **Propagated** — the channel existed and the caller was ignoring it:
-  `fsx_read`'s NULL in the walk ([engine_walk.c:807](../src/engine_walk.c#L771)),
+  `fsx_read`'s NULL in the walk ([engine_walk.c:807](../src/engine_walk.c#L783)),
   `fsx_stat`'s return, which was dropped entirely — the document's record then
   claimed an empty file last written in 1970
-  ([engine_walk.c:784](../src/engine_walk.c#L748)),
+  ([engine_walk.c:784](../src/engine_walk.c#L760)),
   `fsx_list`'s in `copy_static` ([cli.c:671](../src/cli.c#L653)) and in
   [fsx_list](../src/fsx.c#L287) itself, `mdy_to_html`'s in
   [fill_tokens](../src/engine_compose.c#L304), the identity copies
-  ([engine_walk.c:1028](../src/engine_walk.c#L992)), `rewrite_imports`'
+  ([engine_walk.c:1028](../src/engine_walk.c#L1004)), `rewrite_imports`'
   two unchecked `strdup`s ([engine_walk.c:606](../src/engine_walk.c#L570)),
   and a failed write in `copy_static` that was simply not counted.
 
@@ -1824,7 +1824,7 @@ reach it.
   ([engine_walk.c:169](../src/engine_walk.c#L153)), `add_tag`
   ([engine_walk.c:345](../src/engine_walk.c#L329)), `scan_hashtags`
   ([engine_walk.c:356](../src/engine_walk.c#L340)), `cache_put`
-  ([engine_walk.c:662](../src/engine_walk.c#L626)), the composition tokens
+  ([engine_walk.c:662](../src/engine_walk.c#L638)), the composition tokens
   ([engine_compose.c:95](../src/engine_compose.c#L95)), `tokenize_native`
   ([engine.c:39](../src/engine.c#L39)), the contents list and the text walk it
   uses ([collect_headings](../src/engine.c#L1694),
@@ -2177,24 +2177,104 @@ down. The fields are grouped by job in the struct and nothing but convention
 keeps `engine_walk.c` out of the render memo's. That is the next structural
 item and the split did not make it easier; it made it visible.
 
+**The `Dev` struct and the bus code in cli.c** carried fixed-size scratch,
+fake growable arrays, and reuse of the drain loop for document mode via a
+constructed `Dev`. **The scratch is gone, and it was hiding a
+stack-buffer-overflow** — three of them, all the same mistake.
+
+What unblocked it was §2: the engine has a growable buffer now
+(`mdy_sbuf`), which is what every one of these was missing.
+
+- **`done_list[4096]`** ([cli.c:1652](../src/cli.c#L1652)) is the body of the
+  `X-Sukkal-Done` header, which is how a partially-failed batch tells the
+  broker which of its jobs are settled. It was filled with `strncat` and
+  stopped silently at about a thousand indexes; the jobs that fell off the end
+  would be delivered again. It grows now.
+- **`httpd_respond`'s `head[4096]`** ([httpd.c:271](../src/httpd.c#L271)) was
+  the one that made the first bug matter. `snprintf` truncates, but its RETURN
+  is what it WOULD have written — and that return was the length passed to
+  `send_all`. So a response whose headers passed 4096 bytes sent `n` bytes out
+  of a 4096-byte buffer and put a truncated header on the wire. Measured: a
+  batch of 1,200 jobs, one of them failing, produced
+  `Parse Error: Invalid header value char` at the client. After: a 4,890-byte
+  header, 1,199 indexes, all of them.
+- **The import rewrite** ([engine_walk.c:587](../src/engine_walk.c#L587)) is
+  the same mistake with teeth. The line the walk builds carries the specifier
+  **four times**, and `import_line` admits 1,023 characters of it — so a line
+  of about 4,500 into a `char[4096]`, and then `memcpy(out, rewritten, n)`
+  with `n` the un-truncated length. AddressSanitizer, on a document whose only
+  unusual feature is a long relative path:
+
+  ```
+  ERROR: AddressSanitizer: stack-buffer-overflow
+  READ of size 4277 … [1344, 5440) 'rewritten' (line 578)
+  ```
+
+  All three are measured-then-allocated now. `http.c`'s request head
+  ([http.c:292](../src/http.c#L292)) had the same shape and is fixed with
+  them, though its inputs are bounded and it was not reachable.
+
+  Pinned by `import_checks`
+  ([test/engine.c:1521](../test/engine.c#L1521)), which is ASan's to catch:
+  the read is off the end of a live stack frame, so a plain build survives it
+  and only `build/mdy-asan` says so. Reverting the fix brings the same
+  `READ of size 4277` back.
+
+`done_ix[64]` and `cand[3][4200]` are **not** defects and were measured before
+being left: the lease asks for `max=16`, both readers bound themselves at 64
+as well, and `cand` holds at most three candidate paths by construction. The
+five functions returning `static char msg[4096]` are a latent hazard rather
+than a live one — every caller uses the result before anything can call the
+function again — and are left as they are.
+
 **Long functions with several exits.** `render_tree_out`
-([2925–3234](../src/engine.c#L3052-L3362), ~300 lines) manages seven GC roots
+([2925–3234](../src/engine.c#L3141-L3451), ~300 lines) manages seven GC roots
 and a `FAIL` macro that jumps to `done:`. It had three early returns that
 *bypassed* `done:` — one was B3, another B12, the third silently cleared the
 enclosing render's `taint` — and it has one exit now. Length is what let three
 of them accumulate unnoticed, and the length is still there. `open_dir_inner`
-([704–1015](../src/engine_walk.c#L678-L1046)) builds the synthetic source that
-caused B1 and B2; what is left of it is B8. `mdy_parse_block` ([block.c:1267–1779](../src/parse/block.c#L1267-L1779),
-480 lines) inlines the entire list grammar. `resize_in` defines a
-`RESIZE_FAIL` macro and then uses it for two of its eight failures.
+([704–1015](../src/engine_walk.c#L716-L1084)) builds the synthetic source that
+caused B1 and B2; what is left of it is B8. `mdy_parse_block`
+([block.c:1267–1779](../src/parse/block.c#L1267-L1779), 480 lines) inlines the
+entire list grammar. `resize_in` defines a `RESIZE_FAIL` macro and then uses
+it for two of its eight failures.
 
-**Process-global state.** The memo tables ([engine.c:2732](../src/engine.c#L2857))
+**Not done, deliberately.** Splitting `render_tree_out` means moving seven GC
+roots and the memo across a new boundary, and the only thing that would say it
+went wrong is the parity suite — which is a strong net but an
+all-or-nothing one. The three bugs length hid are fixed and each has a test;
+what is left is the risk that a fourth arrives, against the risk of putting
+one there while refactoring. That trade is worth taking when there is a
+behavioural reason to open the function, and it has not come up.
+
+**Process-global state.** The memo tables ([engine.c:2857](../src/engine.c#L3050))
 and `mdy_engine_rotate_memo(void)`, the nisaba slot table (`nis.c`),
-`lookup_import`'s `static char path[1024]` ([1030](../src/engine.c#L1145)),
-`seen_sources` in cli.c, the OID statics in ingest.c. These make the engine
-non-reentrant and are the reason `wasm/index.mjs` instantiates a fresh module
-per call. They also make the memo shared between unrelated engines in one
-process.
+`lookup_import`'s `static char path[1024]` ([1145](../src/engine.c#L1305)),
+`seen_sources` in cli.c, the OID statics in ingest.c.
+
+**Also not done, and for a better reason than the first pass had.** Taking the
+inventory apart:
+
+- The memo's globality is **load-bearing**. It must outlive an engine, because
+  a rebuild is a NEW engine and B6 is precisely that the previous build's
+  renders are still reachable. Moving it into `struct mdy_engine` would delete
+  that. Scoping it properly means a session object that owns it and is passed
+  to `mdy_engine_new`, which is a public API change reaching cli.c, the tests,
+  the wasm wrapper and mdy-live-preview-native.
+- The OID statics being process-wide is **correct**: that is what makes an
+  ObjectId unique across every set in the process.
+- `g_slots` is a handle table indexed per engine, which is what a handle table
+  is.
+- `lookup_import`'s returned static and cli.c's five `static char msg[4096]`
+  are real, and **latent**: every caller formats the result before anything
+  can call the function again. Worth knowing about; not worth an API change
+  today.
+
+What is true is that none of it is thread-safe, and nothing here is: the dev
+server is a poll loop, not a thread pool. The claim that this is "the reason
+`wasm/index.mjs` instantiates a fresh module per call" is **half right** — the
+memo is one reason, and MEMFS is the other, and a fresh instance is what
+B41's sweep wants regardless.
 
 **Identity as text.** The walk encodes a file's identity as YAML source,
 parses it back once per document, and relies on `snprintf` with no escaping to
@@ -2205,13 +2285,15 @@ are separate sources now and the counting is gone. Identity itself is still
 text: it could be built as values and handed to `mdy_bj_document` directly,
 and then there would be nothing to escape.
 
-**The `Dev` struct and the bus code in cli.c** carry fixed-size scratch
-(`done_ix[64]`, `done_list[4096]`, `char cand[3][4200]`), fake growable
-arrays by passing a compound literal as the capacity
-([1623](../src/cli.c#L1600), [2058](../src/cli.c#L2037)), and reuse the drain
-loop for document mode by constructing a fake `Dev`
-([1646–1679](../src/cli.c#L1682-L1715)). Five functions return pointers to
-`static char msg[4096]`.
+**Still not done, and the blocker is the one the first pass named**: there is
+no way to make an `mdy_yaml` mapping from C, so this wants a value-builder
+added to the parser's public surface, then the walk's five `put_*` helpers
+rewritten, then `open_documents`' three parse sites. That is a rewrite of the
+path B1, B2 and B8 all lived in — the most bug-prone code in the engine — and
+the benefit is defence in depth on an escaping bug that is already fixed and
+pinned by `tag_checks`. It is the right change to make when something else
+needs that code opened, and the wrong one to make on its own.
+
 
 **The Makefile** ~~repeats the twelve-file engine source list four times~~
 and ~~lists only `.c` files as prerequisites, so editing `src/engine.h` does

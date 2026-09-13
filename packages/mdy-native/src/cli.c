@@ -1619,7 +1619,7 @@ static void dev_policy(Dev *d, const char *subject) {
  * nothing, since a render publishes onward.
  */
 static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_dead, int target,
-                          size_t *done, size_t *failed, char *done_list, size_t done_cap,
+                          size_t *done, size_t *failed, mdy_sbuf *done_list,
                           double *done_indexes, double *failed_indexes);
 
 static void dev_drain(Dev *d) {
@@ -1649,9 +1649,10 @@ static void dev_drain(Dev *d) {
             int is_dead = strlen(subject) > 5 && strcmp(subject + strlen(subject) - 5, ".dead") == 0;
             int target = mdy_engine_page_index(d->engine, subject);
             size_t done = 0, failed = 0;
-            char done_list[4096] = "";
+            mdy_sbuf done_list = { 0 };
             double done_ix[64], failed_ix[64];
-            deliver_batch(d, subject, jobs, is_dead, target, &done, &failed, done_list, sizeof done_list, done_ix, failed_ix);
+            deliver_batch(d, subject, jobs, is_dead, target, &done, &failed, &done_list, done_ix, failed_ix);
+            free(done_list.s);
             for (size_t k = 0; k < done && k < 64; k++) {
                 snprintf(path, sizeof path, "/done/%s", subject);
                 snprintf(query, sizeof query, "group=%s&index=%.0f", d->o->group, done_ix[k]);
@@ -1672,8 +1673,16 @@ static void dev_drain(Dev *d) {
     fprintf(stderr, "%s %s[bus]%s bus: still draining after 32 rounds; continuing next tick\n", TS(ts), RED_OPEN(), RED_CLOSE());
 }
 
+/*
+ * `done_list` is the `X-Sukkal-Done` header's body, and it GROWS. It was a
+ * char[4096] filled with strncat, which silently stopped at about three
+ * hundred and forty indexes — and the header is how a partial batch tells the
+ * broker which of its jobs are settled, so the ones that fell off the end
+ * would be delivered again. §3 listed this under fixed-size scratch; what it
+ * was waiting for is the growable buffer §2 gave the engine.
+ */
 static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_dead, int target,
-                          size_t *done, size_t *failed, char *done_list, size_t done_cap,
+                          size_t *done, size_t *failed, mdy_sbuf *done_list,
                           double *done_indexes, double *failed_indexes) {
     char ts[32];
     *done = 0; *failed = 0;
@@ -1730,7 +1739,8 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
         char *data = message && message->type == BJV_OBJECT ? bjv_to_json(message) : NULL;
         char *inner = message && message->type != BJV_OBJECT ? bjv_to_json(message) : NULL;
         size_t rlen = (data ? strlen(data) : (inner ? strlen(inner) : 4)) + strlen(subject) + 160;
-        char *reqjson = malloc(rlen);
+        /* Written through on both branches below. See xalloc.h. */
+        char *reqjson = mdy_xmalloc(rlen);
         if (data) snprintf(reqjson, rlen, "%.*s%s\"msg\":{\"name\":\"%s\",\"index\":%.0f,\"attempts\":%.0f}}",
                            (int)strlen(data) - 1, data, strlen(data) > 2 ? "," : "", subject, index, attempts);
         else snprintf(reqjson, rlen, "{\"value\":%s,\"msg\":{\"name\":\"%s\",\"index\":%.0f,\"attempts\":%.0f}}",
@@ -1760,8 +1770,9 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
             if (produced) dev_send(d, 0, 0);
             if (*done < 64) done_indexes[*done] = index;
             (*done)++;
-            char item[32]; snprintf(item, sizeof item, "%s%.0f", done_list[0] ? "," : "", index);
-            strncat(done_list, item, done_cap - strlen(done_list) - 1);
+            char item[32];
+            snprintf(item, sizeof item, "%s%.0f", done_list->len ? "," : "", index);
+            mdy_sbuf_puts(done_list, item);
             char extra[64] = "";
             if (produced) snprintf(extra, sizeof extra, " %s(published %zu)%s", DIM_OPEN(), produced, DIM_CLOSE());
             printf("%s%s%s %s[%s]%s %s %s#%.0f%s → rendered %s%s%s in %s%dms%s%s%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(),
@@ -1865,7 +1876,7 @@ static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
 
     int is_dead = strlen(subject) > 5 && strcmp(subject + strlen(subject) - 5, ".dead") == 0;
     int target = mdy_engine_page_index(d->engine, subject);
-    char done_list[4096] = "";
+    mdy_sbuf done_list = { 0 };
     size_t done = 0, failed = 0;
     double done_ix[64], failed_ix[64];
     if (target < 0 && !is_dead) {
@@ -1876,13 +1887,19 @@ static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
         httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
         return;
     }
-    deliver_batch(d, subject, batch, is_dead, target, &done, &failed, done_list, sizeof done_list, done_ix, failed_ix);
+    deliver_batch(d, subject, batch, is_dead, target, &done, &failed, &done_list, done_ix, failed_ix);
     bjv_free(batch);
     if (done == 0) httpd_respond(s, req, 500, "text/plain", NULL, "", 0);
     else if (failed) {
-        char hdr[4200]; snprintf(hdr, sizeof hdr, "X-Sukkal-Done: %s\r\n", done_list);
-        httpd_respond(s, req, 200, "text/plain", hdr, "", 0);
+        /* The header carries every settled index, however many there are. */
+        mdy_sbuf hdr = { 0 };
+        mdy_sbuf_puts(&hdr, "X-Sukkal-Done: ");
+        mdy_sbuf_puts(&hdr, done_list.s ? done_list.s : "");
+        mdy_sbuf_puts(&hdr, "\r\n");
+        httpd_respond(s, req, 200, "text/plain", hdr.s, "", 0);
+        free(hdr.s);
     } else httpd_respond(s, req, 200, "text/plain", NULL, "", 0);
+    free(done_list.s);
     fflush(stdout);
 }
 

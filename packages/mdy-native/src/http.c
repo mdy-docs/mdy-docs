@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "http.h"
+#include "xalloc.h"
 
 #if defined(__EMSCRIPTEN__)
 /* No sockets in a page: the wrapper around the wasm build is where a
@@ -285,14 +286,24 @@ int http_request(const char *method, const char *url, const char *content_type,
      * send_all. */
     set_io_timeouts(s, budget);
 
-    char head[4096];
-    int hn = snprintf(head, sizeof head,
-                      "%s %s HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\nAccept: */*\r\n%s%s%s"
-                      "Content-Length: %zu\r\n\r\n",
-                      method, path, host, port,
-                      content_type ? "Content-Type: " : "", content_type ? content_type : "", content_type ? "\r\n" : "",
-                      body_len);
-    if (send_all(s, head, (size_t)hn, deadline) != 0 ||
+    /* Measured, then allocated: `hn` is what snprintf WOULD have written, so
+     * a request line past the buffer used to be sent from beyond the end of
+     * it. Same mistake as httpd_respond's and engine_walk's (§3, B27). */
+    static const char REQUEST[] =
+        "%s %s HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\nAccept: */*\r\n%s%s%s"
+        "Content-Length: %zu\r\n\r\n";
+    const char *ct_label = content_type ? "Content-Type: " : "";
+    const char *ct_value = content_type ? content_type : "";
+    const char *ct_end = content_type ? "\r\n" : "";
+    int hn = snprintf(NULL, 0, REQUEST, method, path, host, port,
+                      ct_label, ct_value, ct_end, body_len);
+    if (hn < 0) { close_socket(s); snprintf(out->error, sizeof out->error, "the request could not be built"); return -1; }
+    char *head = mdy_xmalloc((size_t)hn + 1);
+    snprintf(head, (size_t)hn + 1, REQUEST, method, path, host, port,
+             ct_label, ct_value, ct_end, body_len);
+    int sent = send_all(s, head, (size_t)hn, deadline);
+    free(head);
+    if (sent != 0 ||
         (body_len && send_all(s, body, body_len, deadline) != 0)) {
         close_socket(s);
         snprintf(out->error, sizeof out->error, "the connection to %s dropped while sending", authority);

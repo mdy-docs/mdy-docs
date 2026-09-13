@@ -575,26 +575,38 @@ static char *rewrite_imports(mdy_engine *e, const char *source_path,
             imp->spec = ispec;
             imp->set = NULL;
 
-            char rewritten[4096];
-            int n = snprintf(rewritten, sizeof rewritten,
+            /*
+             * Measured, then allocated. This was a char[4096] with snprintf's
+             * RETURN used as the length to copy -- and the line it builds
+             * carries `spec` FOUR times, so a specifier past about 950
+             * characters makes a line longer than the buffer and the memcpy
+             * below reads off the end of it. ASan calls it a
+             * stack-buffer-overflow, READ of size 4277; `import_line` admits
+             * a spec of 1023. (§3's fixed-size scratch, and B27's mistake.)
+             */
+            static const char REWRITE[] =
                 "%% const %s = { "
                 "render: (target, ctx) => $.__importRender(\"%s\", target, ctx === undefined ? {} : ctx), "
                 "find: (query) => $.__importFind(\"%s\", query === undefined ? {} : query), "
                 "findOne: (query) => $.__importFindOne(\"%s\", query === undefined ? {} : query), "
-                "resize: (record, options) => $.__importResize(\"%s\", record, options === undefined ? {} : options) };",
-                name, spec, spec, spec, spec);
+                "resize: (record, options) => $.__importResize(\"%s\", record, options === undefined ? {} : options) };";
+            int n = snprintf(NULL, 0, REWRITE, name, spec, spec, spec, spec);
+            if (n < 0) { free(out); return NULL; }
+            char *rewritten = mdy_xmalloc((size_t)n + 1);
+            snprintf(rewritten, (size_t)n + 1, REWRITE, name, spec, spec, spec, spec);
 
             size_t need = at_out + indent + (size_t)n + 2;
             if (need > cap) {
                 while (need > cap) cap *= 2;
                 char *grown = realloc(out, cap);
-                if (!grown) { free(out); return NULL; }
+                if (!grown) { free(rewritten); free(out); return NULL; }
                 out = grown;
             }
             memcpy(out + at_out, line, indent);
             at_out += indent;
             memcpy(out + at_out, rewritten, (size_t)n);
             at_out += (size_t)n;
+            free(rewritten);
         } else {
             size_t need = at_out + line_len + 2;
             if (need > cap) {

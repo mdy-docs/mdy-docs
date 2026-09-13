@@ -255,12 +255,25 @@ static const char *reason(int status) {
 void httpd_respond(Httpd *s, HttpdRequest *req, int status, const char *content_type,
                    const char *extra_headers, const void *body, size_t len) {
     Conn *c = &s->conns[req->connection];
-    char head[4096];
-    int n = snprintf(head, sizeof head,
-                     "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nCache-Control: no-store\r\nConnection: close\r\n%s\r\n",
-                     status, reason(status), content_type ? content_type : "application/octet-stream", len,
-                     extra_headers ? extra_headers : "");
-    if (send_all(c->fd, head, (size_t)n) == 0 && len) send_all(c->fd, body, len);
+    /*
+     * The head GROWS, and it has to: this was a char[4096] with snprintf's
+     * return used as the length to send — which is what snprintf WOULD have
+     * written, not what it did. A caller with headers past 4096 bytes
+     * therefore sent `n` bytes out of a 4096-byte buffer, reading off the end
+     * of it, and what reached the client was a truncated header with no
+     * terminating blank line. Reachable from `X-Sukkal-Done`, which names
+     * every settled job of a partial batch (§3, and B27's mistake again).
+     */
+    char fixed[512];
+    int n = snprintf(fixed, sizeof fixed,
+                     "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nCache-Control: no-store\r\nConnection: close\r\n",
+                     status, reason(status), content_type ? content_type : "application/octet-stream", len);
+    mdy_sbuf head = { .seed = 1024 };
+    mdy_sbuf_put(&head, fixed, n > 0 && (size_t)n < sizeof fixed ? (size_t)n : strlen(fixed));
+    if (extra_headers) mdy_sbuf_puts(&head, extra_headers);
+    mdy_sbuf_puts(&head, "\r\n");
+    if (send_all(c->fd, head.s, head.len) == 0 && len) send_all(c->fd, body, len);
+    free(head.s);
     conn_free(c);
 }
 
