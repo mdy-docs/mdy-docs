@@ -673,6 +673,103 @@ static void footnote_checks(void) {
 }
 
 
+/* ---- raw HTML inside a .md paragraph ----------------------------------------
+ *
+ * `MD_TEXT_HTML` had no case in the text callback and fell through to
+ * `default:`, so an inline tag became ordinary text and the writer escaped it.
+ * The BLOCK kind was right all along, which is what made it look like a
+ * policy: it is one `.md` pipeline with rehype-raw at the end of it, and only
+ * one of the two kinds was being handed anything to re-parse. (B46.)
+ *
+ * The last two are the ones that would go wrong in the other direction. A tag
+ * inside a code span, and a tag inside an image's alt, are STRINGS rather
+ * than tree content and must stay escaped — and a `.mdy` document escapes an
+ * inline tag whatever this does, because mdy's own language has no inline
+ * HTML. Every expected string is what `node bin/mdy.js` writes.
+ */
+static void raw_html_checks(void) {
+    printf("\n--- engine: raw HTML inside a .md paragraph ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-raw", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "inline.md", "a <b>x</b> b\n");
+    write_file(root, "code.md",   "a `code <b>x</b> here` b\n");
+    write_file(root, "alt.md",    "![alt <b>t</b>](/i.png)\n");
+    write_file(root, "cell.md",   "| h |\n| --- |\n| <b>x</b> |\n");
+    write_file(root, "same.mdy",  "a <b>x</b> b\n");
+    write_file(root, "main.mdy",
+        "% $.emit('inline.html', $.html($.render({ path: 'inline.md' })))\n"
+        "% $.emit('code.html',   $.html($.render({ path: 'code.md' })))\n"
+        "% $.emit('alt.html',    $.html($.render({ path: 'alt.md' })))\n"
+        "% $.emit('cell.html',   $.html($.render({ path: 'cell.md' })))\n"
+        "% $.emit('mdy.html',    $.html($.render({ path: 'same.mdy' })))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of markdown\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++;
+        mdy_engine_free(e);
+        free(root);
+        return;
+    }
+    free(html);
+
+    ok_("an inline tag in a .md paragraph is markup, not escaped text",
+        emitted("inline.html") &&
+            strcmp(emitted("inline.html"), "<p>a <b>x</b> b</p>") == 0,
+        emitted("inline.html"));
+
+    /* The table path is worth its own case: a cell's content is parsed
+     * through the same callbacks and then foster-parented (§4). */
+    ok_("...and so is one in a table cell",
+        emitted("cell.html") &&
+            strstr(emitted("cell.html"), "<td><b>x</b></td>") != NULL,
+        emitted("cell.html"));
+
+    ok_("...but a tag in a code span stays literal, because that is a string",
+        emitted("code.html") &&
+            strcmp(emitted("code.html"),
+                   "<p>a <code>code &#x3C;b>x&#x3C;/b> here</code> b</p>") == 0,
+        emitted("code.html"));
+
+    ok_("...and so does one in an image's alt",
+        emitted("alt.html") &&
+            strcmp(emitted("alt.html"),
+                   "<p><img src=\"/i.png\" alt=\"alt <b>t</b>\"></p>") == 0,
+        emitted("alt.html"));
+
+    /* The other front end, unchanged and deliberately so: mdy's own language
+     * has no inline HTML — a `<` in a paragraph is a `<`. */
+    ok_("...and a .mdy document still escapes it, which is mdy's own rule",
+        emitted("mdy.html") &&
+            strcmp(emitted("mdy.html"), "<p>a &#x3C;b>x&#x3C;/b> b</p>") == 0,
+        emitted("mdy.html"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- an answer in document order --------------------------------------------
  *
  * A hit carries the `_id` it was inserted with, and the answer is put back
@@ -3113,6 +3210,7 @@ int main(void) {
     blank_file_checks();
     markdown_render_checks();
     footnote_checks();
+    raw_html_checks();
     query_order_checks();
     reopen_checks();
     memo_key_checks();

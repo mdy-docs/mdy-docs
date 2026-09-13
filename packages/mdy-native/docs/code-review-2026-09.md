@@ -67,9 +67,10 @@ what those checks do not reach.
 | B43 | ~~Low~~ **fixed** | `check-alloc` | The sweep covered `mdy build` alone; document mode and the server held fourteen more |
 | B44 | ~~Low~~ **fixed** | `markdown.c` | A list item holding a block was not padded, and node's tree pads it |
 | B45 | ~~Medium~~ **fixed** | `markdown.c` | GFM footnotes in a `.md` document were dropped: the reference vanished, the definition leaked out |
-| B46 | Medium | `.md` raw HTML | Inline raw HTML in a paragraph is escaped rather than parsed; block-level is fine |
+| B46 | ~~Medium~~ **fixed** | `markdown.c` | Raw HTML inside a `.md` paragraph was escaped rather than passed through; block-level was already right |
 | B47 | ~~Medium~~ **fixed** | `engine.c` / md4c | The sweep never saw a `.md`: three unchecked `strdup`s, and an allocation failure md4c discards |
 | B48 | Low | md4c | A link label beginning with `^` loses it: `[^a b]` renders `a b` where node renders `^a b` |
+| B49 | Medium | `check-markdown` | It compares a tree that has not been through rehype-raw, so it under-reports by 126 documents |
 
 Plus: ~450 lines of dead code (§2), a set of structural liabilities (§3 — of
 which the largest, `engine.c` as one 5,000-line translation unit, is now four
@@ -441,7 +442,7 @@ Identity is still written out and read back, which is the part of §3's
 built as values and handed to `mdy_bj_document` — that wants a way to make an
 `mdy_yaml` mapping from C, which there is not.
 
-Regression test: `odd_name_checks` ([test/engine.c:774](../test/engine.c#L774)),
+Regression test: `odd_name_checks` ([test/engine.c:1858](../test/engine.c#L1858)),
 guarded out on Windows, where none of these characters is legal in a file name
 and so there is nothing to carry. On the old engine it reports
 `slash=a.mdy|a.mdy` — the `\b` read as a backspace — and `quote=it|it`.
@@ -559,7 +560,7 @@ than the eight bytes a header needs.
 **Fixed** with B3, as one change: the index check is a `FAIL` now and leaves
 through `done:`, which gives back the depth, the `current` and the `taint` it
 had taken. Pinned in the block that already asked for an index that is not
-there ([test/engine.c:1436](../test/engine.c#L1436)) — forty times over, and
+there ([test/engine.c:3185](../test/engine.c#L3185)) — forty times over, and
 then the document that IS there still renders. On the old engine the
 thirty-third of those exhausted the cycle guard and nothing rendered again.
 
@@ -1073,40 +1074,117 @@ their own: a label with a space in it loses its `^` (**B48**), and inline raw
 HTML in a `.md` paragraph is escaped rather than parsed (**B46**) — which has
 nothing to do with footnotes and is as old as the front end.
 
-#### B46 — inline raw HTML in a `.md` paragraph is escaped, not parsed (Medium)
-
-Found by B45's differential and confirmed at HEAD, where it has been all
-along: it has nothing to do with footnotes, and it is bigger than the finding
-that turned it up.
+#### B46 — raw HTML inside a `.md` paragraph was escaped (Medium) — FIXED
 
 ```
-a <b>x</b>
+a <b>x</b> b
 ```
 
 ```
-node   <p>a <b>x</b></p>
-C      <p>a &#x3C;b>x&#x3C;/b></p>
+before   <p>a &#x3C;b>x&#x3C;/b> b</p>
+after    <p>a <b>x</b> b</p>     = node
 ```
 
-**Block-level raw HTML is fine.** `<div>block</div>` on its own, a `<div>`
-alone in a list item, a whole `<p>…</p>` — all three are identical to node
-through a real build. What is not handled is raw HTML *inside* a paragraph's
-inline content, which is where CommonMark's raw-HTML spans live and what
-`rehypeRaw` re-parses along with everything else.
+**One missing case**, and the same shape as B45's three:
+`MD_TEXT_HTML` had no `case` in the text callback, so it fell through
+`default:` into an ordinary text node and the writer escaped it
+([markdown.c:1116](../src/parse/markdown.c#L1116)). It makes a RAW node now,
+which is what `MD_BLOCK_HTML` had been doing all along
+([markdown.c:927](../src/parse/markdown.c#L927)).
 
-md4c reports it correctly: `a <b>x</b>` gives `MD_TEXT_HTML` for `<b>` and
-`</b>` exactly as `<div>` does at block level. So this is the emulation of
-rehype-raw on this side, not the parse.
+**Why it looked deliberate, and why it was not.** `.md` is the CommonMark
+front end and mdy's own language is not: a `<` in an `.mdy` paragraph is a
+literal `<`, and a line that starts with one is an element line. It is easy to
+read the escaping as that rule reaching across. But the two front ends were
+already measured against each other and they already disagree, correctly:
 
-Nothing sees it. `check-html` compares a serialiser against a tree, so a tree
-that is wrong in the same way twice is identical to itself; `check-sites` has
-no `.md` with an inline tag in it; `check-markdown` needs the corpus and is the
-one that DOES see it — some part of `commonmark 544/652` is this.
+```
+.mdy   a <b>x</b> b       node and C both:  <p>a &#x3C;b>x&#x3C;/b> b</p>
+.mdy   <div>block</div>   node and C both:  <div>block&#x3C;/div></div>
+.md    <div>block</div>   node and C both:  <div>block</div>
+.md    a <b>x</b> b       node: <p>a <b>x</b> b</p>   C: escaped   <- the only gap
+```
 
-Not fixed with B45 because it is a different mechanism in a different place —
-what turns `raw` nodes into elements, rather than what markdown.c emits — and
-because it is worth knowing how much of the corpus gap it accounts for before
-touching it.
+So this file was not applying a no-HTML policy to `.md`. It had committed to
+CommonMark's rule at block level, agreeing with node, and was handing
+rehype-raw nothing to re-parse for the inline half of the same rule.
+`docs/parser.md` states the `.md` contract as
+`remarkParse → remarkGfm → remarkAlert → remarkRehype → rehypeRaw`, and
+mdy-docs' own `src/markdown.js` carries the reason in a comment.
+
+**One guard, doing one job.** An `<img>`'s ALT arrives through this same
+callback, and an alt is an attribute — a string — so a tag in one has to stay
+verbatim. A code span does NOT arrive here (md4c hands its whole body over as
+`MD_TEXT_CODE`), so the `gathering` branch is there for the alt alone, which
+is what removing it proves: the alt assertion fails and the code-span one
+does not.
+
+**Measured over the CommonMark spec suite**, on the 108 documents
+`check-markdown` calls different, built as a real site both ways:
+
+```
+escaping a tag node emits as markup   23 -> 2
+byte-identical to node                23 -> 25
+regressed                             0
+C output unchanged by the fix         81 of 108
+```
+
+The two left are not this: `<https://foo.bar/baz bim>` and
+`<foo\+@bar.example.com>` are permissive-autolink cases, where both engines
+correctly escape the `<` and node finds a link inside it. They belong to
+`ext-permissive-autolinks`, which is 9/14.
+
+That only 2 more documents became byte-identical is the honest number and the
+interesting one: the 21 that stopped escaping are the spec's hairiest HTML
+blocks, and they have OTHER divergences besides. What this fixes is the whole
+of the inline-raw-HTML rule; what it does not fix is those documents.
+
+**`check-markdown` cannot see any of it** — see **B49**, which this is the
+second finding to run into.
+
+`fixture-awkward` carries a `.md` with a tag in a paragraph, one with
+attributes, tags beside markdown emphasis, tags in list items, one in a TABLE
+cell (which goes through §4's foster-parenting), and the two that must stay
+escaped ([main.mdy:55](../fixture-awkward/main.mdy#L55)). `raw_html_checks`
+([test/engine.c:690](../test/engine.c#L690)) is five assertions, the last of
+which is a `.mdy` document escaping the same bytes — so a change that reached
+across the two front ends would fail rather than pass quietly.
+
+#### B49 — `check-markdown` compares a tree that has not been through rehype-raw (Medium)
+
+Found twice: B45 was invisible to it for one reason and B46 for another, and
+the second is this.
+
+`make check-markdown` runs `build/mdcat`
+([Makefile:364](../Makefile#L364)), which is the bare parse library, and
+compares its tree against `markdownToHast` — which is the WHOLE node pipeline,
+`rehypeRaw` included. Raw HTML is exactly where those two disagree by
+construction: this side leaves a `raw` node for something later to re-parse,
+node has already re-parsed it into elements. Every document containing a tag
+therefore reads as a failure whether or not a real build agrees.
+
+**Measured** by building every document it calls different as a real site,
+both ways:
+
+| | reported by check-markdown | identical through a real build | true |
+| --- | --- | --- | --- |
+| commonmark | 544/652 | 25 of the 108 | **569/652** |
+| real | 233/868 | 101 of the 635 | **334/868** |
+
+So the front end is 126 documents better than the number the check prints, and
+the printed number moves for reasons that are not always about the parser.
+That matters because this is the only check in the repository that sees the
+`.md` front end at all — §4's argument — and it has been the thing quoted when
+deciding what to work on next.
+
+Not fixed here because the fix is a decision about what to compare, and there
+are two shapes and no obvious winner. Either the C side gains a tool that runs
+the engine's rehype-raw emulation before comparing — the emulation exists, it
+is what makes a real build agree — or the node side compares against the
+pipeline WITHOUT `rehypeRaw` and the raw nodes are matched as raw nodes. The
+first measures what a user gets; the second measures what this file is
+responsible for. They answer different questions and it is worth picking on
+purpose.
 
 #### B47 — sweeping the awkward fixture: three unchecked `strdup`s, and an allocation failure md4c drops (Medium) — FIXED
 
@@ -1657,7 +1735,7 @@ All three paths were checked end to end against node: the document set
 (`new\nline.mdy` is a document with its own record), `mdy build`'s static copy
 (the file is written under its real name), and `--watch` (an edit to it
 rebuilds). Regression test: `odd_name_checks`
-([test/engine.c:774](../test/engine.c#L774)), which now carries a newline
+([test/engine.c:1858](../test/engine.c#L1858)), which now carries a newline
 beside the quote, the backslash and the control character.
 
 The original finding follows.
@@ -2889,13 +2967,15 @@ date.
 
 **What is left, in the order it is worth doing.**
 
-1. **B46**, inline raw HTML in a `.md` paragraph, which is escaped where node
-   parses it. The largest open finding and the least explored: block-level raw
-   HTML is right, md4c reports the inline kind correctly, and what is wrong is
-   this side's emulation of rehype-raw. Worth measuring against
-   `check-markdown`'s `commonmark 544/652` first — some unknown part of that
-   gap is this one bug, and knowing how much decides whether it is a morning
-   or a week.
+1. **B49**, and it is first because it is what the next decision will be made
+   with. `check-markdown` is the only check that sees the `.md` front end, and
+   it compares `mdcat`'s tree — no rehype-raw — against node's finished one,
+   so it reads every document containing a tag as a failure. Measured, it
+   under-reports by 126 documents. Deciding what it should compare is a
+   morning; believing its numbers while choosing what to fix has already cost
+   more than that. B46 was filed on the guess that it accounted for much of
+   `commonmark 544/652`; measured after the fix, it was 21 documents' worth of
+   escaping and 2 documents' worth of agreement.
 2. ~~**The public API that `test/engine.c` never calls.**~~ **Done** —
    `api_checks`, 23 assertions over all twelve, with the knobs tested as
    contrasts so that an engine ignoring one would fail rather than pass. See
@@ -2907,9 +2987,10 @@ date.
    measured it (`ext-footnotes` 8/26 → 25/26, no other category moving), and
    it is the only check in the repository that would have SEEN the bug:
    `check-html` compares a serialiser against a tree, and `check-sites` has
-   only the documents somebody happened to write. B46 is open for the same
-   reason. It is still a question about where the corpus lives rather than
-   about writing a test, but it is now a question with two findings attached.
+   only the documents somebody happened to write. It is still a question about
+   where the corpus lives rather than about writing a test, and B49 is the
+   second question stacked on top of it — the corpus has no home AND the check
+   that reads it measures the wrong thing.
 3. **`struct mdy_engine`'s 56 fields** ([engine_internal.h:97](../src/engine_internal.h#L97)),
    still 56. It is grouped and commented — the VM, the open set, composition,
    the callbacks, the knobs, identity, the walk — so what is wanted is those

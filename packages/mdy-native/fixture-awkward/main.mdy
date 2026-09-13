@@ -48,6 +48,12 @@ title: The awkward cases
 % // table cell (md4c counts those twice), and a definition with nothing in it.
 % $.emit("notes.html", $.render({ path: "pages/notes.md" }))
 %
+% // B46: raw HTML INSIDE a paragraph, which fell through to `default:` and
+% // was escaped where node writes the markup. The block kind always worked,
+% // which is what made it look deliberate. Also the two places a tag must
+% // STAY literal: a code span and an image's alt.
+% $.emit("raw.html", $.render({ path: "pages/raw.md" }))
+%
 % // B11: a .tif whose header points its IFD past the end of the file. It is a
 % // real file and still gets a record; what it must not get is width/height
 % // read from off the end of it.

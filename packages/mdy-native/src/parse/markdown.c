@@ -1113,6 +1113,38 @@ static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
         case MD_TEXT_ENTITY:
             entity(b, s, size);
             return 0;
+        case MD_TEXT_HTML:
+            /*
+             * A RAW node, the way MD_BLOCK_HTML already makes one. (B46.)
+             *
+             * This had no case at all and fell through to `default:`, so an
+             * inline tag became ordinary text and the writer escaped it:
+             * `a <b>x</b>` came out `a &#x3C;b>x&#x3C;/b>` where node writes
+             * the markup. The block kind was right all along, which is what
+             * made it look deliberate — it is the same `.md` pipeline and the
+             * same rehype-raw re-parsing both, and only one of the two was
+             * being handed anything to re-parse.
+             *
+             * It is `.md` only, and that is not an accident of where this
+             * file sits: mdy's OWN language has no inline HTML — a `<` in a
+             * paragraph is a literal `<`, and a line that starts with one is
+             * an element line — so the other front end escapes this and both
+             * engines agree that it should.
+             *
+             * Gathering wins, and the case that needs it is an `<img>`'s
+             * ALT: md4c reports the alt's content through this callback like
+             * any other inline run, and an alt is an attribute — a string —
+             * so a tag in one stays verbatim instead of becoming markup. A
+             * code span never arrives here at all (md4c hands its whole body
+             * over as MD_TEXT_CODE), so the guard is doing one job, not two.
+             */
+            if (b->gathering) { gather(b, s, size); return 0; }
+            {
+                mdy_node *raw = mdy_new_text(b->doc, s, size);
+                if (raw) raw->type = MDY_RAW;
+                append(b, raw);
+            }
+            return 0;
         default:
             if (b->gathering) gather(b, s, size);
             else text_node(b, s, size);
