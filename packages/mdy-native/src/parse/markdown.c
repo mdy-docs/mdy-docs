@@ -19,6 +19,7 @@
 #include "entity.h"
 #include "mdymarkdown.h"
 #include "internal.h"
+#include "alert_table.h"
 
 enum { STACK_MAX = 128 };
 
@@ -657,6 +658,82 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             return 0;
         }
 
+        case MD_BLOCK_ADMONITION: {
+            /*
+             * A GitHub alert: `> [!NOTE]` and its four siblings.
+             * remark-github-blockquote-alert renames the blockquote to a
+             * <div>, gives it two classes and `dir="auto"`, and UNSHIFTS a
+             * title paragraph carrying an octicon in front of what the quote
+             * said. md4c has already eaten the `[!NOTE]` line and reports the
+             * rest as the block's children, so the only work here is the
+             * frame and the title.
+             *
+             * The icons are data and come from alert_table.h, which
+             * scripts-generate-alerts.mjs reads out of the plugin itself —
+             * a redrawn octicon is then one command rather than a divergence
+             * nothing reports.
+             */
+            const MD_BLOCK_ADMONITION_DETAIL *d = detail;
+            const char *kind = NULL;
+            const char *path = NULL;
+            for (size_t i = 0; i < MDY_ALERT_COUNT; i++) {
+                size_t n = strlen(MDY_ALERTS[i].type);
+                if (d->type.text && d->type.size == n &&
+                    memcmp(d->type.text, MDY_ALERTS[i].type, n) == 0) {
+                    kind = MDY_ALERTS[i].type;
+                    path = MDY_ALERTS[i].path;
+                    break;
+                }
+            }
+            /* md4c reports only the five, but a type this table does not know
+             * is a quote rather than a crash. */
+            if (!kind) {
+                before_block(b);
+                mdy_node *q = mdy_new_element(b->doc, "blockquote", 10);
+                append(b, q);
+                push(b, q, 1);
+                return 0;
+            }
+
+            before_block(b);
+            mdy_node *div = mdy_new_element(b->doc, "div", 3);
+            mdy_add_class(b->doc, div, "markdown-alert");
+            char cls[64];
+            int cn = snprintf(cls, sizeof cls, "markdown-alert-%s", kind);
+            if (cn < 0) { b->failed = 1; return -1; }
+            mdy_add_class(b->doc, div, cls);
+            mdy_set_string(b->doc, div, "dir", "auto", 4);
+            append(b, div);
+            push(b, div, 1);
+
+            /* The title paragraph the plugin puts in front. */
+            before_block(b);
+            mdy_node *title = mdy_new_element(b->doc, "p", 1);
+            mdy_add_class(b->doc, title, "markdown-alert-title");
+            mdy_set_string(b->doc, title, "dir", "auto", 4);
+
+            mdy_node *svg = mdy_new_element(b->doc, "svg", 3);
+            mdy_add_class(b->doc, svg, MDY_ALERT_OCTICON);
+            mdy_set_string(b->doc, svg, "viewBox", MDY_ALERT_VIEWBOX, strlen(MDY_ALERT_VIEWBOX));
+            mdy_set_string(b->doc, svg, "width", MDY_ALERT_WIDTH, strlen(MDY_ALERT_WIDTH));
+            mdy_set_string(b->doc, svg, "height", MDY_ALERT_HEIGHT, strlen(MDY_ALERT_HEIGHT));
+            mdy_set_string(b->doc, svg, "ariaHidden", MDY_ALERT_HIDDEN, strlen(MDY_ALERT_HIDDEN));
+            mdy_node *icon = mdy_new_element(b->doc, "path", 4);
+            mdy_set_string(b->doc, icon, "d", path, strlen(path));
+            mdy_append(svg, icon);
+            mdy_append(title, svg);
+
+            /* The title itself is the type UPPERCASED. */
+            char up[32];
+            size_t ulen = strlen(kind) < sizeof up - 1 ? strlen(kind) : sizeof up - 1;
+            for (size_t i = 0; i < ulen; i++)
+                up[i] = (char)(kind[i] >= 'a' && kind[i] <= 'z' ? kind[i] - 32 : kind[i]);
+            mdy_append(title, mdy_new_text(b->doc, up, ulen));
+
+            append(b, title);
+            return 0;
+        }
+
         case MD_BLOCK_QUOTE: {
             before_block(b);
             mdy_node *q = mdy_new_element(b->doc, "blockquote", 10);
@@ -937,6 +1014,7 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             close_block(b);
             return 0;
 
+        case MD_BLOCK_ADMONITION:
         case MD_BLOCK_QUOTE:
             /*
              * An EMPTY blockquote still holds a newline. `wrap(nodes, loose)`

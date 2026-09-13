@@ -825,7 +825,8 @@ check-generated:
 	@fail=0; tmp=$$(mktemp -d); \
 	for pair in scripts-generate-props.mjs:src/parse/props_table.h \
 	            scripts-generate-schema.mjs:src/parse/schema_table.h \
-	            scripts-generate-emoji.mjs:src/parse/emoji_table.h; do \
+	            scripts-generate-emoji.mjs:src/parse/emoji_table.h \
+	            scripts-generate-alerts.mjs:src/parse/alert_table.h; do \
 	  g=$${pair%%:*}; h=$${pair##*:}; \
 	  node $$g "$(MDY_DOCS_ABS)" > "$$tmp/out.h" || { echo "  $$g FAILED to run"; fail=1; continue; }; \
 	  if diff -q "$$h" "$$tmp/out.h" >/dev/null; then printf '  %-22s in sync\n' "$$h"; \

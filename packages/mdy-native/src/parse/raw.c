@@ -284,8 +284,36 @@ static void walk_out(Raw *r, const mdy_node *n) {
  */
 static void set_from_attribute(mdy_doc *doc, mdy_node *el,
                                const char *name, size_t name_len,
-                               const char *value, size_t value_len, int had_value) {
+                               const char *value, size_t value_len,
+                               int had_value, int svg) {
     const char *hast = mdy_hast_name(doc, name, name_len);
+
+    /*
+     * Inside an <svg>, property-information's SVG schema applies and not its
+     * HTML one — which is what hast-util-from-parse5 switches to on the
+     * namespace. The difference that reaches us is typing: `width="16"` on an
+     * <img> is the NUMBER 16 and on an <svg> it is the string "16", and an
+     * alert's octicon is an <svg> carrying both. Only the space-separated
+     * rule survives the switch for anything this engine emits, and
+     * `className` is the one that matters.
+     */
+    if (svg) {
+        if (strcmp(hast, "className") == 0) {
+            size_t k = 0;
+            while (k < value_len) {
+                while (k < value_len && (value[k] == ' ' || value[k] == '\t' ||
+                                         value[k] == '\n' || value[k] == '\r' || value[k] == '\f')) k++;
+                size_t start = k;
+                while (k < value_len && !(value[k] == ' ' || value[k] == '\t' ||
+                                          value[k] == '\n' || value[k] == '\r' || value[k] == '\f')) k++;
+                if (k > start)
+                    mdy_add_token(doc, el, hast, mdy_strdup_n(&doc->arena, value + start, k - start));
+            }
+            return;
+        }
+        mdy_set_string(doc, el, hast, value, value_len);
+        return;
+    }
 
     unsigned flags = 0;
     size_t plen = strlen(hast), lo = 0, hi = MDY_PROP_INFO_COUNT;
@@ -376,6 +404,7 @@ static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n) {
                 mdy_node *el = mdy_new_element(doc, (const char *)name, len);
                 if (!el) return;
 
+                int svg = n->ns != LXB_NS_HTML;
                 lxb_dom_attr_t *a = lxb_dom_element_first_attribute(lxb_dom_interface_element(n));
                 for (; a != NULL; a = lxb_dom_element_next_attribute(a)) {
                     size_t an = 0, av = 0;
@@ -383,7 +412,7 @@ static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n) {
                     const lxb_char_t *avalue = lxb_dom_attr_value(a, &av);
                     set_from_attribute(doc, el, (const char *)aname, an,
                                        avalue ? (const char *)avalue : "", av,
-                                       avalue != NULL);
+                                       avalue != NULL, svg);
                 }
                 mdy_append(into, el);
                 walk_in(doc, el, n->first_child);

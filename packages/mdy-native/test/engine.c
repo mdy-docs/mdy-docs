@@ -782,6 +782,79 @@ static void caret_bracket_checks(void) {
 }
 
 
+/* ---- a GitHub alert ----------------------------------------------------------
+ *
+ * `> [!NOTE]` and its four siblings. md4c reports the block and eats the
+ * marker line; what this file adds is the frame
+ * remark-github-blockquote-alert builds around it — a <div> with two classes
+ * and `dir="auto"`, and a title paragraph carrying an octicon in front of
+ * what the quote said. The five icons are in alert_table.h, which
+ * scripts-generate-alerts.mjs reads out of the plugin and check-generated
+ * holds to it.
+ *
+ * The assertion is the whole <div> rather than a piece of it, because every
+ * part of it was a separate decision: the class names, the attribute ORDER
+ * inside the <svg>, the uppercased title, and `width="16"` staying a string
+ * where the same attribute on an <img> is the number 16 — an <svg> is in a
+ * namespace of its own and property-information types it by a different
+ * schema.
+ */
+static void alert_checks(void) {
+    printf("\n--- engine: a GitHub alert ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-alert", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "a.md", "> [!WARNING]\n> Careful.\n");
+    write_file(root, "q.md", "> Just a quote.\n");
+    write_file(root, "main.mdy",
+        "% $.emit('a.html', $.html($.render({ path: 'a.md' })))\n"
+        "% $.emit('q.html', $.html($.render({ path: 'q.md' })))\n");
+
+    mdy_engine *e = mdy_engine_new();
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
+        printf("  FAIL  open a directory of alerts\n      %s\n", err);
+        failures++; mdy_engine_free(e); free(root); return;
+    }
+    int entry = mdy_engine_entry(e, "main.mdy");
+    char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
+    if (!html) {
+        printf("  FAIL  the entry renders\n      %s\n", err);
+        failures++; mdy_engine_free(e); free(root); return;
+    }
+    free(html);
+
+    const char *a = emitted("a.html");
+    ok_("an alert is a <div> with the plugin's two classes and dir",
+        a && strstr(a, "<div class=\"markdown-alert markdown-alert-warning\" dir=\"auto\">") == a,
+        a);
+    ok_("...with a title paragraph in front of what the quote said",
+        a && strstr(a, "<p class=\"markdown-alert-title\" dir=\"auto\">") != NULL &&
+            strstr(a, ">WARNING</p>") != NULL,
+        a);
+    /* The attribute order is hast's insertion order and the writer's. */
+    ok_("...whose octicon carries its attributes in the plugin's order",
+        a && strstr(a, "<svg class=\"octicon\" viewBox=\"0 0 16 16\" width=\"16\" "
+                       "height=\"16\" aria-hidden=\"true\"><path d=\"M6.457") != NULL,
+        a);
+    ok_("...and an ordinary quote is still a quote",
+        emitted("q.html") &&
+            strstr(emitted("q.html"), "<blockquote>") == emitted("q.html"),
+        emitted("q.html"));
+
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+
+
 /* ---- a heading id that is already taken -------------------------------------
  *
  * `.mdy` headings were made unique against the ids a document had already
@@ -3437,6 +3510,7 @@ int main(void) {
     footnote_checks();
     raw_html_checks();
     heading_id_checks();
+    alert_checks();
     caret_bracket_checks();
     query_order_checks();
     reopen_checks();
