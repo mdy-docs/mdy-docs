@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "httpd.h"
+#include "xalloc.h"
 
 #if defined(__EMSCRIPTEN__)
 Httpd *httpd_listen(const char *host, int port, HttpdHandler handler, void *ud) { (void)host; (void)port; (void)handler; (void)ud; return NULL; }
@@ -119,7 +120,9 @@ Httpd *httpd_listen(const char *host, int port, HttpdHandler handler, void *ud) 
         else if (bound.ss_family == AF_INET6) got = ntohs(((struct sockaddr_in6 *)&bound)->sin6_port);
     }
 
-    Httpd *s = calloc(1, sizeof *s);
+    /* The socket is already bound and listening; there is no sensible way to
+     * hand back "the server exists but has no state". See xalloc.h. */
+    Httpd *s = mdy_xcalloc(1, sizeof *s);
     s->listener = fd;
     s->port = got;
     s->handler = handler;

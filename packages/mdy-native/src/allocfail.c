@@ -23,6 +23,10 @@
 #undef strdup
 
 #include <stdio.h>
+#include <signal.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #if !defined(__EMSCRIPTEN__)
 #include <execinfo.h>
 #endif
@@ -36,6 +40,36 @@ static long af_seen;
 static void af_report(void) {
     fprintf(stderr, "mdy-af: %ld allocations\n", af_seen);
 }
+
+#if !defined(_WIN32)
+/*
+ * The same count, for a process that does not exit on its own.
+ *
+ * `mdy dev` runs until it is killed, so atexit never fires and the sweep has
+ * no way to learn how many allocations a startup makes -- which is the number
+ * it has to sweep to. SIGTERM reports and stops.
+ *
+ * write() and not fprintf(): this is a signal handler, and the only functions
+ * safe in one are the async-signal-safe list. The number is formatted by hand
+ * for the same reason.
+ */
+static void af_report_signal(int sig) {
+    (void)sig;
+    char buf[64] = "mdy-af: ";
+    size_t at = 8;
+    char digits[24];
+    int n = 0;
+    long v = af_seen;
+    if (v == 0) digits[n++] = '0';
+    while (v > 0) { digits[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n > 0) buf[at++] = digits[--n];
+    const char *tail = " allocations\n";
+    for (const char *p = tail; *p; p++) buf[at++] = *p;
+    ssize_t ignored = write(2, buf, at);
+    (void)ignored;
+    _Exit(0);
+}
+#endif
 
 /*
  * Armed from OUTSIDE the process, for the wasm build.
@@ -52,7 +86,12 @@ static int af_should_fail(void) {
     if (af_nth == -2) {
         const char *s = getenv("MDY_ALLOC_FAIL_NTH");
         af_nth = s && *s ? strtol(s, NULL, 10) : -1;
-        if (getenv("MDY_ALLOC_COUNT")) atexit(af_report);
+        if (getenv("MDY_ALLOC_COUNT")) {
+            atexit(af_report);
+#if !defined(_WIN32)
+            signal(SIGTERM, af_report_signal);
+#endif
+        }
     }
     af_seen++;
     if (af_nth < 0 || af_seen != af_nth) return 0;

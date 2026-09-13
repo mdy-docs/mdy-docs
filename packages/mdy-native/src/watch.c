@@ -9,6 +9,7 @@
 
 #include "fsx.h"
 #include "watch.h"
+#include "xalloc.h"
 
 /* serve.js's IGNORE: /(^|\/)(dist|node_modules|\.[^/]+)(\/|$)/ */
 static int ignored(const char *rel) {
@@ -24,12 +25,15 @@ static int ignored(const char *rel) {
     }
 }
 
+/* A file missing from the snapshot is a file the watcher never notices
+ * changing, so `mdy dev` stops rebuilding for it and says nothing. B24 named
+ * this and parked it; nothing swept `dev` until B43. See xalloc.h. */
 static void add(Snapshot *s, const char *path, double size, double mtime) {
     if (s->count == s->cap) {
         s->cap = s->cap ? s->cap * 2 : 64;
-        s->files = realloc(s->files, s->cap * sizeof *s->files);
+        s->files = mdy_xrealloc(s->files, s->cap * sizeof *s->files);
     }
-    s->files[s->count].path = strdup(path);
+    s->files[s->count].path = mdy_xstrdup(path);
     s->files[s->count].size = size;
     s->files[s->count].mtime = mtime;
     s->count++;

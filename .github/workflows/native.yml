@@ -21,9 +21,10 @@
 #   6. `make check-golden`         — byte-for-byte against committed output
 #   7. `make check-highlight`      — the highlighter against lowlight (Linux)
 #   8. `make check-cli`            — bin/mdy.js's CLI tests, on this binary (Linux)
-#   9. `make check-alloc-all`      — every allocation of three whole builds
-#                                    refused in turn, each run either the same
-#                                    site or a reported failure (Linux)
+#   9. `make check-alloc-all`      — every allocation refused in turn, across
+#                                    three whole builds, document mode and the
+#                                    dev server: each run either the same
+#                                    output or a reported failure (Linux)
 #
 # The last is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
@@ -188,12 +189,14 @@ jobs:
         working-directory: packages/mdy-native
         run: make check-dev
 
-      # Every allocation of three whole builds refused one at a time, each run
-      # asserted to have produced the same site or said it could not (B24).
-      # One platform: what it exercises is this C, and the allocator's own
-      # behaviour is not what is under test. It is parallel, so all three
-      # corpora are a few minutes rather than an hour (B41) — which is the
-      # difference between a check that runs here and one that never does.
+      # Every allocation refused one at a time, each run asserted to have
+      # produced the same output or said it could not (B24). One platform:
+      # what it exercises is this C, and the allocator's own behaviour is not
+      # what is under test. It is parallel, so the three corpora are a few
+      # minutes rather than an hour (B41) — the difference between a check
+      # that runs here and one that never does — and it covers document mode
+      # and the dev server as well as `build`, which is where fourteen
+      # unchecked allocations were still living (B43).
       - name: Check every allocation failure
         if: matrix.os == 'ubuntu-latest'
         working-directory: packages/mdy-native

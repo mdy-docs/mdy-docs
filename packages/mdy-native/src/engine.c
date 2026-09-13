@@ -528,7 +528,19 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         d->chunk = mdy_documents_at(e->source_docs, i);
         mdy_chunk body;
         mdy_split_frontmatter(d->chunk.text, d->chunk.len, &d->matter, &body);
+        /*
+         * NULL from a non-NULL body means mdy_data_extract could not
+         * allocate, not that the body has no ```data fences -- a body with
+         * none comes back as an empty set. Treating the two alike dropped
+         * every fence the document had, so its data and its tags simply were
+         * not there, on a build that reported success.
+         */
         d->fences = mdy_data_extract(body.text, body.len);
+        if (!d->fences && body.text) {
+            if (error && error_len) snprintf(error, error_len, "out of memory");
+            close_set(e);
+            return -1;
+        }
         /* The lines the front matter took, so a position in the body can
          * step over them — mdy-docs' `lineOffset`. */
         d->matter_lines = 0;
@@ -848,11 +860,17 @@ static uint32_t oid_hash(const char *hex) {
  * node's 0.7, and 1,200 took 12.7: doubling the corpus cost seven times the
  * work, because the work was cubic in the size of the set.
  */
-static int oid_map_build(mdy_engine *e) {
+/*
+ * It does not fail, because its caller has no way to say that it did.
+ * index_of_id answers -1, which means "no document of this set has that id" —
+ * a real answer a query relies on. A map that could not be BUILT answered the
+ * same -1, so every hit was dropped and `$.find` quietly returned fewer
+ * documents than matched. See xalloc.h.
+ */
+static void oid_map_build(mdy_engine *e) {
     size_t cap = 16;
     while (cap < e->count * 2) cap *= 2;
-    OidSlot *slots = calloc(cap, sizeof *slots);
-    if (!slots) return -1;
+    OidSlot *slots = mdy_xcalloc(cap, sizeof *slots);
     for (size_t i = 0; i < e->count; i++) {
         char hex[25];
         id_hex(e->ids[i], hex);
@@ -863,14 +881,13 @@ static int oid_map_build(mdy_engine *e) {
     }
     e->oid_slots = slots;
     e->oid_cap = cap;
-    return 0;
 }
 
 /* `hex` is the 24 characters of an ObjectId; anything else belongs to no
  * document in this set. */
 int index_of_id(mdy_engine *e, const char *hex, size_t len) {
     if (len != 24) return -1;
-    if (!e->oid_slots && oid_map_build(e) != 0) return -1;
+    if (!e->oid_slots) oid_map_build(e);
     size_t at = oid_hash(hex) & (e->oid_cap - 1);
     for (size_t probe = 0; probe < e->oid_cap; probe++) {
         if (!e->oid_slots[at].hex[0]) return -1;      /* a hole ends the run */

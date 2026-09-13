@@ -334,13 +334,17 @@ static void outputs_put(Outputs *o, const char *path, const uint8_t *bytes, size
             return;
         }
     }
+    /* B24 named this one and parked it, and the sweep could not reach it:
+     * `mdy build` writes each page as it is produced, and only the dev server
+     * holds them. A dropped page here is a site served with a file missing,
+     * which is the failure that finding is about. See xalloc.h. */
     if (o->count == o->cap) {
         o->cap = o->cap ? o->cap * 2 : 16;
-        o->items = realloc(o->items, o->cap * sizeof *o->items);
+        o->items = mdy_xrealloc(o->items, o->cap * sizeof *o->items);
     }
     Output *it = &o->items[o->count++];
-    it->path = strdup(path);
-    it->bytes = malloc(len + 1);
+    it->path = mdy_xstrdup(path);
+    it->bytes = mdy_xmalloc(len + 1);
     memcpy(it->bytes, bytes, len);
     it->bytes[len] = 0;
     it->len = len;
@@ -874,8 +878,13 @@ static char **seen_sources; static size_t seen_count, seen_cap;
 static void doc_source(void *ud, const char *path) {
     (void)ud;
     for (size_t i = 0; i < seen_count; i++) if (strcmp(seen_sources[i], path) == 0) return;
-    if (seen_count == seen_cap) { seen_cap = seen_cap ? seen_cap * 2 : 64; seen_sources = realloc(seen_sources, seen_cap * sizeof *seen_sources); }
-    seen_sources[seen_count++] = strdup(path);
+    /* Both were unchecked and both are written through here. The first call
+     * always grows, since cap and count both start at zero. See xalloc.h. */
+    if (seen_count == seen_cap) {
+        seen_cap = seen_cap ? seen_cap * 2 : 64;
+        seen_sources = mdy_xrealloc(seen_sources, seen_cap * sizeof *seen_sources);
+    }
+    seen_sources[seen_count++] = mdy_xstrdup(path);
     fprintf(stderr, "%s[read]%s %s\n", BLUE_OPEN(), BLUE_CLOSE(), path);
 }
 
@@ -1357,7 +1366,9 @@ static int cmd_document(int argc, char **argv) {
         if (!o.emit_js) report_emitted(&o, &emitted);
         size_t n = strlen(output);
         if (n == 0 || output[n - 1] != '\n') {
-            output = realloc(output, n + 2);
+            /* Written through on the next line, so there is nothing for a
+             * NULL to mean here. See xalloc.h. */
+            output = mdy_xrealloc(output, n + 2);
             output[n] = '\n'; output[n + 1] = 0;
         }
         err = emit_output(&o, output);
@@ -1437,8 +1448,8 @@ typedef struct {
 
 static int seen_before(char ***list, size_t *count, size_t *cap, const char *s) {
     for (size_t i = 0; i < *count; i++) if (strcmp((*list)[i], s) == 0) return 1;
-    if (*count == *cap) { *cap = *cap ? *cap * 2 : 32; *list = realloc(*list, *cap * sizeof **list); }
-    (*list)[(*count)++] = strdup(s);
+    if (*count == *cap) { *cap = *cap ? *cap * 2 : 32; *list = mdy_xrealloc(*list, *cap * sizeof **list); }
+    (*list)[(*count)++] = mdy_xstrdup(s);
     return 0;
 }
 
@@ -1927,7 +1938,9 @@ static char *with_reload(const uint8_t *html, size_t len, size_t *out_len) {
     const char *end = NULL;
     for (size_t i = 0; i + 7 <= len; i++) if (memcmp(html + i, "</body>", 7) == 0) { end = (const char *)html + i; break; }
     size_t n = len + strlen(RELOAD_SNIPPET) + 2;
-    char *out = malloc(n + 1);
+    /* Written through on every branch below, and the page it is building is
+     * the one about to be served. See xalloc.h. */
+    char *out = mdy_xmalloc(n + 1);
     if (end) {
         size_t before = (size_t)(end - (const char *)html);
         memcpy(out, html, before);
@@ -2044,9 +2057,9 @@ static int dev_rebuild(Dev *d, const char *changed, int first) {
     for (size_t i = 0; i < d->root_count; i++) free(d->roots[i]);
     free(d->roots);
     size_t n = mdy_engine_root_count(e);
-    d->roots = calloc(n + 1, sizeof *d->roots);
+    d->roots = mdy_xcalloc(n + 1, sizeof *d->roots);
     d->root_count = 0;
-    d->roots[d->root_count++] = strdup(d->root);
+    d->roots[d->root_count++] = mdy_xstrdup(d->root);
     for (size_t i = 0; i < n; i++) {
         const char *r = mdy_engine_root_at(e, i);
         if (strcmp(r, d->root) != 0) d->roots[d->root_count++] = strdup(r);
@@ -2121,8 +2134,12 @@ static int cmd_dev(int argc, char **argv) {
     }
 
     dev_rebuild(&d, NULL, 1);           /* a broken first build still serves */
-    d.snapshots = calloc(d.root_count ? d.root_count : 1, sizeof *d.snapshots);
-    if (!d.root_count) { d.roots = calloc(1, sizeof *d.roots); d.roots[0] = strdup(d.root); d.root_count = 1; }
+    d.snapshots = mdy_xcalloc(d.root_count ? d.root_count : 1, sizeof *d.snapshots);
+    if (!d.root_count) {
+        d.roots = mdy_xcalloc(1, sizeof *d.roots);
+        d.roots[0] = mdy_xstrdup(d.root);
+        d.root_count = 1;
+    }
     for (size_t i = 0; i < d.root_count; i++) snapshot_take(&d.snapshots[i], d.roots[i], NULL);
 
     d.server = httpd_listen(o.expose ? "0.0.0.0" : "127.0.0.1", o.port, dev_handle, &d);
@@ -2182,7 +2199,9 @@ static int cmd_dev(int argc, char **argv) {
                 if (diff) {
                     for (const char *p = diff; *p; p += strlen(p) + 1) {
                         size_t n = strlen(p) + 1;
-                        pending = realloc(pending, pending_len + n + 1);
+                        /* Written through immediately, and a change dropped
+                         * here is a save the server never rebuilds for. */
+                        pending = mdy_xrealloc(pending, pending_len + n + 1);
                         memcpy(pending + pending_len, p, n);
                         pending_len += n;
                         pending[pending_len] = 0;

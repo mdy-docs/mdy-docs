@@ -10,7 +10,8 @@
 #   make check-highlight          highlight.js in lamassu, against lowlight
 #   make check-cli                mdy-docs' CLI tests, run against build/mdy
 #   make check-alloc              a build with each allocation refused in turn
-#   make check-alloc-all          the same over all three corpora (~7 min)
+#   make check-alloc-all          every sweep a native build can run (~8 min)
+#   make check-alloc-doc          document mode; check-alloc-dev the server
 #   make check-alloc-wasm         and through the wasm engine
 #   make wasm                     the same engine as WebAssembly (needs emcc)
 #   make check-wasm               the golden sites through it, under node
@@ -458,7 +459,8 @@ check-golden: build/mdy$(EXE)
 	done; \
 	exit $$fail
 
-.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc check-alloc-all clean
+.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc \
+        check-alloc-all check-alloc-doc check-alloc-dev clean
 
 # A document from text into a nisaba collection, with no JavaScript in it:
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
@@ -666,12 +668,40 @@ check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
 	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	  --site "$(ALLOC_SITE)" $(if $(JOBS),--jobs $(JOBS),)
 
-# All three, which is what a pre-push or a nightly wants. About seven minutes.
+# The other two commands. `build` was the only thing swept for a while, and
+# that is where fourteen unchecked allocations were still living -- four of
+# them ones B24 had named and could not reach (B43).
+#
+# `document` is one file through `mdy <path> -o`: one source, no directory
+# walk, no static/ copy. Its fixture has to be DETERMINISTIC, which rules out
+# examples/document-set.mdy -- it prints document ids, and they are new every
+# run, so a sweep against it reports every ordinal as wrong.
+#
+# `dev` restates the invariant, because a server has neither "the same site"
+# nor "a reported failure" to offer: it either serves the same site, or says
+# it could not, and saying so includes refusing the request. What it must
+# never do is answer 200 with bytes that are not the site's.
+check-alloc-doc: build/mdy$(EXE) build/mdy-af$(EXE)
+	@fail=0; for s in ../../examples/elements.mdy ../../examples/hashtags.mdy \
+	                  ../../examples/invoice.mdy ../../examples/roster.mdy; do \
+	  node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	    --mode document --site "$$s" $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
+	done; exit $$fail
+
+check-alloc-dev: build/mdy$(EXE) build/mdy-af$(EXE)
+	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	  --mode dev --site fixture $(if $(JOBS),--jobs $(JOBS),)
+
+# Everything a native sweep can reach, which is what a pre-push or a nightly
+# wants. About eight minutes.
 check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
 	@fail=0; for s in fixture ../../examples/blog ../../examples/docs-site; do \
 	  node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	    --site "$$s" $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
-	done; exit $$fail
+	done; \
+	$(MAKE) --no-print-directory check-alloc-doc || fail=1; \
+	$(MAKE) --no-print-directory check-alloc-dev || fail=1; \
+	exit $$fail
 
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \

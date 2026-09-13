@@ -10,6 +10,7 @@
 #endif
 
 #include "broker.h"
+#include "xalloc.h"
 #include "memns.h"
 
 #include "sukkal.h"
@@ -43,12 +44,15 @@ static uint64_t store_clock(void *ctx) { (void)ctx; return bjm_now_ms(); }
 
 static void r_status(void *impl, int code) { ((struct Broker *)impl)->status = code; }
 static void r_header(void *impl, const char *name, const char *value) { (void)impl; (void)name; (void)value; }
+/* sukkal writes a response through this and has no way to be told it did not
+ * land: `void`, called from inside dispatch. A short body is a reply the
+ * caller then decodes as if it were whole. See xalloc.h. */
 static void r_write(void *impl, const uint8_t *data, size_t len) {
     struct Broker *b = impl;
     if (b->body_len + len > b->body_cap) {
         size_t want = b->body_cap ? b->body_cap * 2 : 1024;
         while (want < b->body_len + len) want *= 2;
-        b->body = realloc(b->body, want);
+        b->body = mdy_xrealloc(b->body, want);
         b->body_cap = want;
     }
     memcpy(b->body + b->body_len, data, len);
@@ -101,7 +105,7 @@ int broker_request(Broker *b, const char *method, const char *path, const char *
     sukkal_res res = { b, r_status, r_header, r_write };
     sukkal_dispatch(&req, &res);
     out->status = b->status;
-    out->body = malloc(b->body_len + 1);
+    out->body = mdy_xmalloc(b->body_len + 1);
     memcpy(out->body, b->body, b->body_len);
     out->body[b->body_len] = 0;
     out->body_len = b->body_len;
