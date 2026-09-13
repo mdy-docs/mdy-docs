@@ -13,7 +13,7 @@
 #   ext-subscripts             4
 #   ext-superscripts           1
 #   ext-tables                 2
-#   gfm                        8
+#   gfm                        5
 commonmark/0172.md
 commonmark/0179.md
 commonmark/0299.md
@@ -34,8 +34,5 @@ ext-tables/0011.md
 gfm/0199.md
 gfm/0202.md
 gfm/0609.md
-gfm/0622.md
-gfm/0624.md
 gfm/0625.md
-gfm/0626.md
 gfm/0651.md
