@@ -406,6 +406,40 @@ the GENERATED lines rather than the source ones: mdy-docs carries a line map
 from the script layer into the parser and this does not yet, which changes no
 HTML, only where a warning would say it came from.
 
+## What is in the binary
+
+Everything below is built from source in this tree. There is no package
+manager in the build and nothing to install: `make` compiles C and the one
+`.mjs` bundler step, and the result is a single executable. That is the same
+reason each of these is vendored or a submodule rather than a dependency —
+`mdy build` has to work on a machine that has a compiler and nothing else, and
+has to cross-compile to Windows and to WebAssembly from the same sources.
+
+**Vendored, under `third_party/`** — source copied in, pinned by the commit in
+each directory's `COMMIT`, with a README saying what was taken and what was
+left behind.
+
+| | what it does | licence |
+| --- | --- | --- |
+| **md4c** | CommonMark and GFM, the `.md` front end. `MD_DIALECT_GITHUB`: tables, task lists, strikethrough, autolinks, admonitions, footnotes. One local patch (B48), listed in its README. | MIT |
+| **lexbor** | HTML5 tokenizer and tree construction, five of its modules. The `rehype-raw` stage of the `.md` pipeline: raw HTML into real elements, and repairing what a document got wrong. | Apache-2.0 |
+| **stb** | `stb_image`, `stb_image_write`, `stb_image_resize2` — three headers. Image dimensions for a document's records, and the resizing `$.image` does. | MIT / public domain |
+| **highlight.js** | A fork of highlight.js 11.11.2 and lowlight 3.3.0's emitter, rewritten into lamassu's subset of JavaScript so fenced code is coloured by the real grammars inside the engine this binary already embeds, not by a second implementation of 37 languages in C. | BSD-3-Clause / MIT upstream; see below |
+
+**Submodules**, because they are this project's own and change with it:
+
+| | what it does |
+| --- | --- |
+| **lamassu-js** | The JavaScript engine a document's code runs in. Carries **baru-re**, whose generated Unicode tables `src/parse` reads for case folding and identifiers — read from lamassu's copy so there is one in this tree rather than two that can drift. |
+| **nisaba-db** | The document database: collections, B+trees, the query and update languages, the text index. Carries **binjson** (the wire format a record is stored and sent in), **binjson-structures** (the file and host-IO layers) and **regex-engine**. |
+| **sukkal-msg** | Publish/subscribe over HTTP/1.1 with binjson payloads. `mdy dev` runs a broker of its own from it. |
+
+**One gap worth naming**: `third_party/highlight.js` carries no `LICENSE`
+file. Upstream highlight.js is BSD-3-Clause and lowlight is MIT, and the
+grammars under `languages/` are derived from the former, so the text belongs
+in that directory beside the others'. Every other vendored directory here has
+one.
+
 ## Next
 
 The backend builds. What it does not yet do is *serve*, and the plan's Phase 1c

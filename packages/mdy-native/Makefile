@@ -258,6 +258,52 @@ $(PARSE_AF_LIB): $(PARSE_AF_OBJS) $(MD4C_AF_OBJS)
 # stb: three single-file headers, vendored. See third_party/stb/README.md.
 STB_INC   := -Ithird_party/stb
 
+# ---- lexbor ----------------------------------------------------------------
+#
+# HTML5 tree construction, vendored at third_party/lexbor: the tokenizer and
+# the insertion modes, which is what turns a `raw` node into real elements and
+# repairs what a document got wrong. B49 is the finding and that README is the
+# argument; what matters here is that it is five of lexbor's modules and one
+# port file, not the project.
+#
+# Its objects keep their source paths under build/lexbor, where every other
+# archive here flattens to a basename: lexbor has eight basenames used twice
+# (document.c, element.c, node.c, serialize.c and four more), so flattening
+# would silently drop half of each pair.
+LX_DIR    := third_party/lexbor/source
+LX_INC    := -I$(LX_DIR)
+LX_SRCS   := $(wildcard $(LX_DIR)/lexbor/core/*.c $(LX_DIR)/lexbor/ns/*.c \
+                        $(LX_DIR)/lexbor/tag/*.c \
+                        $(LX_DIR)/lexbor/dom/*.c $(LX_DIR)/lexbor/dom/*/*.c \
+                        $(LX_DIR)/lexbor/html/*.c $(LX_DIR)/lexbor/html/*/*.c \
+                        $(LX_DIR)/lexbor/html/*/*/*.c \
+                        $(LX_DIR)/lexbor/ports/posix/lexbor/core/*.c)
+LX_OBJS   := $(patsubst $(LX_DIR)/%.c,build/lexbor/%.o,$(LX_SRCS))
+LX_LIB    := build/liblexbor.a
+
+# Three suppressions, and only these three: 138 unused parameters and 44
+# shadowed names under the flags src/parse is built with, and one signed
+# comparison that only emcc's clang objects to. Vendored code is not edited to
+# silence a warning -- images.c puts a pragma round the stb include for the
+# same reason -- and they are scoped to these objects, so a new warning in
+# first-party code is still an error to somebody reading the build.
+LX_CFLAGS := -std=c11 -Wall -Wextra -Wno-unused-parameter -Wno-shadow \
+             -Wno-sign-compare -O2 $(DEBUG) $(LX_INC)
+
+build/lexbor/%.o: $(LX_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(LX_CFLAGS) -c $< -o $@
+
+$(LX_LIB): $(LX_OBJS)
+	@mkdir -p build
+	$(AR) rcs $@ $(LX_OBJS)
+
+# A parse of the three shapes B49 measured by hand, so that a build which
+# produces a lexbor that cannot repair an unclosed tag says so here rather
+# than in a site diff.
+build/lexbor-test$(EXE): test/lexbor.c $(LX_LIB)
+	$(CC) -std=c11 -Wall -Wextra -Wshadow -O2 $(DEBUG) $(LX_INC) $< $(LX_LIB) -o $@
+
 # ---- the front end's own checks -------------------------------------------
 #
 # `make check-parse` needs no node: the parser on constructed input, the HTML
@@ -267,7 +313,7 @@ STB_INC   := -Ithird_party/stb
 # it, and it is how every rule in src/parse was written: measured against the
 # JavaScript rather than read from it. See docs/parser.md.
 PARSE_CHECKS := build/parse-test$(EXE) build/html-test$(EXE) build/script-test$(EXE) \
-                build/yaml-test$(EXE) build/data-test$(EXE)
+                build/yaml-test$(EXE) build/data-test$(EXE) build/lexbor-test$(EXE)
 
 build/parse-test$(EXE): test/parse.c $(PARSE_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
@@ -311,6 +357,7 @@ check-cli: build/mdy$(EXE)
 check-dev: build/mdy$(EXE)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test test/dev.test.js
 check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
+	@./build/lexbor-test$(EXE)
 	@./build/parse-test$(EXE)
 	@./build/html-test$(EXE)
 	@./build/script-test$(EXE)
@@ -824,6 +871,15 @@ build/wasm/libmdyparse.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS)
 	  $(EMCC) $(PARSE_CFLAGS) -c $$f -o build/wasm/parse/`basename $$f .c`.o || exit 1; \
 	done
 	$(EMAR) rcs $@ build/wasm/parse/*.o
+
+# Objects keep their paths here too, for the reason the native rule gives.
+build/wasm/liblexbor.a: $(LX_SRCS)
+	@mkdir -p build/wasm/lexbor
+	@for f in $(LX_SRCS); do \
+	  o=build/wasm/lexbor/`echo $$f | sed 's|^$(LX_DIR)/||; s|/|_|g; s|\.c$$|.o|'`; \
+	  $(EMCC) $(LX_CFLAGS) -c $$f -o $$o || exit 1; \
+	done
+	$(EMAR) rcs $@ build/wasm/lexbor/*.o
 
 build/wasm/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	@mkdir -p build/wasm/sukkal
