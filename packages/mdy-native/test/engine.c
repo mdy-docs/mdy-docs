@@ -782,12 +782,23 @@ static void raw_html_checks(void) {
     write_file(root, "alt.md",    "![alt <b>t</b>](/i.png)\n");
     write_file(root, "cell.md",   "| h |\n| --- |\n| <b>x</b> |\n");
     write_file(root, "same.mdy",  "a <b>x</b> b\n");
+    write_file(root, "unclosed.md", "a <b>unclosed\n");
+    write_file(root, "crossed.md",  "a <b>x</i> b\n");
+    write_file(root, "blockinp.md", "<p>a <div>b</div> c</p>\n");
+    write_file(root, "foster.md",   "<table><b>stray</b><tr><td>x</td></tr></table>\n");
+    write_file(root, "one.md",      "first, with an unclosed <div>\n");
+    write_file(root, "two.md",      "second\n");
     write_file(root, "main.mdy",
         "% $.emit('inline.html', $.html($.render({ path: 'inline.md' })))\n"
         "% $.emit('code.html',   $.html($.render({ path: 'code.md' })))\n"
         "% $.emit('alt.html',    $.html($.render({ path: 'alt.md' })))\n"
         "% $.emit('cell.html',   $.html($.render({ path: 'cell.md' })))\n"
-        "% $.emit('mdy.html',    $.html($.render({ path: 'same.mdy' })))\n");
+        "% $.emit('mdy.html',    $.html($.render({ path: 'same.mdy' })))\n"
+        "% $.emit('unclosed.html', $.html($.render({ path: 'unclosed.md' })))\n"
+        "% $.emit('crossed.html',  $.html($.render({ path: 'crossed.md' })))\n"
+        "% $.emit('blockinp.html', $.html($.render({ path: 'blockinp.md' })))\n"
+        "% $.emit('foster.html',   $.html($.render({ path: 'foster.md' })))\n"
+        "% $.emit('two.html', $.html($.render({ path: 'one.md' })) + $.html($.render({ path: 'two.md' })))\n");
 
     mdy_engine *e = mdy_engine_new();
     char err[512];
@@ -843,6 +854,40 @@ static void raw_html_checks(void) {
         emitted("mdy.html") &&
             strcmp(emitted("mdy.html"), "<p>a &#x3C;b>x&#x3C;/b> b</p>") == 0,
         emitted("mdy.html"));
+
+    /*
+     * And what the HTML5 parse REPAIRS, which is the other half of the same
+     * stage and was missing entirely until raw.c. (B49.) Four rules, each a
+     * different part of tree construction and none of them a tag matcher's:
+     */
+    ok_("an unclosed tag is closed at the end of its document",
+        emitted("unclosed.html") &&
+            strcmp(emitted("unclosed.html"), "<p>a <b>unclosed</b></p>") == 0,
+        emitted("unclosed.html"));
+    ok_("...crossed formatting elements are un-crossed",
+        emitted("crossed.html") &&
+            strcmp(emitted("crossed.html"), "<p>a <b>x b</b></p>") == 0,
+        emitted("crossed.html"));
+    ok_("...a block inside a <p> splits the paragraph around it",
+        emitted("blockinp.html") &&
+            strcmp(emitted("blockinp.html"), "<p>a </p><div>b</div> c<p></p>") == 0,
+        emitted("blockinp.html"));
+    ok_("...and a stray element in a table is foster-parented out in front",
+        emitted("foster.html") &&
+            strcmp(emitted("foster.html"),
+                   "<b>stray</b><table><tbody><tr><td>x</td></tr></tbody></table>") == 0,
+        emitted("foster.html"));
+
+    /*
+     * The one with a consequence past a wrong tree: two documents composed
+     * onto one page, the first leaving a `<div>` open. It is closed at that
+     * document's own boundary, so the second is beside it and not inside it.
+     */
+    ok_("...so an unclosed tag cannot reach the document after it",
+        emitted("two.html") &&
+            strcmp(emitted("two.html"),
+                   "<p>first, with an unclosed </p><div><p></p></div><p>second</p>") == 0,
+        emitted("two.html"));
 
     mdy_engine_free(e);
     fsx_rm_rf(root);

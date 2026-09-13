@@ -768,79 +768,6 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
     }
 }
 
-/*
- * Foster parenting, which is the HTML parser's rule and not markdown's.
- *
- * remark-rehype's `wrap` pads a <table>, its row groups and its rows with
- * newlines, exactly as it pads a <ul> — and this file reproduces that, which
- * is right as far as it goes. But mdy-docs' `.md` pipeline does not stop
- * there: rehypeRaw re-parses the whole tree through an HTML parser, and an
- * HTML parser may not keep character data inside a table. It FOSTER-PARENTS
- * it: every text node directly inside table/thead/tbody/tfoot/tr is taken
- * out, in document order, and placed immediately before the table.
- *
- * So `| a |` alone came out as `<table>` with eleven newlines inside it here
- * and as eleven newlines followed by `<table>` there — the same bytes in a
- * different order, which is why no byte COUNT ever caught it and why
- * check-html, comparing a serialiser against the same tree, could not.
- *
- * Cells are untouched: a <th> or <td> is where character data belongs.
- */
-static int fosterable(const mdy_node *n) {
-    if (n->type != MDY_ELEMENT || !n->tag) return 0;
-    return strcmp(n->tag, "table") == 0 || strcmp(n->tag, "thead") == 0 ||
-           strcmp(n->tag, "tbody") == 0 || strcmp(n->tag, "tfoot") == 0 ||
-           strcmp(n->tag, "tr") == 0;
-}
-
-/* Collects the text out of `n`'s fosterable subtree into `out`, unlinking it. */
-static void foster_collect(mdy_node *n, mdy_buf *out) {
-    mdy_node *kept_first = NULL, *kept_last = NULL;
-    for (mdy_node *c = n->first, *next; c; c = next) {
-        next = c->next;
-        c->next = NULL;
-        if (c->type == MDY_TEXT) {
-            if (c->text) mdy_buf_put(out, c->text, strlen(c->text));
-            continue;                      /* unlinked: the arena owns it */
-        }
-        if (fosterable(c)) foster_collect(c, out);
-        if (!kept_first) kept_first = c; else kept_last->next = c;
-        kept_last = c;
-    }
-    n->first = kept_first;
-    n->last = kept_last;
-}
-
-static void foster_parent_table(Build *b, mdy_node *parent, mdy_node *table) {
-    mdy_buf text = { .ok = 1, .seed = 64 };
-    foster_collect(table, &text);
-    if (!text.ok) { b->failed = 1; free(text.s); return; }
-    if (!text.len || !parent) { free(text.s); return; }
-
-    /*
-     * Immediately before the table, and merged with the text already there if
-     * there is any — an HTML parser produces one run of character data, not
-     * two adjacent ones, and a tree with two would serialise the same but
-     * compare differently.
-     */
-    mdy_node *prev = NULL;
-    for (mdy_node *c = parent->first; c && c != table; c = c->next) prev = c;
-    if (prev && prev->type == MDY_TEXT && prev->text) {
-        size_t n = strlen(prev->text);
-        char *joined = mdy_alloc(&b->doc->arena, n + text.len + 1);
-        memcpy(joined, prev->text, n);
-        memcpy(joined + n, text.s, text.len);
-        joined[n + text.len] = '\0';
-        prev->text = joined;
-    } else {
-        mdy_node *node = mdy_new_text(b->doc, text.s, text.len);
-        if (!node) { b->failed = 1; free(text.s); return; }
-        node->next = table;
-        if (prev) prev->next = node; else parent->first = node;
-    }
-    free(text.s);
-}
-
 static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
     Build *b = ud;
     (void)detail;
@@ -944,14 +871,12 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             return 0;
         }
 
-        case MD_BLOCK_TABLE: {
-            /* The frame below the table is where the hoisted text goes. */
-            mdy_node *table = b->stack[b->depth - 1].node;
-            mdy_node *parent = b->depth >= 2 ? b->stack[b->depth - 2].node : NULL;
+        case MD_BLOCK_TABLE:
+            /* The newlines wrap() puts inside a table are foster-parented out
+             * of it by the HTML parse, which is raw.c's job now and used to be
+             * a pass written out here. See B49. */
             close_block(b);
-            foster_parent_table(b, parent, table);
             return 0;
-        }
 
         case MD_BLOCK_P:
         case MD_BLOCK_H:
@@ -1258,6 +1183,18 @@ mdy_doc *mdy_markdown_parse(const char *text, size_t len) {
     free(b.inline_text);
     free(b.notes);
     if (rc != 0 || b.failed) { mdy_free(doc); return NULL; }
+
+    /*
+     * rehype-raw, which is the stage after this one in mdy-docs' `.md`
+     * pipeline and had no counterpart here: the tree through an HTML5 parser,
+     * so a raw node becomes elements and what the document got wrong is
+     * repaired. See raw.c. (B49.)
+     *
+     * BEFORE the heading ids, because the parse can move a heading — one
+     * written as raw HTML inside a table is foster-parented out of it — and an
+     * id is given in document order.
+     */
+    if (mdy_raw_reparse(doc, doc->root) != 0) { mdy_free(doc); return NULL; }
 
     identify_headings(doc, doc->root);
     return doc;

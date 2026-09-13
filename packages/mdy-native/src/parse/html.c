@@ -211,7 +211,14 @@ static void put_number(mdy_buf *b, double v) {
  * boolean with any non-string value becomes `Boolean(value)`; and `false`,
  * `null` and `undefined` produce no attribute at all rather than an empty one.
  */
-static void write_attribute(mdy_buf *b, const mdy_prop *p) {
+/*
+ * Exposed, because raw.c writes a start tag for the HTML parser to read and
+ * an attribute has to be spelled there exactly as it is spelled here — one
+ * `className` becoming `class`, one set of escapes, one decision about a
+ * boolean. Two of those would be a divergence waiting for the first attribute
+ * nobody thought about.
+ */
+void mdy_html_write_attribute(mdy_buf *b, const mdy_prop *p) {
     AttrInfo info;
     attr_info(p->name, strlen(p->name), &info);
 
@@ -358,7 +365,7 @@ static void write_node(mdy_buf *b, const mdy_node *n, const mdy_node *parent,
         size_t before = b->len;
         mdy_buf_put(b, " ", 1);
         size_t mark = b->len;
-        write_attribute(b, p);
+        mdy_html_write_attribute(b, p);
         /* A property that serialises to nothing takes its separator with it —
          * the original collects the non-empty ones and joins those. */
         if (b->len == mark && b->s) { b->len = before; b->s[b->len] = '\0'; }

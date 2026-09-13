@@ -17,8 +17,12 @@
  *   MDY_PROPS      normalized attribute name -> hast property name, for
  *                  PARSING, where the author wrote the attribute.
  *   MDY_PROP_INFO  hast property name -> the attribute to write, plus the
- *                  three flags serialisation needs (boolean, overloaded
- *                  boolean, comma-separated), for WRITING.
+ *                  the flags a value's SHAPE depends on: boolean, overloaded
+ *                  boolean, comma-separated, space-separated and numeric. The
+ *                  first three are what serialisation needs; the last two are
+ *                  what raw.c needs coming the other way, to know that
+ *                  `class="a b"` read back off an HTML parse is the list
+ *                  ["a","b"] and `colspan="2"` is the number 2.
  *
  * Both sorted by their key so the lookups can bisect.
  */
@@ -49,7 +53,8 @@ const info = Object.entries(html.property)
   .map(([property, i]) => [
     property,
     i.attribute,
-    (i.boolean ? 1 : 0) | (i.overloadedBoolean ? 2 : 0) | (i.commaSeparated ? 4 : 0),
+    (i.boolean ? 1 : 0) | (i.overloadedBoolean ? 2 : 0) | (i.commaSeparated ? 4 : 0) |
+    (i.spaceSeparated ? 8 : 0) | (i.number ? 16 : 0),
   ])
   .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
@@ -65,11 +70,15 @@ ${rows.map(([n, p]) => `    { "${esc(n)}", "${esc(p)}" },`).join('\n')}
 };
 #define MDY_PROPS_COUNT ${rows.length}
 
-/* Writing: the hast property -> the attribute to write, and its flags.
- * 1 = boolean, 2 = overloaded boolean, 4 = comma-separated. */
+/* The hast property -> the attribute, and the flags that decide how a value
+ * is written and how one READ BACK is typed.
+ * 1 = boolean, 2 = overloaded boolean, 4 = comma-separated,
+ * 8 = space-separated, 16 = numeric. */
 #define MDY_ATTR_BOOLEAN     1
 #define MDY_ATTR_OVERLOADED  2
 #define MDY_ATTR_COMMAS      4
+#define MDY_ATTR_SPACES      8
+#define MDY_ATTR_NUMBER      16
 
 static const struct { const char *property; const char *attribute; unsigned flags; } MDY_PROP_INFO[] = {
 ${info.map(([p, a, f]) => `    { "${esc(p)}", "${esc(a)}", ${f} },`).join('\n')}

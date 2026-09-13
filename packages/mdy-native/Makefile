@@ -216,7 +216,9 @@ PARSE_OBJS := $(patsubst src/parse/%.c,build/parse/%.o,$(PARSE_SRCS))
 MD4C_SRCS  := third_party/md4c/src/md4c.c third_party/md4c/src/entity.c
 MD4C_OBJS  := build/parse/md4c.o build/parse/md4c-entity.o
 UCD_INC    := -I$(LAMASSU)/third_party/baru-re/include
-PARSE_INC  := -Isrc/parse -Ithird_party/md4c/src
+# lexbor's headers reach src/parse because raw.c is the rehype-raw stage and
+# lives there: it is the `.md` front end's last pass, not the engine's first.
+PARSE_INC  := -Isrc/parse -Ithird_party/md4c/src -Ithird_party/lexbor/source
 PARSE_CFLAGS := -std=c11 -Wall -Wextra -Wshadow -O2 $(DEBUG) $(PARSE_INC) $(UCD_INC)
 PARSE_LIB  := build/libmdyparse.a
 
@@ -315,27 +317,27 @@ build/lexbor-test$(EXE): test/lexbor.c $(LX_LIB)
 PARSE_CHECKS := build/parse-test$(EXE) build/html-test$(EXE) build/script-test$(EXE) \
                 build/yaml-test$(EXE) build/data-test$(EXE) build/lexbor-test$(EXE)
 
-build/parse-test$(EXE): test/parse.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/html-test$(EXE): test/html.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/script-test$(EXE): test/script.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/yaml-test$(EXE): test/yaml.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/data-test$(EXE): test/data.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/parse-test$(EXE): test/parse.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/html-test$(EXE): test/html.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/script-test$(EXE): test/script.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/yaml-test$(EXE): test/yaml.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/data-test$(EXE): test/data.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
 
 # The drivers the node harnesses run: text in, a tree (or YAML, or documents,
 # or JavaScript) out as JSON, one per line, so a diff can say which document.
-build/mdyast$(EXE): test/mdyast.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/mdcat$(EXE): test/mdcat.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/yamlcat$(EXE): test/yamlcat.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
-build/linkify$(EXE): test/linkify.c $(PARSE_LIB)
-	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) -o $@
+build/mdyast$(EXE): test/mdyast.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/mdcat$(EXE): test/mdcat.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/yamlcat$(EXE): test/yamlcat.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/linkify$(EXE): test/linkify.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
 build/md4cprobe$(EXE): test/md4cprobe.c $(MD4C_SRCS)
 	$(CC) $(PARSE_CFLAGS) test/md4cprobe.c $(MD4C_SRCS) -o $@
 
@@ -520,10 +522,10 @@ check-golden: build/mdy$(EXE)
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
 # ingest mdy.js does in JS — `collection.insertOne({ ...doc.data })` — done in
 # C, and it is the seam the engine will be built on.
-build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB)
+build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) -o $@ $(LDLIBS)
+	  test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB) -o $@ $(LDLIBS)
 
 check-ingest: build/ingest-test$(EXE)
 	@./build/ingest-test$(EXE)
@@ -613,8 +615,8 @@ build/obj/engine-test.o: test/engine.c $(HL_HDR)
 	@mkdir -p build/obj
 	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
 
-ENGINE_LIBS := $(PARSE_LIB) build/libsukkal.a $(LAM_LIBS)
-AF_LIBS     := $(PARSE_AF_LIB) build/libsukkal.a $(LAM_LIBS)
+ENGINE_LIBS := $(PARSE_LIB) $(LX_LIB) build/libsukkal.a $(LAM_LIBS)
+AF_LIBS     := $(PARSE_AF_LIB) $(LX_LIB) build/libsukkal.a $(LAM_LIBS)
 
 -include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) $(AF_OBJS:.o=.d) \
          build/obj/cli.d build/obj-asan/cli.d build/obj-af/cli.d \
@@ -893,10 +895,10 @@ build/wasm/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 # are named by the .d files the native objects already wrote — so `make wasm`
 # after a header edit is correct because build/obj carries the knowledge, and
 # `make clean wasm` is correct because there is nothing to be stale.
-$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
+$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
 	@mkdir -p build/wasm
 	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
-	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
+	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
 	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
 	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
 	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \

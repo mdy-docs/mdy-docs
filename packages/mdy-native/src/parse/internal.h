@@ -187,6 +187,19 @@ void mdy_clear_class(mdy_doc *doc, mdy_node *el);
 /* ---- attributes and the schema ------------------------------------------- */
 
 const char *mdy_hast_name(mdy_doc *doc, const char *name, size_t len);
+
+/* ` name="value"`, the way the HTML writer spells it. raw.c uses it to build
+ * a start tag for the HTML parser. */
+void mdy_html_write_attribute(mdy_buf *b, const mdy_prop *p);
+
+/*
+ * rehype-raw: the tree through an HTML5 parser, so a `raw` node becomes real
+ * elements and what a document got wrong is repaired. Rebuilds `root` in
+ * place. 0, or -1 when the parse could not be made — which is a document that
+ * could not be read, NOT a reason to keep the tree that went in. See raw.c.
+ * (B49.)
+ */
+int mdy_raw_reparse(mdy_doc *doc, mdy_node *root);
 int mdy_tag_allowed(const char *tag);
 int mdy_tag_stripped(const char *tag);
 int mdy_attr_allowed(const char *tag, const char *name, size_t len);
