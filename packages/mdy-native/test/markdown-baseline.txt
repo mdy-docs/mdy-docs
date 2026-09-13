@@ -10,8 +10,6 @@
 #   commonmark                 6
 #   ext-footnotes              1
 #   ext-permissive-autolinks   3
-#   ext-subscripts             4
-#   ext-superscripts           1
 #   ext-tables                 2
 #   gfm                        5
 commonmark/0172.md
@@ -24,11 +22,6 @@ ext-footnotes/0011.md
 ext-permissive-autolinks/0002.md
 ext-permissive-autolinks/0004.md
 ext-permissive-autolinks/0007.md
-ext-subscripts/0000.md
-ext-subscripts/0001.md
-ext-subscripts/0002.md
-ext-subscripts/0011.md
-ext-superscripts/0014.md
 ext-tables/0006.md
 ext-tables/0011.md
 gfm/0199.md

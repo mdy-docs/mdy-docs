@@ -3667,13 +3667,26 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                     if(flags != 0)
                         ADD_MARK(ch, off, off + 1, flags);
                 } else if(tmp - off <= 2  &&  (ctx->parser.flags & MD_FLAG_STRIKETHROUGH)) {
-                    /* Strikethrough: standard GFM left/right-flanking rules. */
-                    unsigned flags = MD_MARK_POTENTIAL_OPENER | MD_MARK_POTENTIAL_CLOSER;
+                    /* Strikethrough: CommonMark's left/right-flanking rules,
+                     * which is what the delimiter runs of '*' and '_' use and
+                     * what cmark-gfm and remark apply to '~'.
+                     *
+                     * This used to require whitespace or punctuation BEFORE an
+                     * opener, which is stricter than flanking and made an
+                     * intra-word run no delimiter at all: "H~2~O" and
+                     * "log~2~x" came out literal where both of those give
+                     * <del>. Left-flanking asks that the run is not FOLLOWED
+                     * by whitespace, and only then looks behind it. */
+                    int before_ws = (off == line->beg) || ISUNICODEWHITESPACEBEFORE(off);
+                    int before_punct = (off > line->beg) && ISUNICODEPUNCTBEFORE(off);
+                    int after_ws = (tmp == line->end) || ISUNICODEWHITESPACE(tmp);
+                    int after_punct = (tmp < line->end) && ISUNICODEPUNCT(tmp);
+                    unsigned flags = 0;
 
-                    if(off > line->beg  &&  !ISUNICODEWHITESPACEBEFORE(off)  &&  !ISUNICODEPUNCTBEFORE(off))
-                        flags &= ~MD_MARK_POTENTIAL_OPENER;
-                    if(tmp < line->end  &&  !ISUNICODEWHITESPACE(tmp)  &&  !ISUNICODEPUNCT(tmp))
-                        flags &= ~MD_MARK_POTENTIAL_CLOSER;
+                    if(!after_ws  &&  (!after_punct || before_ws || before_punct))
+                        flags |= MD_MARK_POTENTIAL_OPENER;
+                    if(!before_ws  &&  (!before_punct || after_ws || after_punct))
+                        flags |= MD_MARK_POTENTIAL_CLOSER;
                     if(flags != 0)
                         ADD_MARK(ch, off, tmp, flags);
                 }
