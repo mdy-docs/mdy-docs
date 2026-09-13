@@ -20,25 +20,9 @@
 #endif
 
 #include "fsx.h"
+#include "xalloc.h"
 
 /* ---- a growable string, since the listing's size is not known up front ---- */
-
-typedef struct { char *s; size_t len, cap; } Buf;
-
-static int buf_put(Buf *b, const char *s, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 256;
-        while (cap < b->len + n + 1) cap *= 2;
-        char *grown = realloc(b->s, cap);
-        if (!grown) return -1;
-        b->s = grown;
-        b->cap = cap;
-    }
-    memcpy(b->s + b->len, s, n);
-    b->len += n;
-    b->s[b->len] = '\0';
-    return 0;
-}
 
 /* ---- paths ---------------------------------------------------------------- */
 
@@ -59,6 +43,31 @@ int fsx_is_absolute(const char *p) {
         p[1] == ':' && (p[2] == '/' || p[2] == '\\')) return 1;
 #endif
     return 0;
+}
+
+void fsx_normalize(char *joined, char *out, size_t out_len) {
+    if (!out_len) return;
+    int rooted = joined[0] == '/';
+    /* A drive-letter path has no leading slash to restore; its first segment
+     * IS the root, and `..` cannot climb above it. */
+    size_t floor = (!rooted && fsx_is_absolute(joined)) ? 1 : 0;
+    char *stack[512];
+    size_t depth = 0;
+    for (char *seg = strtok(joined, "/"); seg; seg = strtok(NULL, "/")) {
+        if (strcmp(seg, ".") == 0) continue;
+        if (strcmp(seg, "..") == 0) { if (depth > floor) depth--; continue; }
+        if (depth < 512) stack[depth++] = seg;
+    }
+    size_t at_ = 0;
+    if (rooted) out[at_++] = '/';
+    for (size_t i = 0; i < depth; i++) {
+        if (i && at_ + 1 < out_len) out[at_++] = '/';
+        size_t n = strlen(stack[i]);
+        if (at_ + n >= out_len) n = out_len - at_ - 1;
+        memcpy(out + at_, stack[i], n);
+        at_ += n;
+    }
+    out[at_ < out_len ? at_ : out_len - 1] = '\0';
 }
 
 static char *at(const char *root, const char *rel) {
@@ -136,7 +145,7 @@ static FILE *open_utf8(const char *path, const wchar_t *mode) {
  * caller: the contract says a missing directory is [], and a site importing a
  * package with no static/ depends on it.
  */
-static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
+static int walk(const char *base, const char *rel, const char *exts, mdy_sbuf *out) {
     char *dir = at(base, rel);
     if (!dir) return -1;
     size_t need = strlen(dir) + 3;
@@ -180,7 +189,7 @@ static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
         } else if (matches(name, exts)) {
             /* The name WITH its terminator; buf_put leaves another after it,
              * so the last one ends the list. */
-            if (buf_put(out, child, strlen(child) + 1) < 0) rc = -1;
+            mdy_sbuf_put(out, child, strlen(child) + 1);
         }
         free(child);
         free(name);
@@ -192,7 +201,7 @@ static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
 
 #else
 
-static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
+static int walk(const char *base, const char *rel, const char *exts, mdy_sbuf *out) {
     char *dir = at(base, rel);
     if (!dir) return -1;
     DIR *d = opendir(dir);
@@ -236,9 +245,7 @@ static int walk(const char *base, const char *rel, const char *exts, Buf *out) {
         } else if (matches(e->d_name, exts)) {
             /* The name WITH its terminator; buf_put leaves another after it,
              * so the last one ends the list. */
-            if (buf_put(out, child, strlen(child) + 1) < 0) {
-                free(child); closedir(d); return -1;
-            }
+            mdy_sbuf_put(out, child, strlen(child) + 1);
         }
         free(child);
     }
@@ -256,7 +263,7 @@ char *fsx_list(const char *root, const char *subdir, const char *exts) {
     char *base = at(root, subdir && strcmp(subdir, ".") != 0 ? subdir : "");
     if (!base) return NULL;
 
-    Buf out = { 0 };
+    mdy_sbuf out = { 0 };
     int rc = walk(base, "", exts, &out);
     free(base);
     if (rc < 0) { free(out.s); return NULL; }
@@ -283,14 +290,10 @@ char *fsx_list(const char *root, const char *subdir, const char *exts) {
     for (char *p = out.s; p < out.s + out.len; p += strlen(p) + 1) v[n++] = p;
     qsort(v, n, sizeof *v, by_name);
 
-    Buf sorted = { 0 };
-    int ok = 1;
-    for (size_t i = 0; i < n; i++) {
-        if (buf_put(&sorted, v[i], strlen(v[i]) + 1) < 0) { ok = 0; break; }
-    }
+    mdy_sbuf sorted = { 0 };
+    for (size_t i = 0; i < n; i++) mdy_sbuf_put(&sorted, v[i], strlen(v[i]) + 1);
     free(v);
     free(out.s);
-    if (!ok) { free(sorted.s); return NULL; }
     return sorted.s ? sorted.s : calloc(1, 1);
 }
 
@@ -417,7 +420,7 @@ char *fsx_cwd(void) {
  * so the remover can tell them apart without a second call; a missing
  * directory is NULL, distinct from an empty one. */
 static char *fsx_readdir(const char *path) {
-    Buf out = { 0 };
+    mdy_sbuf out = { 0 };
 #ifdef _WIN32
     size_t need = strlen(path) + 3;
     char *pattern = malloc(need);
@@ -438,9 +441,9 @@ static char *fsx_readdir(const char *path) {
         char *name = win_narrow(fd.cFileName);
         if (!name) continue;
         if (strcmp(name, ".") && strcmp(name, "..")) {
-            buf_put(&out, name, strlen(name));
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) buf_put(&out, "/", 1);
-            buf_put(&out, "", 1);        /* NUL separated, as fsx_list is */
+            mdy_sbuf_put(&out, name, strlen(name));
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) mdy_sbuf_put(&out, "/", 1);
+            mdy_sbuf_put(&out, "", 1);        /* NUL separated, as fsx_list is */
         }
         free(name);
     } while (FindNextFileW(h, &fd));
@@ -451,7 +454,7 @@ static char *fsx_readdir(const char *path) {
     struct dirent *e;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        buf_put(&out, e->d_name, strlen(e->d_name));
+        mdy_sbuf_put(&out, e->d_name, strlen(e->d_name));
 
         int is_dir;
         if (e->d_type == DT_DIR) is_dir = 1;
@@ -462,8 +465,8 @@ static char *fsx_readdir(const char *path) {
             is_dir = full && stat(full, &st) == 0 && S_ISDIR(st.st_mode);
             free(full);
         }
-        if (is_dir) buf_put(&out, "/", 1);
-        buf_put(&out, "", 1);            /* NUL separated, as fsx_list is */
+        if (is_dir) mdy_sbuf_put(&out, "/", 1);
+        mdy_sbuf_put(&out, "", 1);            /* NUL separated, as fsx_list is */
     }
     closedir(d);
 #endif

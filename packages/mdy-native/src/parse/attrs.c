@@ -41,11 +41,9 @@
  */
 #include "props_table.h"
 
-/** ASCII lowercase. Attribute names are ASCII by construction: parse_element
- * only admits [A-Za-z_:][A-Za-z0-9._:-]* as a name. */
-static char lower_ascii(char c) {
-    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
-}
+/* Attribute names are ASCII by construction: parse_element only admits
+ * [A-Za-z_:][A-Za-z0-9._:-]* as a name. mdytext.h's, since B43's sweep of §2. */
+#define lower_ascii mdy_lower_ascii
 
 /** The schema's property name for a normalized attribute name, or NULL. */
 static const char *schema_lookup(const char *normal, size_t len) {

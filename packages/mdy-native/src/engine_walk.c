@@ -104,30 +104,14 @@ static int is_image_ext(const char *ext) {
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
         ".svg", ".avif", ".ico", ".tiff", ".tif",
     };
-    for (size_t i = 0; i < sizeof EXTS / sizeof *EXTS; i++) {
-        size_t n = strlen(EXTS[i]);
-        if (strlen(ext) != n) continue;
-        size_t k = 0;
-        while (k < n) {
-            char a = ext[k], b = EXTS[i][k];
-            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-            if (a != b) break;
-            k++;
-        }
-        if (k == n) return 1;
-    }
+    for (size_t i = 0; i < sizeof EXTS / sizeof *EXTS; i++)
+        if (mdy_ieq(ext, EXTS[i])) return 1;
     return 0;
 }
 
 int ends_with_ci(const char *s, const char *suffix) {
     size_t n = strlen(s), m = strlen(suffix);
-    if (m > n) return 0;
-    for (size_t i = 0; i < m; i++) {
-        char a = s[n - m + i], b = suffix[i];
-        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-        if (a != b) return 0;
-    }
-    return 1;
+    return m <= n && mdy_ieq(s + n - m, suffix);
 }
 
 
@@ -333,7 +317,7 @@ static size_t add_tag(char (**tags)[128], size_t *count, size_t *cap,
     char lowered[128];
     for (size_t i = 0; i < name_len; i++) {
         char c = name[i];
-        lowered[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+        lowered[i] = mdy_lower_ascii(c);
     }
     lowered[name_len] = '\0';
     for (size_t i = 0; i < *count; i++)
@@ -474,28 +458,8 @@ void resolve_path(const char *base, const char *spec, char *out, size_t out_len)
     char combined[4096];
     if (fsx_is_absolute(spec)) snprintf(combined, sizeof combined, "%s", spec);
     else snprintf(combined, sizeof combined, "%s/%s", base, spec);
-
-    /* A drive-letter path has no leading slash to restore; its first segment
-     * is the drive, and `..` cannot climb above it. */
-    int absolute = combined[0] == '/';
-    size_t floor = (!absolute && fsx_is_absolute(combined)) ? 1 : 0;
-    char *stack[256];
-    size_t depth = 0;
-    for (char *seg = strtok(combined, "/"); seg; seg = strtok(NULL, "/")) {
-        if (strcmp(seg, ".") == 0) continue;
-        if (strcmp(seg, "..") == 0) { if (depth > floor) depth--; continue; }
-        if (depth < 256) stack[depth++] = seg;
-    }
-    size_t at = 0;
-    if (absolute && out_len) out[at++] = '/';
-    for (size_t i = 0; i < depth; i++) {
-        if (i && at + 1 < out_len) out[at++] = '/';
-        size_t n = strlen(stack[i]);
-        if (at + n >= out_len) n = out_len - at - 1;
-        memcpy(out + at, stack[i], n);
-        at += n;
-    }
-    out[at < out_len ? at : out_len - 1] = '\0';
+    /* No backslash translation, deliberately: see fsx_normalize's comment. */
+    fsx_normalize(combined, out, out_len);
 }
 
 /* A relative root against the working directory, so cache keys and cycle

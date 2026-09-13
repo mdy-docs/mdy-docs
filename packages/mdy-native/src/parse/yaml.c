@@ -14,6 +14,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "internal.h"
+#include "mdytext.h"
 #include "mdyyaml.h"
 
 /* ---- allocation ------------------------------------------------------------
@@ -68,22 +70,6 @@ struct mdy_yaml {
 
 /* ---- a growable byte buffer, arena-backed at the end ------------------------ */
 
-typedef struct { char *s; size_t len, cap; int ok; } Buf;
-
-static void buf_put(Buf *b, const char *s, size_t n) {
-    if (!b->ok) return;
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 128;
-        while (cap < b->len + n + 1) cap *= 2;
-        char *grown = realloc(b->s, cap);
-        if (!grown) { b->ok = 0; return; }
-        b->s = grown; b->cap = cap;
-    }
-    memcpy(b->s + b->len, s, n);
-    b->len += n;
-    b->s[b->len] = '\0';
-}
-static void buf_putc(Buf *b, char c) { buf_put(b, &c, 1); }
 
 /* ---- lines ------------------------------------------------------------------ */
 
@@ -295,29 +281,19 @@ static mdy_yaml_node *resolve(P *p, const char *s, size_t len) {
  * reads back as the sentences somebody wrote.
  */
 
-static void fold_break(Buf *out, size_t breaks) {
+static void fold_break(mdy_buf *out, size_t breaks) {
     /* One break is a space; every break after the first is kept as itself. */
     if (breaks == 0) return;
-    if (breaks == 1) buf_putc(out, ' ');
-    else for (size_t i = 1; i < breaks; i++) buf_putc(out, '\n');
+    if (breaks == 1) mdy_buf_putc(out, ' ');
+    else for (size_t i = 1; i < breaks; i++) mdy_buf_putc(out, '\n');
 }
 
-/** `\x41`, `é`, `\U0001F600` — written back out as UTF-8. */
-static void put_codepoint(Buf *out, unsigned cp) {
-    if (cp < 0x80) buf_putc(out, (char)cp);
-    else if (cp < 0x800) {
-        buf_putc(out, (char)(0xC0 | (cp >> 6)));
-        buf_putc(out, (char)(0x80 | (cp & 0x3F)));
-    } else if (cp < 0x10000) {
-        buf_putc(out, (char)(0xE0 | (cp >> 12)));
-        buf_putc(out, (char)(0x80 | ((cp >> 6) & 0x3F)));
-        buf_putc(out, (char)(0x80 | (cp & 0x3F)));
-    } else {
-        buf_putc(out, (char)(0xF0 | (cp >> 18)));
-        buf_putc(out, (char)(0x80 | ((cp >> 12) & 0x3F)));
-        buf_putc(out, (char)(0x80 | ((cp >> 6) & 0x3F)));
-        buf_putc(out, (char)(0x80 | (cp & 0x3F)));
-    }
+/** `\x41`, `é`, `\U0001F600` — written back out as UTF-8, by the encoder
+ * mdytext.h already declares rather than a third copy of it (§2). */
+static void put_codepoint(mdy_buf *out, unsigned cp) {
+    char enc[4];
+    size_t n = mdy_utf8_encode((uint32_t)cp, enc);
+    mdy_buf_put(out, enc, n);
 }
 
 static int hex_digits(const char *s, size_t len, size_t n, unsigned *out) {
@@ -342,7 +318,7 @@ static int hex_digits(const char *s, size_t len, size_t n, unsigned *out) {
  */
 static mdy_yaml_node *read_quoted(P *p, size_t line, size_t from, char quote,
                                   size_t *end_line, size_t *end_col) {
-    Buf out = { NULL, 0, 0, 1 };
+    mdy_buf out = { .ok = 1, .seed = 128 };
     size_t li = line;
     size_t i = from + 1;                 /* past the opening quote */
     size_t breaks = 0;
@@ -356,7 +332,7 @@ static mdy_yaml_node *read_quoted(P *p, size_t line, size_t from, char quote,
                 if (c == '\'') {
                     if (i + 1 < l->len && l->s[i + 1] == '\'') { /* '' is one ' */
                         if (breaks) { fold_break(&out, breaks); breaks = 0; }
-                        buf_putc(&out, '\'');
+                        mdy_buf_putc(&out, '\'');
                         i += 2;
                         continue;
                     }
@@ -387,19 +363,19 @@ static mdy_yaml_node *read_quoted(P *p, size_t line, size_t from, char quote,
                     i += 2;
                     unsigned cp = 0;
                     switch (e) {
-                        case 'n': buf_putc(&out, '\n'); break;
-                        case 't': buf_putc(&out, '\t'); break;
-                        case 'r': buf_putc(&out, '\r'); break;
-                        case 'b': buf_putc(&out, '\b'); break;
-                        case 'f': buf_putc(&out, '\f'); break;
-                        case '0': buf_putc(&out, '\0'); break;
-                        case 'a': buf_putc(&out, '\a'); break;
-                        case 'v': buf_putc(&out, '\v'); break;
-                        case 'e': buf_putc(&out, 0x1B); break;
-                        case '/': buf_putc(&out, '/'); break;
-                        case '\\': buf_putc(&out, '\\'); break;
-                        case '"': buf_putc(&out, '"'); break;
-                        case ' ': buf_putc(&out, ' '); break;
+                        case 'n': mdy_buf_putc(&out, '\n'); break;
+                        case 't': mdy_buf_putc(&out, '\t'); break;
+                        case 'r': mdy_buf_putc(&out, '\r'); break;
+                        case 'b': mdy_buf_putc(&out, '\b'); break;
+                        case 'f': mdy_buf_putc(&out, '\f'); break;
+                        case '0': mdy_buf_putc(&out, '\0'); break;
+                        case 'a': mdy_buf_putc(&out, '\a'); break;
+                        case 'v': mdy_buf_putc(&out, '\v'); break;
+                        case 'e': mdy_buf_putc(&out, 0x1B); break;
+                        case '/': mdy_buf_putc(&out, '/'); break;
+                        case '\\': mdy_buf_putc(&out, '\\'); break;
+                        case '"': mdy_buf_putc(&out, '"'); break;
+                        case ' ': mdy_buf_putc(&out, ' '); break;
                         case 'N': put_codepoint(&out, 0x85); break;
                         case '_': put_codepoint(&out, 0xA0); break;
                         case 'L': put_codepoint(&out, 0x2028); break;
@@ -423,7 +399,7 @@ static mdy_yaml_node *read_quoted(P *p, size_t line, size_t from, char quote,
                 if (c == '"') { i++; closed = 1; break; }
             }
             if (breaks) { fold_break(&out, breaks); breaks = 0; }
-            buf_putc(&out, c);
+            mdy_buf_putc(&out, c);
             i++;
         }
         if (closed) break;
@@ -501,7 +477,7 @@ static mdy_yaml_node *read_block_scalar(P *p, const char *header, size_t header_
         return new_string(p, "", 0);
     }
 
-    Buf out = { NULL, 0, 0, 1 };
+    mdy_buf out = { .ok = 1, .seed = 128 };
     size_t i = first;
     size_t pending_breaks = 0;
     int wrote_any = 0;
@@ -526,16 +502,16 @@ static mdy_yaml_node *read_block_scalar(P *p, const char *header, size_t header_
              * ordinary ones. */
             size_t breaks = pending_breaks + 1;
             if (folded && !more_indented && !last_was_more_indented) {
-                for (size_t k = 1; k < breaks; k++) buf_putc(&out, '\n');
+                for (size_t k = 1; k < breaks; k++) mdy_buf_putc(&out, '\n');
             } else {
-                for (size_t k = 0; k < breaks; k++) buf_putc(&out, '\n');
+                for (size_t k = 0; k < breaks; k++) mdy_buf_putc(&out, '\n');
             }
             pending_breaks = 0;
         } else {
-            buf_putc(&out, ' ');
+            mdy_buf_putc(&out, ' ');
         }
 
-        buf_put(&out, s, n);
+        mdy_buf_put(&out, s, n);
         wrote_any = 1;
         last_was_more_indented = more_indented;
     }
@@ -548,8 +524,8 @@ static mdy_yaml_node *read_block_scalar(P *p, const char *header, size_t header_
         /* The phantom line the document's own final newline produced is not
          * one of the block's trailing blank lines. */
         if (i >= p->count && p->trailing_newline && pending_breaks) pending_breaks--;
-        if (chomp > 0) for (size_t k = 0; k <= pending_breaks; k++) buf_putc(&out, '\n');
-        else if (chomp == 0) buf_putc(&out, '\n');
+        if (chomp > 0) for (size_t k = 0; k <= pending_breaks; k++) mdy_buf_putc(&out, '\n');
+        else if (chomp == 0) mdy_buf_putc(&out, '\n');
     }
 
     if (!out.ok) { oom(p); free(out.s); return NULL; }
@@ -873,10 +849,10 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
      * past the key and does not itself open something. Line breaks fold: one
      * becomes a space, and a blank line becomes a newline.
      */
-    Buf out = { NULL, 0, 0, 1 };
+    mdy_buf out = { .ok = 1, .seed = 128 };
     size_t stop = end;
     while (stop > col && is_space(l->s[stop - 1])) stop--;
-    buf_put(&out, l->s + col, stop - col);
+    mdy_buf_put(&out, l->s + col, stop - col);
 
     size_t i = line + 1;
     size_t breaks = 0;
@@ -890,7 +866,7 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
         if (cend == 0) { breaks++; continue; }
         fold_break(&out, breaks + 1);
         breaks = 0;
-        buf_put(&out, cont->s, cend);
+        mdy_buf_put(&out, cont->s, cend);
     }
     p->at = i - breaks;
 
@@ -1240,24 +1216,24 @@ const mdy_yaml_node *mdy_yaml_get(const mdy_yaml_node *n, const char *k) {
 
 /* ---- JSON, for the comparison harness ----------------------------------------- */
 
-static void json_string(Buf *b, const char *s, size_t len) {
-    buf_putc(b, '"');
+static void json_string(mdy_buf *b, const char *s, size_t len) {
+    mdy_buf_putc(b, '"');
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         switch (c) {
-            case '"':  buf_put(b, "\\\"", 2); break;
-            case '\\': buf_put(b, "\\\\", 2); break;
-            case '\b': buf_put(b, "\\b", 2); break;
-            case '\f': buf_put(b, "\\f", 2); break;
-            case '\n': buf_put(b, "\\n", 2); break;
-            case '\r': buf_put(b, "\\r", 2); break;
-            case '\t': buf_put(b, "\\t", 2); break;
+            case '"':  mdy_buf_put(b, "\\\"", 2); break;
+            case '\\': mdy_buf_put(b, "\\\\", 2); break;
+            case '\b': mdy_buf_put(b, "\\b", 2); break;
+            case '\f': mdy_buf_put(b, "\\f", 2); break;
+            case '\n': mdy_buf_put(b, "\\n", 2); break;
+            case '\r': mdy_buf_put(b, "\\r", 2); break;
+            case '\t': mdy_buf_put(b, "\\t", 2); break;
             default:
-                if (c < 0x20) { char tmp[8]; snprintf(tmp, sizeof tmp, "\\u%04x", c); buf_put(b, tmp, 6); }
-                else buf_putc(b, (char)c);
+                if (c < 0x20) { char tmp[8]; snprintf(tmp, sizeof tmp, "\\u%04x", c); mdy_buf_put(b, tmp, 6); }
+                else mdy_buf_putc(b, (char)c);
         }
     }
-    buf_putc(b, '"');
+    mdy_buf_putc(b, '"');
 }
 
 /*
@@ -1271,8 +1247,8 @@ static void json_string(Buf *b, const char *s, size_t len) {
  * what a full Grisu implementation computes directly and what this arrives at
  * in at most three tries.
  */
-static void json_number(Buf *b, double v) {
-    if (isnan(v) || isinf(v)) { buf_put(b, "null", 4); return; }
+static void json_number(mdy_buf *b, double v) {
+    if (isnan(v) || isinf(v)) { mdy_buf_put(b, "null", 4); return; }
     char tmp[40];
     if (v == (double)(long long)v && v < 9.2e18 && v > -9.2e18) {
         snprintf(tmp, sizeof tmp, "%lld", (long long)v);
@@ -1282,40 +1258,40 @@ static void json_number(Buf *b, double v) {
             if (strtod(tmp, NULL) == v) break;
         }
     }
-    buf_put(b, tmp, strlen(tmp));
+    mdy_buf_put(b, tmp, strlen(tmp));
 }
 
-static void json_node(Buf *b, const mdy_yaml_node *n) {
-    if (!n) { buf_put(b, "null", 4); return; }
+static void json_node(mdy_buf *b, const mdy_yaml_node *n) {
+    if (!n) { mdy_buf_put(b, "null", 4); return; }
     switch (n->type) {
-        case MDY_YAML_NULL: buf_put(b, "null", 4); return;
-        case MDY_YAML_BOOL: buf_put(b, n->as.boolean ? "true" : "false", n->as.boolean ? 4 : 5); return;
+        case MDY_YAML_NULL: mdy_buf_put(b, "null", 4); return;
+        case MDY_YAML_BOOL: mdy_buf_put(b, n->as.boolean ? "true" : "false", n->as.boolean ? 4 : 5); return;
         case MDY_YAML_NUMBER: json_number(b, n->as.number); return;
         case MDY_YAML_STRING: json_string(b, n->as.string.s, n->as.string.len); return;
         case MDY_YAML_SEQUENCE:
-            buf_putc(b, '[');
+            mdy_buf_putc(b, '[');
             for (size_t i = 0; i < n->as.seq.count; i++) {
-                if (i) buf_putc(b, ',');
+                if (i) mdy_buf_putc(b, ',');
                 json_node(b, n->as.seq.items[i]);
             }
-            buf_putc(b, ']');
+            mdy_buf_putc(b, ']');
             return;
         case MDY_YAML_MAPPING:
-            buf_putc(b, '{');
+            mdy_buf_putc(b, '{');
             for (size_t i = 0; i < n->as.map.count; i++) {
-                if (i) buf_putc(b, ',');
+                if (i) mdy_buf_putc(b, ',');
                 json_string(b, n->as.map.pairs[i].key, n->as.map.pairs[i].key_len);
-                buf_putc(b, ':');
+                mdy_buf_putc(b, ':');
                 json_node(b, n->as.map.pairs[i].value);
             }
-            buf_putc(b, '}');
+            mdy_buf_putc(b, '}');
             return;
     }
 }
 
 char *mdy_yaml_to_json(const mdy_yaml_node *n) {
-    Buf b = { NULL, 0, 0, 1 };
-    buf_put(&b, "", 0);
+    mdy_buf b = { .ok = 1, .seed = 128 };
+    mdy_buf_put(&b, "", 0);
     json_node(&b, n);
     if (!b.ok) { free(b.s); return NULL; }
     return b.s;

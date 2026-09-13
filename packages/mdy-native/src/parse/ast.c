@@ -209,21 +209,18 @@ void mdy_clear_class(mdy_doc *doc, mdy_node *el) {
 
 /* ---- a growable output buffer -------------------------------------------- */
 
+/*
+ * The buffer is internal.h's (§2 -- this file held the eighth copy of the
+ * same thirteen lines). The `int` return stays: thirty-five call sites
+ * propagate it, and `ok` says the same thing one adapter away.
+ */
 typedef struct { char *s; size_t len, cap; int positions; } Out;
 
 static int out_put(Out *o, const char *s, size_t n) {
-    if (o->len + n + 1 > o->cap) {
-        size_t cap = o->cap ? o->cap : 4096;
-        while (cap < o->len + n + 1) cap *= 2;
-        char *grown = realloc(o->s, cap);
-        if (!grown) return -1;
-        o->s = grown;
-        o->cap = cap;
-    }
-    memcpy(o->s + o->len, s, n);
-    o->len += n;
-    o->s[o->len] = '\0';
-    return 0;
+    mdy_buf b = { .s = o->s, .len = o->len, .cap = o->cap, .seed = 4096, .ok = 1 };
+    mdy_buf_put(&b, s, n);
+    o->s = b.s; o->len = b.len; o->cap = b.cap;
+    return b.ok ? 0 : -1;
 }
 static int out_str(Out *o, const char *s) { return out_put(o, s, strlen(s)); }
 

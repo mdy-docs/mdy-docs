@@ -32,6 +32,23 @@ int mdy_is_letter_or_number_cp(uint32_t cp);
 uint32_t mdy_lower_cp(uint32_t cp);
 
 /*
+ * ASCII lowercase, and ASCII case-insensitive equality.
+ *
+ * These are here, in the text header both libraries can see, because that was
+ * the thing missing: the same fold was written inline in seven places across
+ * the parser and the backend, which share no PRIVATE header, so neither side
+ * could hold it for the other (§2). A public text utility is what the parser
+ * already offers the engine, and this is one.
+ *
+ * ASCII and not Unicode on purpose. Every caller is comparing a file
+ * extension, an attribute name, a tag or a doctype — things the specifications
+ * define as ASCII-insensitive, where folding `İ` would be wrong. A caller that
+ * means JavaScript's toLowerCase wants mdy_lower_full, two comments down.
+ */
+char mdy_lower_ascii(char c);
+int mdy_ieq(const char *a, const char *b);
+
+/*
  * `String.prototype.toLowerCase` on one code point: writes 1 or 2 code points
  * into `out` and returns how many.
  *

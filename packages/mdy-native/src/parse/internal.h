@@ -34,6 +34,20 @@ typedef struct {
     size_t total;
 } mdy_arena;
 
+/*
+ * A growable byte buffer. See buf.c — four files had the same one.
+ *
+ * Declare with the capacity the first write should ask for and `ok` set:
+ *
+ *     mdy_buf b = { .ok = 1, .seed = 8192 };
+ *
+ * and check `b.ok` before believing `b.s`. Zero-initialising it and setting
+ * `ok` is also fine; the seed then defaults.
+ */
+typedef struct { char *s; size_t len, cap, seed; int ok; } mdy_buf;
+void mdy_buf_put(mdy_buf *b, const char *s, size_t n);
+void mdy_buf_putc(mdy_buf *b, char c);
+
 /* Report an exhausted allocator and end the process. _Exit rather than exit
  * because the handlers exit runs are themselves allocating code. */
 _Noreturn void mdy_oom_exit(void);

@@ -138,6 +138,16 @@ size_t mdy_utf8_decode(const char *p, size_t left, uint32_t *out) {
 }
 
 /** Encode one code point. `out` must hold 4 bytes. */
+char mdy_lower_ascii(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+int mdy_ieq(const char *a, const char *b) {
+    for (; *a && *b; a++, b++)
+        if (mdy_lower_ascii(*a) != mdy_lower_ascii(*b)) return 0;
+    return *a == *b;
+}
+
 size_t mdy_utf8_encode(uint32_t cp, char *out) {
     if (cp < 0x80) { out[0] = (char)cp; return 1; }
     if (cp < 0x800) {

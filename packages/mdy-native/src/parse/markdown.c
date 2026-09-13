@@ -163,14 +163,9 @@ static void flush_gathered(Build *b) {
 /* ---- entities ------------------------------------------------------------- */
 
 /* One codepoint as UTF-8, into `out`; returns how many bytes. */
-static size_t utf8_of(unsigned cp, char out[4]) {
-    size_t n = 0;
-    if (cp < 0x80) out[n++] = (char)cp;
-    else if (cp < 0x800) { out[n++] = (char)(0xC0 | (cp >> 6)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
-    else if (cp < 0x10000) { out[n++] = (char)(0xE0 | (cp >> 12)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
-    else { out[n++] = (char)(0xF0 | (cp >> 18)); out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
-    return n;
-}
+/* mdytext.h's, since §2's sweep: this library had three copies of the same
+ * encoder and one of them is the one the header already declares. */
+#define utf8_of(cp, out) mdy_utf8_encode((uint32_t)(cp), (out))
 
 static void put_codepoint(Build *b, unsigned cp) {
     char out[4];

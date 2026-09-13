@@ -9,31 +9,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "internal.h"
 #include "mdyscript.h"
 
 /* ---- a growable string ----------------------------------------------------- */
 
-typedef struct { char *s; size_t len, cap; int ok; } Buf;
+static void put1(mdy_buf *b, char c) { mdy_buf_put(b, &c, 1); }
+static void puts_(mdy_buf *b, const char *s) { mdy_buf_put(b, s, strlen(s)); }
 
-static void put(Buf *b, const char *s, size_t n) {
-    if (!b->ok) return;
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 4096;
-        while (cap < b->len + n + 1) cap *= 2;
-        char *grown = realloc(b->s, cap);
-        if (!grown) { b->ok = 0; return; }
-        b->s = grown;
-        b->cap = cap;
-    }
-    memcpy(b->s + b->len, s, n);
-    b->len += n;
-    b->s[b->len] = '\0';
-}
-
-static void put1(Buf *b, char c) { put(b, &c, 1); }
-static void puts_(Buf *b, const char *s) { put(b, s, strlen(s)); }
-
-static void put_size(Buf *b, size_t v) {
+static void put_size(mdy_buf *b, size_t v) {
     char tmp[24];
     size_t n = 0;
     if (v == 0) tmp[n++] = '0';
@@ -235,12 +219,12 @@ static void mark_code(const Line *lines, size_t count, unsigned char *code) {
  * out as the two characters it is, which is what makes `{{cite book` in a
  * quoted passage survive.
  */
-static void compile_line(Buf *b, const char *s, size_t len) {
+static void compile_line(mdy_buf *b, const char *s, size_t len) {
     /* `/^([ \t]*)\\(%)/` -> `$1$2`: a leading `\%` is an escaped sigil. */
     size_t indent = 0;
     while (indent < len && (s[indent] == ' ' || s[indent] == '\t')) indent++;
     if (indent + 1 < len && s[indent] == '\\' && s[indent + 1] == '%') {
-        put(b, s, indent);
+        mdy_buf_put(b, s, indent);
         s += indent + 1;
         len -= indent + 1;
     }
@@ -264,7 +248,7 @@ static void compile_line(Buf *b, const char *s, size_t len) {
             }
             if (close != (size_t)-1) {
                 puts_(b, "${");
-                put(b, s + i + 2, close - (i + 2));
+                mdy_buf_put(b, s + i + 2, close - (i + 2));
                 put1(b, '}');
                 i = close + 2;
                 continue;
@@ -304,7 +288,7 @@ mdy_script *mdy_script_compile(const char *text, size_t len) {
 
     mark_code(lines, count, code);
 
-    Buf b = { NULL, 0, 0, 1 };
+    mdy_buf b = { .ok = 1, .seed = 4096 };
     puts_(&b, "const __out = []");
 
     for (size_t i = 0; i < count; i++) {
@@ -320,9 +304,9 @@ mdy_script *mdy_script_compile(const char *text, size_t len) {
             size_t rest_len = 0;
             if (match_script(&lines[i], 2, &rest, &rest_len) ||
                 match_script(&lines[i], 1, &rest, &rest_len)) {
-                put(&b, rest, rest_len);
+                mdy_buf_put(&b, rest, rest_len);
             } else {
-                put(&b, lines[i].s, lines[i].len);
+                mdy_buf_put(&b, lines[i].s, lines[i].len);
             }
         } else {
             puts_(&b, "__out.push([");

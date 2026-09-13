@@ -8,23 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "internal.h"
 #include "mdydata.h"
-
-typedef struct { char *s; size_t len, cap; int ok; } Buf;
-
-static void put(Buf *b, const char *s, size_t n) {
-    if (!b->ok) return;
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 1024;
-        while (cap < b->len + n + 1) cap *= 2;
-        char *grown = realloc(b->s, cap);
-        if (!grown) { b->ok = 0; return; }
-        b->s = grown; b->cap = cap;
-    }
-    memcpy(b->s + b->len, s, n);
-    b->len += n;
-    b->s[b->len] = '\0';
-}
 
 struct mdy_data {
     mdy_data_fence *fences;
@@ -128,7 +113,7 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
 
     size_t cap = 4;
     mdy_data_fence *fences = malloc(cap * sizeof *fences);
-    Buf sources = { NULL, 0, 0, 1 };
+    mdy_buf sources = { .ok = 1, .seed = 1024 };
     size_t nfences = 0;
     if (!fences) { free(drop); free(lines); free(out); return NULL; }
 
@@ -164,10 +149,10 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
             for (size_t k = i + 1; k < (close < count ? close : count); k++) {
                 /* The opener's own indentation is not content. */
                 size_t strip = lines[k].indent < open_indent ? lines[k].indent : open_indent;
-                if (sources.len > offsets[nfences]) put(&sources, "\n", 1);
-                put(&sources, lines[k].s + strip, lines[k].len - strip);
+                if (sources.len > offsets[nfences]) mdy_buf_put(&sources, "\n", 1);
+                mdy_buf_put(&sources, lines[k].s + strip, lines[k].len - strip);
             }
-            put(&sources, "", 1);          /* a NUL between fences */
+            mdy_buf_put(&sources, "", 1);          /* a NUL between fences */
             fences[nfences].source_len = sources.len - offsets[nfences] - 1;
             fences[nfences].open_line = (uint32_t)i + 1;
             fences[nfences].close_line = (uint32_t)last + 1;
@@ -180,14 +165,14 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
     /* The body without them, rejoined exactly as it was split — and, for
      * each line kept, which line it was, since a fence taken out moves every
      * line under it and a position has to know by how much. */
-    Buf body = { NULL, 0, 0, 1 };
+    mdy_buf body = { .ok = 1, .seed = 1024 };
     uint32_t *body_lines = malloc((count ? count : 1) * sizeof *body_lines);
     size_t written = 0;
     if (!body_lines) { free(body.s); goto fail; }
     for (size_t i = 0; i < count; i++) {
         if (drop[i]) continue;
-        if (written) put(&body, "\n", 1);
-        put(&body, lines[i].s, lines[i].len);
+        if (written) mdy_buf_put(&body, "\n", 1);
+        mdy_buf_put(&body, lines[i].s, lines[i].len);
         body_lines[written++] = (uint32_t)i;
     }
     if (!body.ok || !sources.ok) { free(body.s); free(body_lines); goto fail; }

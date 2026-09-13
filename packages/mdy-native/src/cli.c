@@ -38,6 +38,7 @@
 #include "fsx.h"
 #include "http.h"
 #include "mdydoc.h"
+#include "mdytext.h"
 #include "xalloc.h"
 #include "mdyscript.h"
 #include "mdyyaml.h"
@@ -267,31 +268,15 @@ static char *absolute(const char *path) {
         snprintf(joined, sizeof joined, "%s/%s", cwd ? cwd : ".", path);
         free(cwd);
     }
+    /* A path a person typed, so a Windows spelling reaches here: the engine's
+     * own resolve_path does NOT do this, and fsx_normalize says why. */
     for (char *p = joined; *p; p++) if (*p == '\\') *p = '/';
-    /* a drive keeps its letter as the first segment; `..` cannot climb past it */
-    int rooted = joined[0] == '/';
-    char *segs[512];
-    size_t depth = 0;
-    /* Both of these were unchecked and both are written through immediately;
-     * there is no char* that means "could not build this path", and every
-     * caller dereferences what comes back. See xalloc.h. */
-    char *work = mdy_xstrdup(joined);
-    for (char *seg = strtok(work, "/"); seg; seg = strtok(NULL, "/")) {
-        if (strcmp(seg, ".") == 0) continue;
-        if (strcmp(seg, "..") == 0) { if (depth > (rooted ? 0u : 1u)) depth--; continue; }
-        if (depth < 512) segs[depth++] = seg;
-    }
-    char *out = mdy_xmalloc(strlen(joined) + 2);
-    size_t at = 0;
-    if (rooted) out[at++] = '/';
-    for (size_t i = 0; i < depth; i++) {
-        if (i) out[at++] = '/';
-        size_t n = strlen(segs[i]);
-        memcpy(out + at, segs[i], n);
-        at += n;
-    }
-    out[at] = '\0';
-    free(work);
+
+    /* Allocating, where fsx_normalize writes into a buffer: every caller of
+     * this one wants to keep the result. See xalloc.h for the allocation. */
+    size_t n = strlen(joined) + 2;
+    char *out = mdy_xmalloc(n);
+    fsx_normalize(joined, out, n);
     return out;
 }
 
@@ -302,15 +287,8 @@ static const char *extension_of(const char *path) {
     return dot ? dot : "";
 }
 
-static int ieq(const char *a, const char *b) {
-    for (; *a && *b; a++, b++) {
-        char x = *a, y = *b;
-        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
-        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
-        if (x != y) return 0;
-    }
-    return *a == *b;
-}
+/* mdytext.h's, since B43's sweep of §2 gave it a home both sides can see. */
+#define ieq mdy_ieq
 
 /* ---- what a render produced besides its own text ------------------------------
  *
@@ -843,21 +821,9 @@ typedef struct {
     char *input_abs;
 } DocOptions;
 
-typedef struct { char *text; size_t len, cap; } Buf;
-static void buf_put(Buf *b, const char *s, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        while (b->len + n + 1 > b->cap) b->cap = b->cap ? b->cap * 2 : 4096;
-        b->text = realloc(b->text, b->cap);
-    }
-    memcpy(b->text + b->len, s, n);
-    b->len += n;
-    b->text[b->len] = 0;
-}
-static void buf_puts(Buf *b, const char *s) { buf_put(b, s, strlen(s)); }
-
 /* --emit-js's shape for one document: `compileTemplateSource`, wrapped as
  * bin/mdy.js wraps it. */
-static void emit_js_document(Buf *to, size_t index, const char *text, size_t len) {
+static void emit_js_document(mdy_sbuf *to, size_t index, const char *text, size_t len) {
     mdy_chunk matter, body;
     mdy_split_frontmatter(text, len, &matter, &body);
     mdy_script *script = mdy_script_compile(body.text, body.len);
@@ -865,9 +831,9 @@ static void emit_js_document(Buf *to, size_t index, const char *text, size_t len
     const char *src = script ? mdy_script_source(script, &n) : "";
     char head[96];
     snprintf(head, sizeof head, "// document %zu\nfunction __doc%zu(req, res) {\n", index, index);
-    buf_puts(to, head);
-    buf_put(to, src, n);
-    buf_puts(to, "\nreturn __out;\n}");
+    mdy_sbuf_puts(to, head);
+    mdy_sbuf_put(to, src, n);
+    mdy_sbuf_puts(to, "\nreturn __out;\n}");
     mdy_script_free(script);
 }
 
@@ -1044,9 +1010,9 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
             if (!text) { snprintf(msg, sizeof msg, "cannot read %s", entry); mdy_engine_free(e); return msg; }
             mdy_documents *docs = mdy_split_documents((const char *)text, len);
             mdy_chunk first = mdy_documents_at(docs, 0);
-            Buf buf = { 0 };
+            mdy_sbuf buf = { .seed = 4096 };
             emit_js_document(&buf, (size_t)at, first.text, first.len);
-            *out = buf.text;
+            *out = buf.s;
             mdy_documents_free(docs);
             free(text);
             mdy_engine_free(e);
@@ -1078,14 +1044,14 @@ static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) 
     if (o->emit_js) {
         mdy_documents *docs = mdy_split_documents(text, len);
         size_t n = mdy_documents_count(docs);
-        Buf buf = { 0 };
+        mdy_sbuf buf = { .seed = 4096 };
         for (size_t i = 0; i < n; i++) {
-            if (i) buf_puts(&buf, "\n\n");
+            if (i) mdy_sbuf_puts(&buf, "\n\n");
             mdy_chunk c = mdy_documents_at(docs, i);
             emit_js_document(&buf, i, c.text, c.len);
         }
-        if (!buf.text) buf_puts(&buf, "");
-        *out = buf.text;
+        if (!buf.s) mdy_sbuf_puts(&buf, "");
+        *out = buf.s;
         mdy_documents_free(docs);
         free(text);
         mdy_engine_free(e);

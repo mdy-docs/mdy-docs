@@ -38,4 +38,25 @@ void *mdy_xcalloc(size_t n, size_t size);
 void *mdy_xrealloc(void *p, size_t n);
 char *mdy_xstrdup(const char *s);
 
+/*
+ * A growable byte buffer, for this side of the boundary.
+ *
+ * The parser has one too (mdy_buf, internal.h) and they are deliberately not
+ * the same type, which is the answer §2 was looking for rather than a failure
+ * to find one. The parser's carries an `ok` flag because a parse has a caller
+ * to report to and B24 made every one of those reports real. This one cannot
+ * fail, because the engine allocates through the four functions above — so an
+ * `ok` here would be a field nothing could ever set.
+ *
+ * Two buffers, one per library, each matching its own error policy. Before
+ * this there were four in the parser and three here, all the same thirteen
+ * lines, and two of the three grew with an UNCHECKED realloc and wrote
+ * through the result.
+ *
+ * `seed` is the first allocation's size; zero means 256.
+ */
+typedef struct { char *s; size_t len, cap, seed; } mdy_sbuf;
+void mdy_sbuf_put(mdy_sbuf *b, const char *s, size_t n);
+void mdy_sbuf_puts(mdy_sbuf *b, const char *s);
+
 #endif

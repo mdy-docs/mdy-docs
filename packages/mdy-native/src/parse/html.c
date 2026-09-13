@@ -21,24 +21,7 @@ void mdy_html_options_default(mdy_html_options *out) {
 
 /* ---- output --------------------------------------------------------------- */
 
-typedef struct { char *s; size_t len, cap; int ok; } Buf;
-
-static void put(Buf *b, const char *s, size_t n) {
-    if (!b->ok) return;
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 8192;
-        while (cap < b->len + n + 1) cap *= 2;
-        char *grown = realloc(b->s, cap);
-        if (!grown) { b->ok = 0; return; }
-        b->s = grown;
-        b->cap = cap;
-    }
-    memcpy(b->s + b->len, s, n);
-    b->len += n;
-    b->s[b->len] = '\0';
-}
-
-static void puts_(Buf *b, const char *s) { put(b, s, strlen(s)); }
+static void puts_(mdy_buf *b, const char *s) { mdy_buf_put(b, s, strlen(s)); }
 
 /* ---- character references -------------------------------------------------- */
 
@@ -57,12 +40,12 @@ static void puts_(Buf *b, const char *s) { put(b, s, strlen(s)); }
  * byte can never equal one of them, so multi-byte characters pass through
  * untouched, which is what the JavaScript does with them too.
  */
-static void escape(Buf *b, const char *s, size_t len, const char *subset) {
+static void escape(mdy_buf *b, const char *s, size_t len, const char *subset) {
     size_t run = 0;   /* bytes since the last reference, written in one go */
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         if (c != 0 && c < 0x80 && strchr(subset, (char)c)) {
-            put(b, s + i - run, run);
+            mdy_buf_put(b, s + i - run, run);
             run = 0;
             char ref[16];
             snprintf(ref, sizeof ref, "&#x%X;", c);
@@ -71,7 +54,7 @@ static void escape(Buf *b, const char *s, size_t len, const char *subset) {
             run++;
         }
     }
-    put(b, s + len - run, run);
+    mdy_buf_put(b, s + len - run, run);
 }
 
 /*
@@ -205,7 +188,7 @@ static void attr_info(const char *property, size_t len, AttrInfo *out) {
 /** `String(value)` for a number, which for every value this tree can hold is
  * an integer. A non-integer would need JavaScript's own shortest-round-trip
  * formatting; nothing produces one, and `%g` would be a guess. */
-static void put_number(Buf *b, double v) {
+static void put_number(mdy_buf *b, double v) {
     char tmp[40];
     /*
      * A non-finite cannot arrive here any more — the two producers of a number
@@ -228,7 +211,7 @@ static void put_number(Buf *b, double v) {
  * boolean with any non-string value becomes `Boolean(value)`; and `false`,
  * `null` and `undefined` produce no attribute at all rather than an empty one.
  */
-static void write_attribute(Buf *b, const mdy_prop *p) {
+static void write_attribute(mdy_buf *b, const mdy_prop *p) {
     AttrInfo info;
     attr_info(p->name, strlen(p->name), &info);
 
@@ -260,7 +243,7 @@ static void write_attribute(Buf *b, const mdy_prop *p) {
     escape(b, info.attribute, info.attribute_len, SUBSET_NAME);
     if (boolean_like || (p->type == MDY_PROP_BOOL && p->as.boolean)) return;
 
-    put(b, "=\"", 2);
+    mdy_buf_put(b, "=\"", 2);
     switch (p->type) {
         case MDY_PROP_STRING:
             escape(b, p->as.string, strlen(p->as.string), SUBSET_VALUE);
@@ -277,7 +260,7 @@ static void write_attribute(Buf *b, const mdy_prop *p) {
              * asks for.
              */
             const char *sep = (info.flags & MDY_ATTR_COMMAS) ? ", " : " ";
-            Buf tmp = { NULL, 0, 0, 1 };
+            mdy_buf tmp = { .ok = 1, .seed = 8192 };
             for (size_t i = 0; i < p->list_len; i++) {
                 if (i) puts_(&tmp, sep);
                 puts_(&tmp, p->list[i]);
@@ -298,19 +281,19 @@ static void write_attribute(Buf *b, const mdy_prop *p) {
             puts_(b, "true");
             break;
     }
-    put(b, "\"", 1);
+    mdy_buf_put(b, "\"", 1);
 }
 
 /* ---- nodes ----------------------------------------------------------------- */
 
-static void write_node(Buf *b, const mdy_node *n, const mdy_node *parent,
+static void write_node(mdy_buf *b, const mdy_node *n, const mdy_node *parent,
                        const mdy_html_options *o);
 
-static void write_children(Buf *b, const mdy_node *n, const mdy_html_options *o) {
+static void write_children(mdy_buf *b, const mdy_node *n, const mdy_html_options *o) {
     for (const mdy_node *c = n->first; c; c = c->next) write_node(b, c, n, o);
 }
 
-static void write_node(Buf *b, const mdy_node *n, const mdy_node *parent,
+static void write_node(mdy_buf *b, const mdy_node *n, const mdy_node *parent,
                        const mdy_html_options *o) {
     switch (n->type) {
         case MDY_ROOT:
@@ -363,7 +346,7 @@ static void write_node(Buf *b, const mdy_node *n, const mdy_node *parent,
      */
     int self_closing = mdy_is_void_element(n->tag) && n->first == NULL;
 
-    put(b, "<", 1);
+    mdy_buf_put(b, "<", 1);
     puts_(b, n->tag);
 
     /*
@@ -373,7 +356,7 @@ static void write_node(Buf *b, const mdy_node *n, const mdy_node *parent,
      */
     for (const mdy_prop *p = n->props; p; p = p->next) {
         size_t before = b->len;
-        put(b, " ", 1);
+        mdy_buf_put(b, " ", 1);
         size_t mark = b->len;
         write_attribute(b, p);
         /* A property that serialises to nothing takes its separator with it —
@@ -381,15 +364,15 @@ static void write_node(Buf *b, const mdy_node *n, const mdy_node *parent,
         if (b->len == mark && b->s) { b->len = before; b->s[b->len] = '\0'; }
     }
 
-    put(b, ">", 1);
+    mdy_buf_put(b, ">", 1);
     write_children(b, n, o);
 
     /* `closeSelfClosing` is off, so a void element gets no ` /`, and no
      * closing tag either. */
     if (!self_closing) {
-        put(b, "</", 2);
+        mdy_buf_put(b, "</", 2);
         puts_(b, n->tag);
-        put(b, ">", 1);
+        mdy_buf_put(b, ">", 1);
     }
 }
 
@@ -398,8 +381,8 @@ char *mdy_to_html(const mdy_node *node, const mdy_html_options *options) {
     if (!options) { mdy_html_options_default(&defaults); options = &defaults; }
     if (!node) return NULL;
 
-    Buf b = { NULL, 0, 0, 1 };
-    put(&b, "", 0);           /* so an empty tree returns "" rather than NULL */
+    mdy_buf b = { .ok = 1, .seed = 8192 };
+    mdy_buf_put(&b, "", 0);           /* so an empty tree returns "" rather than NULL */
     write_node(&b, node, NULL, options);
     if (!b.ok) { free(b.s); return NULL; }
     return b.s;

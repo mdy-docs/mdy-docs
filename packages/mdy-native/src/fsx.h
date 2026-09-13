@@ -67,6 +67,27 @@ char *fsx_cwd(void);
 int fsx_is_absolute(const char *p);
 
 /*
+ * `.` and `..` collapsed, so that two spellings of one file compare equal.
+ *
+ * This is here because it was written twice — `resolve_path` in the engine
+ * and `absolute` in the CLI, the same algorithm over the same `strtok` (§2).
+ * They were left unfolded for want of a home; `fsx.h` is it, since this is a
+ * fact about paths and the file already owns `fsx_is_absolute`.
+ *
+ * What did NOT fold is the JOINING, and the difference is load-bearing rather
+ * than accidental: the CLI translates `\` to `/` because it is handling a path
+ * a person typed on Windows, and the engine must not, because an import
+ * specifier is POSIX-ish and `a\b.mdy` is a legal POSIX filename. So the two
+ * keep their own entry points and share the part that is genuinely the same.
+ *
+ * `joined` is CONSUMED — strtok writes into it.
+ *
+ * `..` cannot climb above the root: past a leading `/`, or past the drive on
+ * a `C:/…` path, which has no leading slash to stop at.
+ */
+void fsx_normalize(char *joined, char *out, size_t out_len);
+
+/*
  * ---- what the tests need -------------------------------------------------
  *
  * Real filesystem work: test/engine.c writes a site into a temp directory and

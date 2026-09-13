@@ -51,3 +51,17 @@ char *mdy_xstrdup(const char *s) {
     memcpy(out, s, n);
     return out;
 }
+
+void mdy_sbuf_put(mdy_sbuf *b, const char *s, size_t n) {
+    if (b->len + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap : (b->seed ? b->seed : 256);
+        while (cap < b->len + n + 1) cap *= 2;
+        b->s = mdy_xrealloc(b->s, cap);
+        b->cap = cap;
+    }
+    memcpy(b->s + b->len, s, n);
+    b->len += n;
+    b->s[b->len] = '\0';
+}
+
+void mdy_sbuf_puts(mdy_sbuf *b, const char *s) { mdy_sbuf_put(b, s, strlen(s)); }
