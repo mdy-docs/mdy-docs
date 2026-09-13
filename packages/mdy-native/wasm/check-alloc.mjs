@@ -45,6 +45,10 @@ const SITES = {
     site: 'fixture-pkg',
   },
   messaging: { mounts: [join(pkg, '..', '..', 'examples', 'messaging')], site: 'messaging' },
+  // The inputs that WERE bugs, and the only site here with a `.md` in it —
+  // which is the whole markdown front end, and the three unchecked strdups in
+  // render_tree_out that `fixture` could not reach (B47).
+  'fixture-awkward': { mounts: [join(pkg, 'fixture-awkward')], site: 'fixture-awkward' },
   // blog imports "../blog-style-x", so that directory is mounted beside it
   // the way check-golden.mjs mounts fixture-style beside fixture-pkg.
   blog: {

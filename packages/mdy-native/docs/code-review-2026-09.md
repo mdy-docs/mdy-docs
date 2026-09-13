@@ -1141,14 +1141,41 @@ The other fourteen are a parse deciding something — a table too sparse to be a
 table — or one of the callbacks here having already returned -1.
 
 **`fixture-awkward` is the sweep's default now**
-([Makefile:687](../Makefile#L687)), because it is strictly more: 2,300
-allocations against 1,808, a front end the other has none of, and FASTER
-(3.5s against 5.4s), since its documents are small where the fixture's entry
-does real work. `ALLOC_SITE=fixture` still runs, and still passes.
+([Makefile:700](../Makefile#L700)), because it is strictly more: 2,300
+allocations against 1,808, a front end the other has none of, and FASTER —
+its documents are small where the fixture's entry does real work.
 
-Control: reverting the three `strdup`s brings back ordinal 1400's segfault and
-1467's wrong site; removing `debug_log` brings back 1948–1952, five runs that
-report success and write a document with its footnotes missing.
+**And it is one variable for four targets**, which is the half that was nearly
+missed. `check-alloc` was pointed at the new site and `check-alloc-dev`,
+`check-alloc-wasm` and the nightly were left on `fixture`, so the `.md` path
+stayed unswept in three of the four places it runs. The reason `fixture` was
+too small is a property of the SITE, not of the command: whichever of build,
+dev or wasm is running, it is the documents that decide which code the sweep
+can reach. All three take `ALLOC_SITE` now, and `check-alloc-all` sweeps both
+sites.
+
+```
+build 2,300 / 4s      dev 2,402 / 4s      wasm 2,299 / 30s
+```
+
+`check-alloc-doc` is the one that cannot follow, and it is worth saying why
+rather than leaving it looking forgotten: `mdy <file.mdy> -o` opens ONE file
+and walks no directory, so a `$.render({ path: "page.md" })` from it answers
+*"found no such document"*. There is no single-document shape that reaches the
+markdown front end at all.
+
+**Control, and it is the argument for the whole change.** With the three
+`strdup`s and `debug_log` reverted:
+
+```
+dev,  fixture           1,889 refusals, every one clean
+dev,  fixture-awkward   7 of 2,402 — a segfault, a wrong site, five silent successes
+wasm, fixture           1,806 refusals, every one clean
+wasm, fixture-awkward   7 of 2,299 — the same seven
+```
+
+The old sites do not merely find fewer bugs. They find *none* of these, and
+say so in the confident voice of a check that passed.
 
 #### B48 — a link label beginning with `^` loses it (Low)
 
@@ -1262,7 +1289,7 @@ HTTP round trip and a report, and `test/dev.test.js` already drives it against
 a wedged one. That is a gap, and a small one, stated rather than closed.
 
 `make check-alloc-doc` and `make check-alloc-dev`
-([Makefile:698](../Makefile#L698)) run these; `check-alloc-all` is all of it,
+([Makefile:719](../Makefile#L719)) run these; `check-alloc-all` is all of it,
 about eight minutes, and CI runs that.
 
 #### B36 — `.inf` and `.nan` crossed into a document as numbers (Medium) — FIXED
@@ -1530,9 +1557,9 @@ them back beside the status. If that status were ever lost, a caller would be
 given a half-written site with nothing to say it was half-written, which is
 the exact failure B24 was about.
 
-`build/wasm/mdy-native-af.mjs` ([Makefile:847](../Makefile#L847)) is the wasm
+`build/wasm/mdy-native-af.mjs` ([Makefile:850](../Makefile#L850)) is the wasm
 module built against the same shim, and `make check-alloc-wasm`
-([Makefile:874](../Makefile#L874)) sweeps it. Two things it needed that the
+([Makefile:895](../Makefile#L895)) sweeps it. Two things it needed that the
 native sweep did not:
 
 - **Arming from outside.** emscripten's `getenv` reads its own `ENV` object and
@@ -1572,7 +1599,10 @@ cores there are:
 All four corpora are clean, `fixture-pkg` (2,125) included — which had never
 been swept before and is the only one with an import graph.
 `make check-alloc ALLOC_SITE=<dir>` picks one; `make check-alloc-all`
-([Makefile:711](../Makefile#L711)) is all three at about seven minutes.
+([Makefile:732](../Makefile#L732)) is every site a native sweep can reach —
+four of them in build mode, four documents, and the dev server — at about nine
+minutes. `fixture-awkward` joined it with B47, which is also where
+`ALLOC_SITE` stopped meaning `check-alloc` alone.
 
 **And they run.** Both are in `.github/workflows/native.yml` now —
 `check-alloc-all` on the Linux matrix leg, `check-alloc-wasm` in the wasm job.
@@ -2057,8 +2087,10 @@ reach it.
   compiled against an allocator that refuses the *n*th request and only that
   one ([allocfail.c](../src/allocfail.c#L7)); a force-included header does the
   renaming, so no source file knows it exists and the real build is untouched.
-  `check-alloc` ([Makefile:681](../Makefile#L681)) sweeps *n* across a whole
-  build of `fixture` — 1,809 of them, 54 seconds — against one invariant:
+  `check-alloc` ([Makefile:702](../Makefile#L702)) sweeps *n* across a whole
+  build — `fixture` and 1,809 of them in 54 seconds when this was written;
+  `fixture-awkward` and 2,300 of them in 4 seconds now, the site having grown
+  (B47) and the sweep having gone parallel (B41) — against one invariant:
 
   > a run that exits 0 produced the **same site** as an uninterfered one; a run
   > that could not must say so and exit non-zero.
@@ -2748,7 +2780,7 @@ file at run time in a temp directory, which is the only way to test it in a
 repository that has to clone everywhere.
 
 **~~Generated tables have no guard.~~ FIXED.** `make check-generated`
-([Makefile:734](../Makefile#L734)) runs each generator and diffs its output
+([Makefile:755](../Makefile#L755)) runs each generator and diffs its output
 against the checked-in header. All four are in sync.
 
 Two of the generators had **never run as their own instructions said**. They

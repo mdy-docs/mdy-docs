@@ -684,6 +684,19 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 # work. Sweeping it the first time found three unchecked strdups in
 # render_tree_out that `fixture` cannot reach -- it has no `.md` to render --
 # and an md4c allocation failure that md4c itself drops (B47).
+#
+# ONE VARIABLE, FOUR TARGETS. build, dev and wasm all take it, because the
+# reason `fixture` was too small is a property of the SITE and not of the
+# command: whichever of the three runs, it is the documents that decide which
+# code the sweep can reach. Leaving dev and wasm behind on `fixture` is how
+# the .md path stayed unswept after check-alloc had already moved (B47).
+#
+#     build 2,300 / 4s     dev 2,402 / 4s     wasm 2,299 / 30s
+#
+# check-alloc-doc is the one that cannot follow. `mdy <file.mdy> -o` opens ONE
+# file and walks no directory, so `$.render({ path: "page.md" })` from it
+# answers "found no such document": there is no single-document shape that
+# reaches the markdown front end at all.
 ALLOC_SITE ?= fixture-awkward
 
 check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
@@ -712,12 +725,14 @@ check-alloc-doc: build/mdy$(EXE) build/mdy-af$(EXE)
 
 check-alloc-dev: build/mdy$(EXE) build/mdy-af$(EXE)
 	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
-	  --mode dev --site fixture $(if $(JOBS),--jobs $(JOBS),)
+	  --mode dev --site "$(ALLOC_SITE)" $(if $(JOBS),--jobs $(JOBS),)
 
 # Everything a native sweep can reach, which is what a pre-push or a nightly
-# wants. About eight minutes.
+# wants: four sites in build mode, four documents, and the dev server. About
+# nine minutes. fixture-awkward is FIRST because it is the fastest and the one
+# most likely to fail -- the .md front end is the newest thing under the shim.
 check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
-	@fail=0; for s in fixture ../../examples/blog ../../examples/docs-site; do \
+	@fail=0; for s in fixture-awkward fixture ../../examples/blog ../../examples/docs-site; do \
 	  node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	    --site "$$s" $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
 	done; \
@@ -880,7 +895,7 @@ $(WASM_AF_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o src/
 # because the memo and MEMFS both persist inside an instance and sharing one
 # would serve the next build the last one's renders.
 check-alloc-wasm: $(WASM_AF_OUT)
-	@node wasm/check-alloc.mjs --site "$(if $(ALLOC_WASM_SITE),$(ALLOC_WASM_SITE),fixture)"
+	@node wasm/check-alloc.mjs --site "$(if $(ALLOC_WASM_SITE),$(ALLOC_WASM_SITE),$(ALLOC_SITE))"
 
 .PHONY: wasm check-wasm check-alloc-wasm serve-wasm
 wasm: $(WASM_OUT)
