@@ -959,6 +959,49 @@ static void attr_entity_checks(void) {
     check("an unknown entity is left as it was typed",
           "{{ $.markdown('[n](http://a?&nope;b)') }}\n",
           "<p><a href=\"http://a?&#x26;nope;b\">n</a></p>");
+
+    /*
+     * normalizeUri, on a destination and nowhere else. B40.
+     *
+     * The two that decide whether this is a port of micromark's function or a
+     * guess at it: an already-encoded sequence is left alone (or `%C3%A9`
+     * becomes `%25C3%25A9`), and `XX` there is two ASCII ALPHANUMERICS rather
+     * than two hex digits, so `%zz` is passed through as well.
+     */
+    check("a non-ASCII character in an href is percent-encoded",
+          "{{ $.markdown('[u](http://a?\xc3\xa9)') }}\n",
+          "<p><a href=\"http://a?%C3%A9\">u</a></p>");
+    check("...and one already encoded is not encoded again",
+          "{{ $.markdown('[u](http://a?%C3%A9)') }}\n",
+          "<p><a href=\"http://a?%C3%A9\">u</a></p>");
+    check("a percent that begins nothing is itself encoded",
+          "{{ $.markdown('[u](http://a?a%)') }}\n",
+          "<p><a href=\"http://a?a%25\">u</a></p>");
+    check("two alphanumerics after a percent count, not two hex digits",
+          "{{ $.markdown('[u](http://a?%zz)') }}\n",
+          "<p><a href=\"http://a?%zz\">u</a></p>");
+    check("a space is encoded",
+          "{{ $.markdown('[u](<a b>)') }}\n",
+          "<p><a href=\"a%20b\">u</a></p>");
+    check("...and the brackets outside micromark's safe set",
+          "{{ $.markdown('[u](<a[b]c>)') }}\n",
+          "<p><a href=\"a%5Bb%5Dc\">u</a></p>");
+    check("an image's src is normalized the same way",
+          "{{ $.markdown('![i](/caf\xc3\xa9.png)') }}\n",
+          "<p><img src=\"/caf%C3%A9.png\" alt=\"i\"></p>");
+    /* A title is NOT a destination, and keeps its bytes — the check above with
+     * `q&amp;r` covers the entity half; this one covers the non-ASCII half. */
+    check("a title is left alone",
+          "{{ $.markdown('[t](http://a \"\xc3\xa9\")') }}\n",
+          "<p><a href=\"http://a\" title=\"\xc3\xa9\">t</a></p>");
+
+    /* An empty destination is still a destination. B42. */
+    check("an empty href is written, not dropped",
+          "{{ $.markdown('[u](<>)') }}\n",
+          "<p><a href=\"\">u</a></p>");
+    check("...and an empty src",
+          "{{ $.markdown('![i](<>)') }}\n",
+          "<p><img src=\"\" alt=\"i\"></p>");
 }
 
 

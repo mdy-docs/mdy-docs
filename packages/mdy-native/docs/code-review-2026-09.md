@@ -46,8 +46,9 @@ what those checks do not reach.
 | B26 | ~~Low~~ **fixed** | `cli.c` | The local bus marked an undeliverable message done where the remote one dead-lettered it |
 | B19 | ~~Low~~ **fixed** | `cli.c` | An unknown option became the site directory, and the error blamed the entry script |
 | B39 | ~~Low~~ **fixed** | `markdown.c` | An `<img>`'s attributes come out `src, title, alt`; node has `src, alt, title` |
-| B40 | Low | `markdown.c` | A non-ASCII character in a URL is not percent-encoded, where node encodes it |
+| B40 | ~~Low~~ **fixed** | `markdown.c` | A URL was written through unencoded: `normalizeUri` was missing, not just the non-ASCII half |
 | B41 | Low | wasm, `check-alloc` | The allocation sweep does not reach the wasm build, and covers one site by default |
+| B42 | ~~Low~~ **fixed** | `markdown.c` | An empty link destination wrote no attribute where node writes `href=""` |
 | B21 | ~~Low~~ **fixed** | engine, parser | `(int64_t)` of an infinity, before the range check — UBSan-confirmed |
 | B15 | ~~Low~~ **fixed** | `cli.c` dev server | A refused publish's response is never freed: one body per refusal, forever |
 | B16 | ~~Low~~ **fixed** | `http.c` | No socket timeouts: a broker that never answers hangs the build forever |
@@ -552,7 +553,7 @@ than the eight bytes a header needs.
 **Fixed** with B3, as one change: the index check is a `FAIL` now and leaves
 through `done:`, which gives back the depth, the `current` and the `taint` it
 had taken. Pinned in the block that already asked for an index that is not
-there ([test/engine.c:1392](../test/engine.c#L1392)) — forty times over, and
+there ([test/engine.c:1392](../test/engine.c#L1435)) — forty times over, and
 then the document that IS there still renders. On the old engine the
 thirty-third of those exhausted the cycle guard and nothing rendered again.
 
@@ -990,32 +991,91 @@ after   <img src="http://a?x" alt="i" title="cap">      node the same
 `alt` is not known until the span closes — it is the children, gathered — so
 it was set last. But `new_prop` replaces a repeated name **in place**, so
 claiming the slot between `src` and `title` on the way in and filling it on
-the way out is enough ([markdown.c:577](../src/parse/markdown.c#L577)).
+the way out is enough ([markdown.c:577](../src/parse/markdown.c#L677)).
 
 Every `<img>` with a title differed before. Three checks: with a title, without
 one, and an empty `alt` that still holds its place. `check-html`'s 642
 documents are unchanged.
 
-#### B40 — a non-ASCII character in a URL is not percent-encoded (Low)
+#### B40 — a URL is written through unencoded (Low) — FIXED
 
-The other one B23 uncovered, and the one with nothing to do with entities:
+The entry filed this as "a non-ASCII character is not percent-encoded". That
+was the symptom that showed. Held against node over 53 URL shapes, **52 of 106
+cases differed** — every one of these, in an `href` and in a `src`:
 
 ```
-$.markdown('[u](http://a?é)')
-C     href="http://a?é"
-node  href="http://a?%C3%A9"
+$.markdown('[u](http://a?é)')     before  href="http://a?é"
+                                  after   href="http://a?%C3%A9"     = node
+[u](<a b>)                        before  href="a b"
+                                  after   href="a%20b"
+[u](<a[b]c>)                      before  href="a[b]c"
+                                  after   href="a%5Bb%5Dc"
+[u](http://a?a%)                  before  href="http://a?a%"
+                                  after   href="http://a?a%25"
 ```
 
-node percent-encodes; this writes the bytes through. It shows for any
-non-ASCII in a link destination — an accented path, a CJK query, a
-`&copy;` that B23's fix now correctly resolves to `©` and then leaves
-unencoded.
+and the same for `"`, `<`, `>`, `\`, `^`, a backtick, `{`, `|`, `}`, DEL and
+every control character.
 
-Worth deciding rather than fixing on sight: the encoding node applies comes
-from `mdast-util-to-hast`'s `normalizeUri`, which encodes the bytes it cannot
-leave alone and leaves already-percent-encoded sequences untouched — so a fix
-has to be that function's rule, not "URL-encode the non-ASCII", or
-`%C3%A9` in the source becomes `%25C3%25A9`.
+**It had to be micromark's function, not an idea of one.** The fix is a port of
+`normalizeUri` from `micromark-util-sanitize-uri`
+([markdown.c:303](../src/parse/markdown.c#L303)), which is what
+`mdast-util-to-hast` runs a destination through — and only a destination. Two
+details decide whether this is that function or a guess at it:
+
+- **An already-encoded `%XX` is left alone.** Without it `%C3%A9` in the source
+  becomes `%25C3%25A9`, which is the failure the entry warned about.
+- **`XX` is two ASCII ALPHANUMERICS, not two hex digits** — micromark's own
+  test is `asciiAlphanumeric` ([markdown.c:289](../src/parse/markdown.c#L289)),
+  so `%zz` is passed through as well. That is not obviously deliberate on their
+  side. It is what the reference does, and this has to agree with the reference
+  rather than with the RFC.
+
+The safe set is micromark's `/[!#$&-;=?-Z_a-z~]/`, written out longhand
+([markdown.c:281](../src/parse/markdown.c#L281)).
+
+**One thing the port cannot copy directly.** node walks UTF-16 code units and
+has a branch for surrogates; C has UTF-8 bytes and no surrogates to find. The
+equivalence is not "encode each non-ASCII byte" — node read the file as UTF-8
+**with replacement**, so an ill-formed byte was already U+FFFD before
+`normalizeUri` saw it and comes out `%EF%BF%BD`, where encoding the byte gives
+`%80`. So this decodes and re-encodes through `mdy_utf8_decode`, whose contract
+is that same substitution. Measured: a raw `\x80` in a destination gives
+`http://a/%EF%BF%BDb` on both sides.
+
+**What is NOT normalized**, and is the reason the flag is on the call and not
+on the attribute name: a `title` keeps its bytes, the link's text keeps its
+bytes, and mdy's OWN parser (`src/parse/inline.c`) keeps them too — mdy-docs'
+`src/parse/inline.js` writes `{href: found.url}` with no normalization at all,
+so normalizing there would have *created* a difference. Checked on both
+engines: an `.mdy` link to `http://a?é` keeps the `é` on both.
+
+**Verification.** A differential over 53 URL shapes × link and image, against
+`markdownToHast` (`uridiff`): **54/106 before, 106/106 after**. Ten checks in
+`attr_entity_checks` ([test/engine.c:930](../test/engine.c#L930)), every
+expectation read off mdy-docs' own `render()`. Seven of the ten fail without
+the fix; the other three — an already-encoded sequence, `%zz`, and a title —
+pass either way **on purpose**: they are the guards against an implementation
+that encodes too much, and a fix that broke them would look like a fix.
+
+#### B42 — an empty link destination writes no attribute (Low) — FIXED
+
+Found while fixing B40, in the same function, and separate from it:
+
+```
+$.markdown('[u](<>)')     before  <p><a>u</a></p>
+                          after   <p><a href="">u</a></p>      = node
+$.markdown('![i](<>)')    before  <p><img alt="i"></p>
+                          after   <p><img src="" alt="i"></p>  = node
+```
+
+`set_attribute` returned early on an empty value, which is right for a `title`
+— neither engine writes an empty one — and wrong for a destination: `[u](<>)`
+is a link to the current document, `normalizeUri('')` is `''`, and
+mdast-util-to-hast sets it. The early return now depends on whether the
+attribute is a destination, not on its name
+([markdown.c:364](../src/parse/markdown.c#L364)). It showed for an inline
+link, an inline image and a reference definition alike.
 
 #### B41 — the allocation sweep does not reach everything it should (Low)
 
@@ -1854,7 +1914,7 @@ end of the stream, and to stop the line walk there.
   ```
 
   It walks the substrings now
-  ([markdown.c:265](../src/parse/markdown.c#L265)), resolving `MD_TEXT_ENTITY`
+  ([markdown.c:354](../src/parse/markdown.c#L354)), resolving `MD_TEXT_ENTITY`
   through the table `entity()` already uses and `MD_TEXT_NULLCHAR` to U+FFFD;
   an entity the table does not have goes through as typed, which is what
   CommonMark says about `&nope;`. `entity_utf8` and `utf8_of`

@@ -262,12 +262,112 @@ static void entity(Build *b, const char *s, size_t len) {
  * have goes through as it was typed, which is what CommonMark says about
  * `&nope;` and what `entity()` does for text.
  */
-static void set_attribute(Build *b, mdy_node *el, const char *name, const MD_ATTRIBUTE *a) {
-    if (!a || !a->text || !a->size) return;
+/* ---- link destinations ------------------------------------------------------
+ *
+ * `normalizeUri`, from micromark-util-sanitize-uri, which is what
+ * mdast-util-to-hast runs every `href` and `src` through — and only those:
+ * a `title` keeps its bytes, and so does the link's text.
+ *
+ * Two halves, and the second is the one that makes this a port of a specific
+ * function rather than "URL-encode the non-ASCII". An already-encoded `%XX`
+ * is LEFT ALONE, so `%C3%A9` in the source stays `%C3%A9` instead of becoming
+ * `%25C3%25A9`; a `%` that is not followed by two of those is itself encoded,
+ * so a bare `?a%` becomes `?a%25`. `XX` there is two ASCII ALPHANUMERICS and
+ * not two hex digits, which is micromark's own test (`asciiAlphanumeric`) and
+ * means `%zz` is passed through as well. That is not obviously deliberate on
+ * their side, but it is what the reference does, and this has to agree with
+ * the reference rather than with the RFC.
+ */
+static int uri_safe(unsigned char c) {
+    /* micromark's /[!#$&-;=?-Z_a-z~]/ — everything else ASCII is encoded. */
+    return c == '!' || c == '#' || c == '$' ||
+           (c >= '&' && c <= ';') || c == '=' ||
+           (c >= '?' && c <= 'Z') || c == '_' ||
+           (c >= 'a' && c <= 'z') || c == '~';
+}
+
+static int uri_alnum(unsigned char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+/*
+ * Writes at most 3 bytes per input byte, so `out` needs 3 * len + 1.
+ * Returns the length written.
+ *
+ * The decode-and-re-encode is not a detour: node reads the file as UTF-8 with
+ * replacement, so an ill-formed byte has already become U+FFFD by the time
+ * normalizeUri sees it and comes out `%EF%BF%BD`. Walking the bytes directly
+ * would emit `%80` for that byte instead. mdy_utf8_decode makes the same
+ * substitution, one byte at a time, which is the same answer.
+ */
+static size_t normalize_uri(const char *s, size_t len, char *out) {
+    static const char HEX[] = "0123456789ABCDEF";
+    size_t w = 0;
+    for (size_t i = 0; i < len;) {
+        unsigned char c = (unsigned char)s[i];
+
+        if (c == '%' && i + 2 < len &&
+            uri_alnum((unsigned char)s[i + 1]) && uri_alnum((unsigned char)s[i + 2])) {
+            out[w++] = s[i]; out[w++] = s[i + 1]; out[w++] = s[i + 2];
+            i += 3;
+            continue;
+        }
+
+        if (c < 0x80) {
+            if (uri_safe(c)) out[w++] = (char)c;
+            else { out[w++] = '%'; out[w++] = HEX[c >> 4]; out[w++] = HEX[c & 15]; }
+            i++;
+            continue;
+        }
+
+        uint32_t cp = 0;
+        size_t width = mdy_utf8_decode(s + i, len - i, &cp);
+        char enc[4];
+        size_t n = utf8_of(cp, enc);
+        for (size_t k = 0; k < n; k++) {
+            unsigned char b = (unsigned char)enc[k];
+            out[w++] = '%'; out[w++] = HEX[b >> 4]; out[w++] = HEX[b & 15];
+        }
+        i += width ? width : 1;
+    }
+    return w;
+}
+
+/* The finished attribute value, normalized first when it is a destination. */
+static void put_attribute(Build *b, mdy_node *el, const char *name,
+                          const char *text, size_t len, int uri) {
+    if (!uri) { mdy_set_string(b->doc, el, name, text, len); return; }
+
+    char stack[512];
+    char *buf = stack;
+    char *heap = NULL;
+    if (len * 3 + 1 > sizeof stack) {
+        heap = malloc(len * 3 + 1);
+        if (!heap) { b->failed = 1; return; }
+        buf = heap;
+    }
+    size_t n = normalize_uri(text, len, buf);
+    mdy_set_string(b->doc, el, name, buf, n);
+    free(heap);
+}
+
+static void set_attribute(Build *b, mdy_node *el, const char *name,
+                          const MD_ATTRIBUTE *a, int uri) {
+    if (!a || !a->text || !a->size) {
+        /*
+         * An empty DESTINATION is still a destination: `[t](<>)` is a link to
+         * the current document, `normalizeUri('')` is `''`, and
+         * mdast-util-to-hast sets it — so node writes `href=""` where this
+         * wrote no attribute at all. An empty TITLE is not set, on either
+         * side, which is why this depends on `uri` and not on the name. (B42.)
+         */
+        if (uri) mdy_set_string(b->doc, el, name, "", 0);
+        return;
+    }
 
     /* No substrings to speak of: the whole thing, as before. */
     if (!a->substr_offsets || !a->substr_types) {
-        mdy_set_string(b->doc, el, name, a->text, a->size);
+        put_attribute(b, el, name, a->text, a->size, uri);
         return;
     }
 
@@ -298,7 +398,7 @@ static void set_attribute(Build *b, mdy_node *el, const char *name, const MD_ATT
         else if (len + plen <= cap) { memcpy(buf + len, piece, plen); len += plen; }
     }
 
-    mdy_set_string(b->doc, el, name, buf, len);
+    put_attribute(b, el, name, buf, len, uri);
     free(heap);
 }
 
@@ -557,15 +657,15 @@ static int enter_span(MD_SPANTYPE type, void *detail, void *ud) {
         case MD_SPAN_A: {
             const MD_SPAN_A_DETAIL *d = detail;
             mdy_node *a = mdy_new_element(b->doc, "a", 1);
-            set_attribute(b, a, "href", &d->href);
-            set_attribute(b, a, "title", &d->title);
+            set_attribute(b, a, "href", &d->href, 1);
+            set_attribute(b, a, "title", &d->title, 0);
             append(b, a); push(b, a, 0);
             return 0;
         }
         case MD_SPAN_IMG: {
             const MD_SPAN_IMG_DETAIL *d = detail;
             mdy_node *img = mdy_new_element(b->doc, "img", 3);
-            set_attribute(b, img, "src", &d->src);
+            set_attribute(b, img, "src", &d->src, 1);
             /*
              * `alt` reserved HERE, between src and title, and filled on the
              * way out once the children have been gathered. mdy-docs emits
@@ -575,7 +675,7 @@ static int enter_span(MD_SPANTYPE type, void *detail, void *ud) {
              * Every <img> with a title differed before. (B39.)
              */
             mdy_set_string(b->doc, img, "alt", "", 0);
-            set_attribute(b, img, "title", &d->title);
+            set_attribute(b, img, "title", &d->title, 0);
             append(b, img);
             /* An image's children are its ALT text, which is an attribute
              * rather than content — gathered, then set on the way out. */
