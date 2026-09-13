@@ -39,6 +39,16 @@ typedef struct {
     mdy_node *node;
     int loose;
     int children;     /* how many block children have been appended */
+    /*
+     * A span opened while an <img>'s alt was being gathered. An alt is a
+     * STRING — `toString(node)` on the reference's side — so the markup inside
+     * one is text and nothing else: `![foo *bar*](/url)` is one <img> with
+     * alt="foo bar" and no <em> anywhere. Building the <em> anyway left it in
+     * the tree, and since an <img> is void the HTML parse then made it a
+     * SIBLING rather than a child. The frame is here to keep enter and leave
+     * balanced while the node is not built.
+     */
+    int inert;
 } Frame;
 
 typedef struct {
@@ -87,6 +97,15 @@ static void push(Build *b, mdy_node *n, int loose) {
     b->stack[b->depth].node = n;
     b->stack[b->depth].loose = loose;
     b->stack[b->depth].children = 0;
+    b->stack[b->depth].inert = 0;
+    b->depth++;
+}
+
+/* A span that builds nothing, so that its leave has something to pop. */
+static void push_inert(Build *b) {
+    if (b->depth >= STACK_MAX) { b->failed = 1; return; }
+    b->stack[b->depth] = b->stack[b->depth - 1];
+    b->stack[b->depth].inert = 1;
     b->depth++;
 }
 
@@ -161,8 +180,15 @@ static void before_block(Build *b) {
     f->children++;
 }
 
-/* After the last: only a loose parent gets a trailing one, and only when it
- * had something in it. */
+/*
+ * After the last: a loose parent gets one more newline, and an EMPTY loose
+ * parent gets the one its first child would have been given.
+ *
+ * `wrap(nodes, loose)` pushes the leading newline before it looks at the list
+ * at all and the trailing one only when the list had something in it — so an
+ * empty `>` is a blockquote holding `text("\n")`, not an empty one. This used
+ * to say `&& f->children > 0`, which gave it nothing.
+ */
 static void close_block(Build *b) {
     Frame *f = frame(b);
     if (f && f->loose && f->children > 0) newline(b);
@@ -376,6 +402,39 @@ static void put_attribute(Build *b, mdy_node *el, const char *name,
     free(heap);
 }
 
+/*
+ * An MD_ATTRIBUTE's text with its entities resolved, into `buf`.
+ *
+ * md4c hands an attribute over in SUBSTRINGS — a run of text, an entity,
+ * another run — and says what each is, because it does not decode entities
+ * itself. Returns the length written; `cap` is not exceeded and a piece that
+ * would not fit is dropped rather than truncated.
+ *
+ * Two callers: an element's attributes, and a fenced block's info string,
+ * which is an attribute like any other and was being copied verbatim — so
+ * ``` ``` f&ouml;&ouml; ``` ``` produced `language-f&ouml;&ouml;` where the
+ * reference has `language-föö`.
+ */
+static size_t flatten_attribute(const MD_ATTRIBUTE *a, char *buf, size_t cap) {
+    size_t len = 0;
+    for (size_t i = 0; a->substr_offsets[i] < a->size; i++) {
+        size_t from = a->substr_offsets[i];
+        size_t to = a->substr_offsets[i + 1];
+        if (to > a->size) to = a->size;
+        const char *piece = a->text + from;
+        size_t plen = to - from;
+
+        char enc[8];
+        size_t n = 0;
+        if (a->substr_types[i] == MD_TEXT_ENTITY) n = entity_utf8(piece, plen, enc);
+        else if (a->substr_types[i] == MD_TEXT_NULLCHAR) n = utf8_of(0xFFFD, enc);
+
+        if (n) { if (len + n <= cap) { memcpy(buf + len, enc, n); len += n; } }
+        else if (len + plen <= cap) { memcpy(buf + len, piece, plen); len += plen; }
+    }
+    return len;
+}
+
 static void set_attribute(Build *b, mdy_node *el, const char *name,
                           const MD_ATTRIBUTE *a, int uri) {
     if (!a || !a->text || !a->size) {
@@ -407,21 +466,7 @@ static void set_attribute(Build *b, mdy_node *el, const char *name,
         cap = (size_t)a->size + 8;
     }
 
-    for (size_t i = 0; a->substr_offsets[i] < a->size; i++) {
-        size_t from = a->substr_offsets[i];
-        size_t to = a->substr_offsets[i + 1];
-        if (to > a->size) to = a->size;
-        const char *piece = a->text + from;
-        size_t plen = to - from;
-
-        char enc[8];
-        size_t n = 0;
-        if (a->substr_types[i] == MD_TEXT_ENTITY) n = entity_utf8(piece, plen, enc);
-        else if (a->substr_types[i] == MD_TEXT_NULLCHAR) n = utf8_of(0xFFFD, enc);
-
-        if (n) { if (len + n <= cap) { memcpy(buf + len, enc, n); len += n; } }
-        else if (len + plen <= cap) { memcpy(buf + len, piece, plen); len += plen; }
-    }
+    len = flatten_attribute(a, buf, cap);
 
     put_attribute(b, el, name, buf, len, uri);
     free(heap);
@@ -699,10 +744,16 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             mdy_node *pre = mdy_new_element(b->doc, "pre", 3);
             mdy_node *code = mdy_new_element(b->doc, "code", 4);
             if (d->lang.text && d->lang.size) {
-                char cls[128];
-                size_t n = d->lang.size < sizeof cls - 10 ? d->lang.size : sizeof cls - 10;
+                /* The info string is an attribute, entities and all. */
+                char cls[512];
                 memcpy(cls, "language-", 9);
-                memcpy(cls + 9, d->lang.text, n);
+                size_t n;
+                if (d->lang.substr_offsets && d->lang.substr_types) {
+                    n = flatten_attribute(&d->lang, cls + 9, sizeof cls - 10);
+                } else {
+                    n = d->lang.size < sizeof cls - 10 ? d->lang.size : sizeof cls - 10;
+                    memcpy(cls + 9, d->lang.text, n);
+                }
                 cls[9 + n] = '\0';
                 mdy_add_class(b->doc, code, cls);
             }
@@ -845,6 +896,14 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             return 0;
 
         case MD_BLOCK_CODE:
+            /*
+             * An EMPTY code block still has a text node, empty. mdast's `code`
+             * always carries a value and mdast-util-to-hast always makes a
+             * text node of it, so ``` ``` on its own is `<pre><code>` holding
+             * `text("")` — which serialises to nothing and is a node the tree
+             * has. Flushing only when something was gathered left it out.
+             */
+            if (!b->pending_len) append(b, mdy_new_text(b->doc, "", 0));
             flush_gathered(b);
             b->gathering = 0;
             close_block(b);         /* code */
@@ -878,9 +937,24 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             close_block(b);
             return 0;
 
+        case MD_BLOCK_QUOTE:
+            /*
+             * An EMPTY blockquote still holds a newline. `wrap(nodes, loose)`
+             * pushes the leading one before it looks at the list at all, so
+             * `>` on its own is a blockquote holding `text("\n")` rather than
+             * an empty one — and close_block, which pads only a parent that
+             * had something in it, gave it nothing.
+             *
+             * Here rather than in close_block, which every block leaves
+             * through: an empty <p> and an empty <li> are not padded, and
+             * doing it for all of them cost 55 documents when it was tried.
+             */
+            if (frame(b) && frame(b)->children == 0) newline(b);
+            close_block(b);
+            return 0;
+
         case MD_BLOCK_P:
         case MD_BLOCK_H:
-        case MD_BLOCK_QUOTE:
         case MD_BLOCK_THEAD:
         case MD_BLOCK_TBODY:
         case MD_BLOCK_TR:
@@ -908,6 +982,9 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
 static int enter_span(MD_SPANTYPE type, void *detail, void *ud) {
     Build *b = ud;
     if (b->failed) return -1;
+
+    /* Inside an <img>'s alt or a code span, every span is text. See Frame. */
+    if (b->gathering) { push_inert(b); return 0; }
 
     switch (type) {
         case MD_SPAN_EM:     { mdy_node *n = mdy_new_element(b->doc, "em", 2); append(b, n); push(b, n, 0); return 0; }
@@ -992,6 +1069,8 @@ static int leave_span(MD_SPANTYPE type, void *detail, void *ud) {
     (void)detail;
     if (b->failed) return -1;
 
+    if (frame(b) && frame(b)->inert) { b->depth--; return 0; }
+
     switch (type) {
         case MD_SPAN_CODE:
             flush_gathered(b);
@@ -1029,7 +1108,13 @@ static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
             put_codepoint(b, 0xFFFD);
             return 0;
         case MD_TEXT_BR:
+            /* `<br>` AND a newline after it. mdast-util-to-hast's hardBreak
+             * returns two nodes, not one, so `foo  \nbaz` is
+             * `foo`, `<br>`, `\nbaz` — the newline belongs to the text that
+             * follows and merges with it, which is why this goes through
+             * text_out rather than appending a node of its own. */
             append(b, mdy_new_element(b->doc, "br", 2));
+            text_out(b, "\n", 1);
             return 0;
         case MD_TEXT_SOFTBR:
             /* A soft break is a newline in the text, not a node. */

@@ -7,7 +7,7 @@
 #
 # `real/` is not here: that group is whatever markdown is on the machine.
 #
-#   commonmark                 46
+#   commonmark                 6
 #   ext-admonitions            5
 #   ext-footnotes              1
 #   ext-permissive-autolinks   5
@@ -16,52 +16,12 @@
 #   ext-superscripts           1
 #   ext-tables                 2
 #   gfm                        8
-commonmark/0015.md
-commonmark/0033.md
-commonmark/0125.md
-commonmark/0129.md
-commonmark/0143.md
-commonmark/0147.md
-commonmark/0149.md
-commonmark/0150.md
-commonmark/0154.md
-commonmark/0164.md
-commonmark/0169.md
-commonmark/0171.md
 commonmark/0172.md
-commonmark/0173.md
-commonmark/0175.md
-commonmark/0176.md
-commonmark/0177.md
-commonmark/0178.md
 commonmark/0179.md
-commonmark/0181.md
-commonmark/0182.md
-commonmark/0183.md
-commonmark/0217.md
-commonmark/0225.md
-commonmark/0236.md
-commonmark/0238.md
-commonmark/0239.md
 commonmark/0299.md
-commonmark/0519.md
-commonmark/0572.md
-commonmark/0573.md
-commonmark/0574.md
-commonmark/0575.md
-commonmark/0576.md
-commonmark/0584.md
-commonmark/0588.md
 commonmark/0601.md
 commonmark/0605.md
 commonmark/0626.md
-commonmark/0632.md
-commonmark/0633.md
-commonmark/0634.md
-commonmark/0635.md
-commonmark/0636.md
-commonmark/0637.md
-commonmark/0638.md
 ext-admonitions/0000.md
 ext-admonitions/0001.md
 ext-admonitions/0002.md

@@ -51,9 +51,17 @@ already does.
 
 ## Local patches
 
-None. `grep -rn "LOCAL PATCH" source/` finds them if that changes; see
-third_party/md4c/README.md for when patching a pinned dependency is the right
-answer and when it is not.
+One. `grep -rn "LOCAL PATCH" source/` finds it; see third_party/md4c/README.md
+for when patching a pinned dependency is the right answer and when it is not.
+
+- **`in_body.c`, an empty text token (B53).** A character token with nothing
+  in it inserted no text node. lexbor is right about that for anything its own
+  tokenizer produces — reaching there with a zero length means the token held
+  only NULs — but `src/parse/raw.c` pushes tokens directly, the way
+  hast-util-raw pushes them into parse5, and parse5 inserts the node. An empty
+  ```` ``` ```` fence is `<pre><code>` holding `text("")` on that side and held
+  nothing on this one. The drop now happens only when the token was NOT empty
+  to begin with, which is the NUL case and leaves it alone.
 
 ## Warnings
 

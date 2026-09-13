@@ -100,8 +100,20 @@ lxb_html_tree_insertion_mode_in_body_text(lxb_html_tree_t *tree,
         return lxb_html_tree_process_abort(tree);
     }
 
-    /* Can be zero only if all NULL are gone */
-    if (str.length == 0) {
+    /*
+     * LOCAL PATCH (mdy-native, B53). A token that was EMPTY TO BEGIN WITH
+     * still inserts its text node.
+     *
+     * The tokenizer never produces one: reaching here with a zero length
+     * means the token held only NULs and they were dropped, which is what the
+     * comment below says and what the test still catches. src/parse/raw.c
+     * pushes tokens directly, the way hast-util-raw pushes them into parse5,
+     * and parse5 inserts an empty text node for an empty character token —
+     * so an empty ```` ``` ```` fence is `<pre><code>` holding `text("")` on
+     * that side and held nothing on this one.
+     */
+    if (str.length == 0 && token->text_start != token->text_end) {
+        /* Can be zero only if all NULL are gone */
         lexbor_str_destroy(&str, tree->document->dom_document.text, false);
 
         return true;

@@ -41,6 +41,7 @@
 
 #include "lexbor/html/html.h"
 #include "lexbor/html/tree.h"
+#include "lexbor/html/tree/insertion_mode.h"
 #include "lexbor/html/token.h"
 #include "lexbor/dom/dom.h"
 
@@ -139,8 +140,64 @@ static void push_text(Raw *r, const char *s, size_t len) {
 
 static void feed(Raw *r, const char *s, size_t len) {
     if (r->failed || len == 0) return;
-    if (lxb_html_parse_chunk_process(r->parser, (const lxb_char_t *)s, len) != LXB_STATUS_OK)
+    if (lxb_html_parse_fragment_chunk_process(r->parser, (const lxb_char_t *)s, len) != LXB_STATUS_OK)
         r->failed = 1;
+}
+
+/*
+ * A text node, ESCAPED and fed to the tokenizer rather than pushed as a
+ * token — which is the opposite of what hast-util-raw does, and for a reason
+ * that only shows up in C.
+ *
+ * The tokenizer holds character data until it sees a `<`. A token pushed
+ * straight at the tree while text is still sitting there JUMPS AHEAD of it:
+ * `<div>` then `*foo*` from a raw value, then a `\n` of our own, came out
+ * `\n\n*foo*` rather than `\n*foo*\n`. parse5 lets hast-util-raw flush its
+ * tokenizer before each push (`resetTokenizer`); lexbor has no such call, so
+ * nothing is pushed ahead of the queue and everything goes through it.
+ *
+ * `&` and `<` are the only characters that can start something, and escaping
+ * them is exactly what the HTML writer does — so the tokenizer gives back the
+ * bytes that went in. What it does NOT give back is `\r`, which HTML5
+ * normalises to `\n`: doc.c has already done that to every source this can
+ * see, so there is none to lose.
+ */
+/*
+ * Between a <table> and its first cell, where HTML5 decides whether character
+ * data belongs in the table or in front of it. See push_text: node's answer
+ * comes from the token TYPE its parser is handed, and the only way to say
+ * that here is to hand the tree a token and set the flag beside it — which
+ * means going round the tokenizer, in the one place where that is worth the
+ * ordering it costs.
+ */
+static int in_table_context(const lxb_html_tree_t *tree) {
+    return tree->mode == lxb_html_tree_insertion_mode_in_table
+        || tree->mode == lxb_html_tree_insertion_mode_in_table_text
+        || tree->mode == lxb_html_tree_insertion_mode_in_table_body
+        || tree->mode == lxb_html_tree_insertion_mode_in_row;
+}
+
+static void feed_text(Raw *r, const char *s, size_t len) {
+    if (r->failed) return;
+
+    if (in_table_context(r->tree)) { push_text(r, s, len); return; }
+
+    if (len == 0) {
+        /* Nothing to tokenize, and an empty text node is still a node — the
+         * one thing that has to be pushed. See B53 in in_body.c. */
+        push_text(r, "", 0);
+        return;
+    }
+
+    mdy_buf b = { .ok = 1, .seed = 256 };
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '&') mdy_buf_put(&b, "&amp;", 5);
+        else if (s[i] == '<') mdy_buf_put(&b, "&lt;", 4);
+        else mdy_buf_putc(&b, s[i]);
+    }
+    if (!b.ok) { r->failed = 1; free(b.s); return; }
+    feed(r, b.s, b.len);
+    free(b.s);
 }
 
 static void walk_out(Raw *r, const mdy_node *n);
@@ -156,7 +213,7 @@ static void walk_out(Raw *r, const mdy_node *n) {
             return;
 
         case MDY_TEXT:
-            push_text(r, n->text ? n->text : "", n->text ? strlen(n->text) : 0);
+            feed_text(r, n->text ? n->text : "", n->text ? strlen(n->text) : 0);
             return;
 
         case MDY_RAW:
@@ -378,16 +435,31 @@ int mdy_raw_reparse(mdy_doc *doc, mdy_node *root) {
         return -1;
     }
 
-    lxb_html_document_t *html = lxb_html_parse_chunk_begin(r.parser);
+    lxb_html_document_t *html = lxb_html_document_create();
     if (html == NULL) { lxb_html_parser_destroy(r.parser); return -1; }
+
+    /*
+     * A FRAGMENT parse, in `body` context, and not a document parse — which is
+     * what hast-util-raw does (`Parser.getFragmentParser()`) and is not a
+     * detail. A document parse starts before `<html>`, and the modes before
+     * `<body>` opens DROP a whitespace-only character token: a document whose
+     * first block is `</div>` followed by a blank line lost that newline,
+     * because the stray end tag opened nothing and the newline arrived while
+     * the parser was still deciding where it was. In `body` context the first
+     * token is already in the body.
+     */
+    if (lxb_html_parse_fragment_chunk_begin(r.parser, html,
+                                            LXB_TAG_BODY, LXB_NS_HTML) != LXB_STATUS_OK) {
+        lxb_html_document_destroy(html);
+        lxb_html_parser_destroy(r.parser);
+        return -1;
+    }
     r.tree = r.parser->tree;
 
     walk_out(&r, root);
 
-    if (lxb_html_parse_chunk_end(r.parser) != LXB_STATUS_OK) r.failed = 1;
-
-    lxb_html_body_element_t *body = r.failed ? NULL : lxb_html_document_body_element(html);
-    if (body == NULL) r.failed = 1;
+    lxb_dom_node_t *fragment = lxb_html_parse_fragment_chunk_end(r.parser);
+    if (fragment == NULL) r.failed = 1;
 
     if (!r.failed) {
         /* Into the root that was handed in, emptied: the document's own root
@@ -395,7 +467,7 @@ int mdy_raw_reparse(mdy_doc *doc, mdy_node *root) {
          * leave them pointing at the tree this replaced. */
         root->first = NULL;
         root->last = NULL;
-        walk_in(doc, root, lxb_dom_interface_node(body)->first_child);
+        walk_in(doc, root, fragment->first_child);
     }
 
     lxb_html_document_destroy(html);
