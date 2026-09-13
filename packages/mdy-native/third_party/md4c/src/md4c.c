@@ -6216,6 +6216,40 @@ md_is_setext_underline(MD_CTX* ctx, OFF beg, OFF* p_end, unsigned* p_level)
     return true;
 }
 
+/* How many cells a table row has, GFM-style: split on '|', with a leading and
+ * a trailing one optional and not separators, and a backslash escaping the
+ * next character. Used to check the delimiter row against the header, which
+ * the spec requires: "The delimiter row must match the header row in the
+ * number of cells. If not, a table will not be recognized." */
+static unsigned
+md_count_table_row_cells(MD_CTX* ctx, OFF beg, OFF end)
+{
+    unsigned n_cells = 1;
+    OFF off = beg;
+
+    while(off < end  &&  ISWHITESPACE(off))
+        off++;
+    while(end > off  &&  ISWHITESPACE(end-1))
+        end--;
+
+    if(off < end  &&  CH(off) == _T('|'))
+        off++;
+    if(end > off  &&  CH(end-1) == _T('|')  &&  (end-1 == off  ||  CH(end-2) != _T('\\')))
+        end--;
+
+    while(off < end) {
+        if(CH(off) == _T('\\')) {
+            off += 2;
+            continue;
+        }
+        if(CH(off) == _T('|'))
+            n_cells++;
+        off++;
+    }
+
+    return n_cells;
+}
+
 static int
 md_is_table_underline(MD_CTX* ctx, OFF beg, OFF* p_end, unsigned* p_col_count)
 {
@@ -7083,9 +7117,15 @@ md_analyze_line(MD_CTX* ctx, OFF beg, OFF* p_end,
             if(ctx->current_block != NULL  &&  ctx->current_block->n_lines == 1  &&
                 md_is_table_underline(ctx, off, &off, &col_count))
             {
-                line->data = col_count;
-                line->type = MD_LINE_TABLEUNDERLINE;
-                break;
+                const MD_LINE* header = (const MD_LINE*)(ctx->current_block + 1);
+
+                /* "The delimiter row must match the header row in the number
+                 * of cells. If not, a table will not be recognized." */
+                if(md_count_table_row_cells(ctx, header->beg, header->end) == col_count) {
+                    line->data = col_count;
+                    line->type = MD_LINE_TABLEUNDERLINE;
+                    break;
+                }
             }
         }
 
