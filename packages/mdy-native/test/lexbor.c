@@ -7,9 +7,8 @@
  * getting that set wrong gives a library that links and then quietly declines
  * to repair anything.
  *
- * The three shapes are the ones B49 measured by hand against node, which is
- * why they are these three: each is a different rule, and a tag matcher
- * passes none of them.
+ * Three shapes, because each is a different rule and a tag matcher passes
+ * none of them.
  */
 #include <stdio.h>
 #include <string.h>

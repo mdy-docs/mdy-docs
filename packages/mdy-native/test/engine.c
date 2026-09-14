@@ -573,8 +573,9 @@ static void markdown_render_checks(void) {
  *
  * md4c reported footnotes all along — MD_FLAG_FOOTNOTES is part of
  * MD_DIALECT_GITHUB — and markdown.c handled none of the three callbacks, so
- * every reference was dropped and every definition leaked out of the end of
- * the document as a paragraph of its own. (B45.)
+ * all three callbacks have to be handled: without them every reference is
+ * dropped and every definition leaks out of the end of the document as a
+ * paragraph of its own.
  *
  * Five shapes, each pinning a rule that is separately wrong if it is wrong:
  * the markup itself; the `-2` on a second reference and the <sup> that goes
@@ -729,8 +730,8 @@ static void footnote_checks(void) {
  * md4c expanded the opener to eat the `^` BEFORE checking that the label has
  * a definition. Both checks after it return false, the bracket pair then goes
  * on to be resolved as an ordinary link, and an opener already moved past the
- * `^` takes it out of that link's text. (B48, and the one local patch in
- * third_party/md4c — see its README.)
+ * `^` takes it out of that link's text. The one local patch in
+ * third_party/md4c — see its README.
  *
  * `[^a b]` is not a footnote to either engine: a label with a space in it is
  * not a footnote label, so both read the pair as a link reference and its
@@ -740,8 +741,8 @@ static void footnote_checks(void) {
  * with a space, and an empty one. So is a real footnote, which takes the
  * SUCCEEDING path and must still eat its `^`.
  *
- * And the neighbouring one, B50: a label ending in whitespace found no
- * definition at all, because md4c's label HASH did not strip a trailing
+ * And the neighbouring case: a label ending in whitespace finds no
+ * definition at all unless md4c's label HASH strips a trailing
  * whitespace run where its label COMPARISON does — the hash is consulted
  * first, so the entry was never reached. Both patches are in
  * third_party/md4c; see its README.
@@ -810,8 +811,8 @@ static void caret_bracket_checks(void) {
             strstr(emitted("note.html"), "^") == NULL,
         emitted("note.html"));
 
-    /* B50: the label's TRAILING whitespace. Three shapes, because the hash
-     * and the comparison have to agree about all of them — and the third
+    /* The label's TRAILING whitespace. Three shapes, because the hash and
+     * the comparison have to agree about all of them — and the third
      * would fail a fix that stripped whitespace everywhere rather than at
      * the end, since an inner run collapses to one space and stays. */
     ok_("a label ending in whitespace finds its definition",
@@ -912,7 +913,6 @@ static void alert_checks(void) {
  * handed out, and `.md` headings were not: three headings called "foo" were
  * all `id="foo"` where mdy-docs gives foo, foo-1, foo-2. Duplicate ids are
  * invalid HTML and every `#anchor` past the first points at the wrong one.
- * (B52.)
  *
  * One function does it for both front ends now, so the two cases here are the
  * same assertion twice — which is the point: they were different code, and
@@ -982,8 +982,8 @@ static void heading_id_checks(void) {
  * `MD_TEXT_HTML` had no case in the text callback and fell through to
  * `default:`, so an inline tag became ordinary text and the writer escaped it.
  * The BLOCK kind was right all along, which is what made it look like a
- * policy: it is one `.md` pipeline with rehype-raw at the end of it, and only
- * one of the two kinds was being handed anything to re-parse. (B46.)
+ * policy. It is one `.md` pipeline with rehype-raw at the end of it, and
+ * both kinds have to be handed something to re-parse.
  *
  * The last two are the ones that would go wrong in the other direction. A tag
  * inside a code span, and a tag inside an image's alt, are STRINGS rather
@@ -1081,8 +1081,8 @@ static void raw_html_checks(void) {
 
     /*
      * And what the HTML5 parse REPAIRS, which is the other half of the same
-     * stage and was missing entirely until raw.c. (B49.) Four rules, each a
-     * different part of tree construction and none of them a tag matcher's:
+     * stage. Four rules, each a different part of tree construction and none
+     * of them a tag matcher's:
      */
     ok_("an unclosed tag is closed at the end of its document",
         emitted("unclosed.html") &&
@@ -1319,8 +1319,8 @@ static void session_checks(void) {
     ok_("...and NULL has none", mdy_engine_session(NULL) == NULL, NULL);
     mdy_engine_free(e);
 
-    /* The B6 property, stated as a lifetime: the engine is gone and the
-     * session is not, so the next engine in it renders against what the last
+    /* The property a session exists for, stated as a lifetime: the engine is
+     * gone and the session is not, so the next engine in it renders against what the last
      * one left. That is what makes a rebuild cheaper than a build. */
     char *first = composed_text_in(a, 0);
     char *second = composed_text_in(a, 0);
@@ -1376,18 +1376,18 @@ static void memo_key_checks(void) {
 
 /* ---- $.count ----------------------------------------------------------------
  *
- * mdy-docs writes `$.count` into every document's program as a literal, beside
- * `$.data` and the rest. This engine never set it, so `{{ $.count }}` was
- * `undefined` where node said `2` — a missing property, which reports nothing
- * and renders the word into the page. That was B29.
+ * mdy-docs writes `$.count` into every document's program as a literal,
+ * beside `$.data` and the rest. Not setting it makes `{{ $.count }}`
+ * `undefined` where node says `2` — a missing property, which reports nothing
+ * and renders the word into the page.
  *
  * The second half is the memo, and it is why this is not a one-line fix. The
  * size of the set is not part of any document's text or record, so adding a
  * file leaves every other document's fingerprint alone; a second build in the
  * same process would then serve each of them the render made when the set was
- * smaller, with `$.count` frozen at the old number. mdy-docs did exactly that
- * until B33 was fixed there too; both fingerprints carry the size now, and the
- * two builds below disagree on purpose. test/mdy.test.js has this test's twin.
+ * smaller, with `$.count` frozen at the old number. Both fingerprints carry
+ * the size, and the two builds below disagree on purpose. test/mdy.test.js
+ * has this test's twin.
  */
 static char *count_of(const char *source, int *docs) {
     mdy_engine *e = mdy_engine_new(S);
@@ -1436,9 +1436,8 @@ static void count_checks(void) {
     /*
      * And the bug itself. Document 0 is byte-identical in both sets and sits
      * at the same index; only the SET is bigger. Without the size in the
-     * fingerprint the second build hits the first build's entry and answers 2
-     * — which is what mdy-docs did until B33 was fixed there, measured on both
-     * sides rather than inferred.
+     * fingerprint the second build hits the first build's entry and answers
+     * 2. Measured on both sides rather than inferred.
      */
     char *html_small = NULL, *html_big = NULL;
     const char *set2 = "= {{ $.count }}\n---\n= b\n";
@@ -1473,7 +1472,6 @@ static void count_checks(void) {
  * to be four rand() calls seeded with `time(NULL) ^ &argc`: thirty-two hex
  * characters standing for at most the ~31 bits of an LCG's state, off a seed
  * that is not a secret. Anyone who could reach the port could work it out.
- * That was half of B17.
  *
  * There is no way to test that bytes are random. What can be tested is what
  * the failure looked like: a fixed length of hex, and DIFFERENT every time,
@@ -1530,8 +1528,8 @@ static void token_checks(void) {
  * `data-x="inf"` where node omits the attribute. Three crossings, one rule:
  * the STORE keeps the infinity, because node's does, and null is what crosses.
  *
- * And `(int64_t)` of either is undefined behaviour, which is B21 — UBSan on
- * the first document below said so in as many words:
+ * And `(int64_t)` of either is undefined behaviour — UBSan on the first
+ * document below says so in as many words:
  *     ingest.c:22:30: inf is outside the range of representable values
  */
 static void nonfinite_checks(void) {
@@ -1585,8 +1583,8 @@ static void nonfinite_checks(void) {
  * md4c hands an attribute as a run of SUBSTRINGS so entities can be resolved
  * in it, and set_attribute took `a->text` whole. So `&amp;` stayed literal and
  * the HTML writer escaped it a second time: `href="http://a?b=1&#x26;amp;c=2"`
- * where node has `&#x26;`. The comment said "for the common case there is
- * exactly one"; a query string is the common case where there is not. B23.
+ * where node has `&#x26;`. A query string is the common case with more than
+ * one substring in it.
  *
  * Every expectation was read off `node bin/mdy.js` on the same input.
  */
@@ -1608,7 +1606,7 @@ static void attr_entity_checks(void) {
     /* An entity the table does not have goes through as it was typed, which is
      * what CommonMark says about `&nope;` and what text does. */
     /* An <img>'s attributes in mdy-docs' order: src, alt, title. `alt` is not
-     * known until the span closes, so its slot is claimed on the way in. B39. */
+     * known until the span closes, so its slot is claimed on the way in. */
     check("an image's attributes are src, alt, title",
           "{{ $.markdown('![i](http://a?x \"cap\")') }}\n",
           "<p><img src=\"http://a?x\" alt=\"i\" title=\"cap\"></p>");
@@ -1624,7 +1622,7 @@ static void attr_entity_checks(void) {
           "<p><a href=\"http://a?&#x26;nope;b\">n</a></p>");
 
     /*
-     * normalizeUri, on a destination and nowhere else. B40.
+     * normalizeUri, on a destination and nowhere else.
      *
      * The two that decide whether this is a port of micromark's function or a
      * guess at it: an already-encoded sequence is left alone (or `%C3%A9`
@@ -1658,7 +1656,7 @@ static void attr_entity_checks(void) {
           "{{ $.markdown('[t](http://a \"\xc3\xa9\")') }}\n",
           "<p><a href=\"http://a\" title=\"\xc3\xa9\">t</a></p>");
 
-    /* An empty destination is still a destination. B42. */
+    /* An empty destination is still a destination. */
     check("an empty href is written, not dropped",
           "{{ $.markdown('[u](<>)') }}\n",
           "<p><a href=\"\">u</a></p>");
@@ -1672,7 +1670,7 @@ static void attr_entity_checks(void) {
  *
  * A document sees its own record as an object, and the order its keys come
  * back in is part of what it sees: one that serialises its record, or walks
- * `Object.keys`, produced different bytes on the two engines. B31.
+ * `Object.keys`, sees different bytes if the two engines disagree.
  *
  *   $.find({})[0]   before  ["_id","name","ext","size","mtime","path"]
  *                   after   ["path","name","ext","size","mtime","_id"]   = node
@@ -1748,11 +1746,11 @@ static void record_key_checks(void) {
 }
 
 
-/* ---- buffers that used to stop ---------------------------------------------
+/* ---- inputs that outgrow a fixed buffer ------------------------------------
  *
- * Fixed-size buffers that truncated silently, each a parity divergence nobody
- * was told about. B20. Measured against `node bin/mdy.js`, which has no such
- * limits, so the shape of every check is "as much as node kept".
+ * A buffer that truncates silently is a parity divergence nobody is told
+ * about. Measured against `node bin/mdy.js`, which has no such limits, so the
+ * shape of every check is "as much as node kept".
  *
  *   heading id        char unique[256]  — cut at 255 bytes
  *   the slug's source char rendered[1024] — the id came from the first KB
@@ -1867,9 +1865,9 @@ static void wide_buffer_checks(void) {
  * pair. Nothing in mdy.js mentions `\r`; it is a property of the language the
  * generated program is written in.
  *
- * This engine dropped the `\r` and got one line, which read better and was not
- * what node did. B30 is the decision to match node, and these are the two
- * observables it was measured on — the rendered HTML and the text a render
+ * Dropping the `\r` gives one line, which reads better and is not what node
+ * does. Matching node is the decision, and these are the two observables it
+ * rests on — the rendered HTML and the text a render
  * wrote, both byte-compared against `node bin/mdy.js` on the same input.
  */
 static void crlf_checks(void) {
@@ -1883,8 +1881,8 @@ static void crlf_checks(void) {
           "<p>crlf line second</p>");
 
     /*
-     * $.text is the other half, and the one B30 was filed on. Emitted to a
-     * file the bytes are "crlf line\n\nsecond\n\n" on both sides now, where
+     * $.text is the other half. Emitted to a file the bytes are
+     * "crlf line\n\nsecond\n\n" on both sides, where
      * this engine used to write "crlf line\nsecond\n"; through markdown the
      * backslashes of JSON.stringify are eaten identically by both, which is
      * what this pins.
@@ -1928,8 +1926,8 @@ static void crlf_checks(void) {
  *
  * `big: 9007199254740992` in front matter made the document it was in
  * DISAPPEAR — not the field, the whole document, with `$.find({})` answering 0
- * and `title` going with it. The insert returned success and nothing was
- * reported. That was B37.
+ * and `title` going with it, while the insert returns success and reports
+ * nothing.
  *
  * The cause was two levels down, in binjson, and it was an encoder and a
  * decoder disagreeing: `bj_put_int` wrote an INT at any magnitude, while both
@@ -1988,8 +1986,8 @@ static void big_integer_checks(void) {
 /* ---- the URL a broker is named by ---------------------------------------------
  *
  * `parse_url` split host from port on the first colon, so an IPv6 literal —
- * `http://[::1]:8080`, which is the only way to write one in a URL — asked
- * the resolver for a host called "[". Half of B16.
+ * `http://[::1]:8080`, which is the only way to write one in a URL — asks
+ * the resolver for a host called "[".
  *
  * The parser is static, so this goes through http_request, which is the way a
  * caller meets it anyway. Port 1 is nothing's port: every case here ends in a
@@ -2039,7 +2037,7 @@ static void url_checks(void) {
  * `walk` answered `errno == ENOENT ? 0 : 0` — every opendir failure was an
  * empty directory. A subtree whose permissions kept us out simply left the
  * site: no warning, a page built, exit 0. node reports
- * `EACCES: permission denied, scandir …` and exits 1. That was B25.
+ * `EACCES: permission denied, scandir …` and exits 1.
  *
  * POSIX only (chmod), and skipped when running as root, where 000 keeps
  * nobody out.
@@ -2098,10 +2096,9 @@ static void unreadable_dir_checks(void) {
 /* ---- a package, imported ----------------------------------------------------
  *
  * `% import style from "../pkg"` opens a SECOND set beside this one and
- * `style.render(...)` renders into it. The engine test had no coverage of this
- * at all, which is how one of B13's four unrooted reads — lookup_import's,
- * which asks the CURRENT document's record for its `path` to know who declared
- * the import — could be reverted without a single test noticing.
+ * `style.render(...)` renders into it. Without cover here, lookup_import's
+ * read — it asks the CURRENT document's record for its `path`, to know who
+ * declared the import — can be broken without a single test noticing.
  *
  * The site and the package are siblings under one temp root, which is how
  * fixture-pkg is laid out and the case a relative specifier has to get right.
@@ -2413,9 +2410,9 @@ static void bad_image_checks(void) {
  * is that the engine WRITES them back out as YAML and reads them in again.
  * They were pasted in with `%s`, so one tag with a quote in it made the whole
  * generated block unparseable — and the failure was silent: the document's
- * tags fell back to whatever its front matter said, never lowercased and never
- * deduplicated, which is a quieter wrong answer than the truncation the same
- * bug caused for file names (B8).
+ * tags fall back to whatever the front matter said, never lowercased and
+ * never deduplicated — a quieter wrong answer than the truncation the same
+ * mistake causes for file names.
  *
  * Every expected value is what `node bin/mdy.js` writes for this directory.
  */
@@ -2661,9 +2658,8 @@ static void natives_checks(void) {
      * Both halves of the ambiguity message, and the second half is the point:
      * naming the documents means READING each one's `path` back out of its
      * record, and a record is built fresh per call and reachable only from the
-     * C stack. Asserting only "is ambiguous" left that read unchecked, which
-     * is how one of B13's four sites sat in a covered function and still went
-     * unmeasured — reverting it broke no test.
+     * C stack. Asserting only "is ambiguous" leaves that read unchecked: the
+     * function is covered and the read inside it is not.
      */
     refuses("...or to one that several share",
             "% $.publish('x', {})\n"

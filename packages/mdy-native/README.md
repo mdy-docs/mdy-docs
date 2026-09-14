@@ -421,7 +421,7 @@ left behind.
 
 | | what it does | licence |
 | --- | --- | --- |
-| **md4c** | CommonMark and GFM, the `.md` front end. `MD_DIALECT_GITHUB`: tables, task lists, strikethrough, autolinks, admonitions, footnotes. One local patch (B48), listed in its README. | MIT |
+| **md4c** | CommonMark and GFM, the `.md` front end. `MD_DIALECT_GITHUB`: tables, task lists, strikethrough, autolinks, admonitions, footnotes. One local patch, listed in its README. | MIT |
 | **lexbor** | HTML5 tokenizer and tree construction, five of its modules. The `rehype-raw` stage of the `.md` pipeline: raw HTML into real elements, and repairing what a document got wrong. | Apache-2.0 |
 | **stb** | `stb_image`, `stb_image_write`, `stb_image_resize2` — three headers. Image dimensions for a document's records, and the resizing `$.image` does. | MIT / public domain |
 | **highlight.js** | A fork of highlight.js 11.11.2 and lowlight 3.3.0's emitter, rewritten into lamassu's subset of JavaScript so fenced code is coloured by the real grammars inside the engine this binary already embeds, not by a second implementation of 37 languages in C. | BSD-3-Clause (highlight.js) and MIT (lowlight), both in its `LICENSE` |

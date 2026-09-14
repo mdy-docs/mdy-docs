@@ -42,10 +42,10 @@ const CASES = [
   'http://x.com/p#frag', 'http://x.com/p?a=1&b=2', 'text http://x.com more text',
   'http://xn--80ak6aa92e.com/p', 'http://x.com/%20a', 'http://x.com/a_b~c*d',
   '(see http://x.com/p)', 'http://x.com/a.b.c', 'http://.com', 'http://x./p',
-  /* Ports at the five-digit boundary, where match_port used to run strtoul off
-   * the end of the span: the value came from whatever followed in the buffer,
-   * not from the five digits the grammar had counted. B22. The pairs with text
-   * straight after the port are the shape that went wrong. */
+  /* Ports at the five-digit boundary, where reading past the span would take
+   * the value from whatever follows in the buffer rather than from the digits
+   * the grammar counted. The pairs with text straight after the port are the
+   * shape that catches it. */
   'http://x.com:1/p', 'http://x.com:80/p', 'http://x.com:65535/p',
   'http://x.com:65536/p', 'http://x.com:12345/p', 'http://x.com:123456/p',
   'http://x.com:99999', 'http://x.com:65535', 'http://x.com:12345',

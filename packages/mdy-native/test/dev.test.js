@@ -1,7 +1,6 @@
 /*
  * The dev server.
  *
- * It had no test of any kind, which is the whole reason B10 sat unnoticed:
  * `mdy dev` goes on serving when the FIRST build fails — there is nothing to
  * fall back to, and a broken save should not take the server down — so the
  * engine is absent, and the first message delivered read documents off it and
@@ -107,8 +106,8 @@ test('a delivery arriving before the first good build is held, not fatal', async
      * The timestamp on every one of those lines — the one thing in this binary
      * that used to be formatted two ways. `report()` asked for %l, a GNU
      * extension emscripten's strftime does not have: given "%l:%M:%S %p" it
-     * returns 0 and writes NOTHING, so the stamp vanished rather than losing a
-     * space (B14). Both callers go through stamp_now now.
+     * returns 0 and writes NOTHING, so the stamp vanishes entirely rather
+     * than losing a space. Both callers go through stamp_now.
      *
      * The two assertions are a pair and neither is redundant. The first
      * catches an EMPTY stamp and a space-padded one; it tolerates an ANSI
@@ -131,9 +130,9 @@ test('a delivery arriving before the first good build is held, not fatal', async
 });
 
 /*
- * B17's other half: the request buffer had no cap. `recv` appended and the
- * buffer doubled, so a peer that kept writing made the server allocate until
- * it died — and with the old 0.0.0.0 bind, that peer was anyone on the
+ * The request buffer's cap. Without one, `recv` appends and the buffer
+ * doubles, so a peer that keeps writing makes the server allocate until it
+ * dies — and on a 0.0.0.0 bind that peer is anyone on the
  * network. The cap is 16 MiB; this writes past it and expects the connection
  * to be refused and, the part that matters, the SERVER to still be there.
  */
@@ -202,8 +201,8 @@ test('a request bigger than the cap is refused, and the server survives', async 
 });
 
 /*
- * The last of B17: one thread serves everything, and responses went out with
- * a blocking send. A client that asks for a page and then stops reading fills
+ * One thread serves everything, so a response must not go out with a blocking
+ * send. A client that asks for a page and then stops reading fills
  * the socket buffer, `send` blocks, and the watcher, the rebuilds and every
  * other client stop with it — for as long as that client cares to hold on.
  *
@@ -253,9 +252,10 @@ test('a client that stops reading does not stall the server', async () => {
 });
 
 /*
- * B16: nothing in http.c had a timeout. A broker that accepts the connection
- * and then says nothing held `mdy build --publish`, `mdy dead` and the dev
- * server's registration for as long as it cared to — measured at "still
+ * Every wait in http.c is bounded. Without that a broker that accepts the
+ * connection and then says nothing holds `mdy build --publish`, `mdy dead`
+ * and the dev server's registration for as long as it cares to — measured at
+ * "still
  * running after 25 seconds", and it would have been forever, because the recv
  * loop's only exit was the peer closing.
  *
@@ -297,12 +297,12 @@ test('a broker that accepts and never answers does not hang the command', async 
 });
 
 /*
- * A broker that refuses. Every test above uses the in-process broker, so the
- * --broker path — registration, publish, refusal — had no coverage at all,
- * which is where B15 lived: the refusal branch never freed the response, so a
- * dev server kept every refused body for the life of the process. Measured at
- * 47,360 bytes after ten rebuilds; 1,280 after, and what is left is the
- * dedupe list, which is retained on purpose (B35).
+ * A broker that refuses. Every test above uses the in-process broker, so this
+ * is the only cover the --broker path gets — registration, publish, refusal.
+ * A refusal branch that does not free the response is a dev server keeping
+ * every refused body for the life of the process: 47,360 bytes after ten
+ * rebuilds, against 1,280 when it frees, and that remainder is the dedupe
+ * list, which is retained on purpose.
  *
  * A leak is not something node can assert, so what this pins is the path: the
  * refusal is reported, and the server goes on serving. Without the path being
@@ -362,9 +362,9 @@ test('a broker that refuses a publish is reported, and the server goes on', asyn
 });
 
 /*
- * B26: the local bus and the remote one disagreed about a subject with no
- * page. deliver_batch already took `is_dead` and its `target < 0` branch
- * ignored it — dev_deliver guards before it calls, dev_drain does not — so
+ * The local bus and the remote one must agree about a subject with no page.
+ * deliver_batch takes `is_dead` and its `target < 0` branch has to honour it
+ * — dev_deliver guards before it calls, dev_drain does not — so
  * in-process the messages were marked DONE and reported as kept, where over
  * HTTP dev_deliver returns 500 and the broker's retry and dead-letter policy
  * has them.
@@ -379,7 +379,7 @@ test('a broker that refuses a publish is reported, and the server goes on', asyn
  *   [dead] handlers.a #1 no handlers.a page — kept, see `mdy dead handlers.a`
  */
 /*
- * What a rebuild re-publishes, and what it does not. (B35.)
+ * What a rebuild re-publishes, and what it does not.
  *
  * `mdy dev` rebuilds the whole site on every save and every `$.publish` fires
  * again, so something has to decide what reaches the broker. mdy-docs answers
@@ -519,12 +519,12 @@ test('the dead-letter channel with no page is still kept, not returned', async (
 });
 
 /*
- * B19: `build`, `dev` and `dead` ended their option loop with `else root = a`,
- * so an unknown flag or one whose value was missing became the site
- * directory. `mdy build --draft` then looked for a site called `--draft` and
- * blamed the ENTRY SCRIPT for not being in it — a failure, but about the
- * wrong thing. Document mode in this same binary had rejected unknown options
- * properly all along; these are its words, so the four commands answer alike.
+ * An option loop ending in `else root = a` turns an unknown flag, or one
+ * whose value is missing, into the site directory: `mdy build --draft` looks
+ * for a site called `--draft` and blames the ENTRY SCRIPT for not being in it
+ * — a failure, but about the wrong thing. Document mode in this same binary
+ * rejects unknown options properly; these are its words, so the four commands
+ * answer alike.
  *
  * Native-only like the rest of this file: node's CLI takes `--draft` as the
  * directory too, so there is no shared behaviour to pin in cli.test.js.

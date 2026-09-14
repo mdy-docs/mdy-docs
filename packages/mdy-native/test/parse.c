@@ -904,8 +904,8 @@ int main(void) {
      * match_port bounded the value with `strtoul(t->s + i + 1, …)`, which
      * stops at the first non-digit — and a Text is a view, not a copy, so
      * there need not be one inside `len`. Digits after the span were read as
-     * part of the port, made it larger than 65535, and the whole link was
-     * dropped: `links=0` for a perfectly good URL. B22.
+     * part of the port, make it larger than 65535, and the whole link is
+     * dropped: `links=0` for a perfectly good URL.
      *
      * The buffer here is deliberately not NUL-terminated and is followed by
      * digits, which is the arrangement that went wrong; `mdy_find_links` is

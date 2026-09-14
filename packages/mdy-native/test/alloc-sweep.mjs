@@ -9,18 +9,16 @@
  *   that could not must say so and exit non-zero.
  *
  * Not "it does not crash". Silently dropping a page is worse than the crash it
- * replaces, because the build reports success with files missing — which is
- * what 306 of the first sweep's 1,809 ordinals did (B24).
+ * replaces, because the build reports success with files missing.
  *
  * WHY THIS IS PARALLEL, and not a shell loop as it started: one ordinal is one
  * process with its own output directory, so the sweep is embarrassingly so.
- * Serially, `blog` took 25 minutes and `docs-site` 35, which is the whole
- * reason neither was a target and nothing re-ran them (B41). At -j12 they are
- * a few minutes, and a check somebody runs is worth more than a thorough one
- * they do not.
+ * Serially, `blog` takes 25 minutes and `docs-site` 35, which is enough to
+ * stop anyone running them. At -j12 they are a few minutes, and a check
+ * somebody runs is worth more than a thorough one they do not.
  *
  * WHAT IS SWEPT is --mode, because `build` is not the only thing this binary
- * does and for a while it was the only thing swept (B43):
+ * does:
  *
  *   build     a whole site, compared as a tree
  *   document  one file through `mdy <path> -o`, compared as a file — a
@@ -277,8 +275,8 @@ const runBuild = (n, slot) =>
 
 /* The server SAID the build failed. `mdy dev` deliberately stays up when the
  * first build fails — there is nothing to fall back to and a broken save
- * should not take the server down (B10) — so serving nothing while saying so
- * is a reported failure, not a wrong answer. Saying nothing is not. */
+ * should not take the server down — so serving nothing while saying so is a
+ * reported failure, not a wrong answer. Saying nothing is not. */
 const saidItFailed = (log) => /build failed|out of memory|cannot read/i.test(log);
 
 const runDev = async (n) => {

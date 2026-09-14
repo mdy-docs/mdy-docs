@@ -239,7 +239,7 @@ $(PARSE_LIB): $(PARSE_OBJS) $(MD4C_OBJS)
 
 # The same library with the failing allocator forced in, for build/mdy-af.
 # Without it the sweep cannot reach block.c's arena, which is where a third
-# of B24's named sites are.
+# of the parser's allocations live.
 PARSE_AF_OBJS := $(patsubst src/parse/%.c,build/parse-af/%.o,$(PARSE_SRCS))
 MD4C_AF_OBJS  := build/parse-af/md4c.o build/parse-af/md4c-entity.o
 PARSE_AF_LIB  := build/libmdyparse-af.a
@@ -264,9 +264,9 @@ STB_INC   := -Ithird_party/stb
 #
 # HTML5 tree construction, vendored at third_party/lexbor: the tokenizer and
 # the insertion modes, which is what turns a `raw` node into real elements and
-# repairs what a document got wrong. B49 is the finding and that README is the
-# argument; what matters here is that it is five of lexbor's modules and one
-# port file, not the project.
+# repairs what a document got wrong. That README is the argument for it; what
+# matters here is that it is five of lexbor's modules and one port file, not
+# the project.
 #
 # Its objects keep their source paths under build/lexbor, where every other
 # archive here flattens to a basename: lexbor has eight basenames used twice
@@ -300,9 +300,8 @@ $(LX_LIB): $(LX_OBJS)
 	@mkdir -p build
 	$(AR) rcs $@ $(LX_OBJS)
 
-# A parse of the three shapes B49 measured by hand, so that a build which
-# produces a lexbor that cannot repair an unclosed tag says so here rather
-# than in a site diff.
+# A parse of the three shapes that matter, so a build which produces a lexbor
+# that cannot repair an unclosed tag says so here rather than in a site diff.
 build/lexbor-test$(EXE): test/lexbor.c $(LX_LIB)
 	$(CC) -std=c11 -Wall -Wextra -Wshadow -O2 $(DEBUG) $(LX_INC) $< $(LX_LIB) -o $@
 
@@ -721,9 +720,9 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 #
 # Every allocation in a build, refused one at a time.
 #
-# B24 was a list of allocations whose result was used unchecked, and the
-# reason it sat unfixed is that none of those paths runs unless an allocation
-# actually fails: sixteen edits nobody could test. build/mdy-af is build/mdy
+# An allocation whose result is used unchecked is easy to fix and impossible
+# to verify by reading, because the path never runs unless an allocation
+# actually fails. build/mdy-af is build/mdy
 # with the allocator replaced by one that refuses the nth request
 # (src/allocfail.c), and this sweeps n across a whole build.
 #
@@ -740,9 +739,9 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 # SITE picks the corpus, because each larger one reached sites the one before
 # it could not -- the fixture has no hashtags, no `.yaml` data files and no
 # pictures, and the blog's sweep found eleven more because of it. The sweep
-# is parallel (B41): one ordinal is one process with its own output
-# directory, so serially-25-minutes becomes a minute, and a check somebody
-# runs is worth more than a thorough one they do not.
+# is parallel: one ordinal is one process with its own output directory, so
+# serially-25-minutes becomes a minute, and a check somebody runs is worth
+# more than a thorough one they do not.
 #
 #     fixture 1,808 / 6s      blog 14,298 / 1m      docs-site 17,747 / 5m30
 #     fixture-awkward 2,300 / 4s
@@ -752,13 +751,13 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 # FASTER, since its documents are small where the fixture's entry does real
 # work. Sweeping it the first time found three unchecked strdups in
 # render_tree_out that `fixture` cannot reach -- it has no `.md` to render --
-# and an md4c allocation failure that md4c itself drops (B47).
+# and an md4c allocation failure that md4c itself drops.
 #
 # ONE VARIABLE, FOUR TARGETS. build, dev and wasm all take it, because the
 # reason `fixture` was too small is a property of the SITE and not of the
 # command: whichever of the three runs, it is the documents that decide which
-# code the sweep can reach. Leaving dev and wasm behind on `fixture` is how
-# the .md path stayed unswept after check-alloc had already moved (B47).
+# code the sweep can reach. Leaving dev and wasm behind on `fixture` leaves
+# the .md path unswept even after check-alloc has moved on.
 #
 #     build 2,300 / 4s     dev 2,402 / 4s     wasm 2,299 / 30s
 #
@@ -772,9 +771,9 @@ check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
 	@node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	  --site "$(ALLOC_SITE)" $(if $(JOBS),--jobs $(JOBS),)
 
-# The other two commands. `build` was the only thing swept for a while, and
-# that is where fourteen unchecked allocations were still living -- four of
-# them ones B24 had named and could not reach (B43).
+# The other two commands, because sweeping only `build` leaves the paths that
+# only `document` and `dev` reach untested -- and those are where the last
+# fourteen unchecked allocations were found.
 #
 # `document` is one file through `mdy <path> -o`: one source, no directory
 # walk, no static/ copy. Its fixture has to be DETERMINISTIC, which rules out
@@ -928,7 +927,7 @@ $(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build
 
 # The same module with the failing allocator forced in, for check-alloc-wasm.
 # The parser gets its own instrumented archive for the reason the native sweep
-# needed one: block.c's arena is a third of B24's sites.
+# needed one: block.c's arena is a third of the parser's allocations.
 WASM_AF_OUT := build/wasm/mdy-native-af.mjs
 
 build/wasm/libmdyparse-af.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS) src/allocfail.h
@@ -963,13 +962,13 @@ $(WASM_AF_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o src/
 # The same sweep through the wasm engine, which is a different question and
 # not a duplicate of check-alloc.
 #
-# B24's fix ends a hopeless run with `_Exit(1)`. Under emscripten main() is
+# A run that cannot finish ends with `_Exit(1)`. Under emscripten main() is
 # reached through callMain with EXIT_RUNTIME=0, so an exit arrives at the host
 # as a thrown ExitStatus rather than a process that stopped -- and wasm/
 # index.mjs reads the files out of MEMFS AFTERWARDS and hands them back beside
-# the status. If that status were ever lost, a caller would be given a
-# half-written site with nothing saying it was half-written, which is the
-# exact failure B24 was about. This is what says it is not.
+# the status. If that status were lost, a caller would be given a half-written
+# site with nothing saying so, which is the whole failure the sweep exists to
+# rule out. This is what says the status survives.
 #
 # Serial, and about a minute for the fixture: one module instance per ordinal,
 # because the memo and MEMFS both persist inside an instance and sharing one

@@ -107,8 +107,8 @@ int main(void) {
      * An integer wide enough that the rounding shows. `v * 10 + digit` rounds
      * once per digit, and seventeen of those landed on 100000000000000016
      * where the nearest double — and node, and strtod — is
-     * 100000000000000000. B38. The long and leading-zero cases are here
-     * because the fix copies into a fixed buffer and must not regress them.
+     * 100000000000000000. The long and leading-zero cases are here because
+     * the reader copies into a fixed buffer to get there.
      */
     check("seventeen digits round where one conversion rounds",
           "a: 99999999999999999\nb: -99999999999999999",
@@ -235,11 +235,10 @@ int main(void) {
     refuses("a second document", "a: 1\n---\nb: 2",
             "line 2: more than one document in a stream is not supported");
     /*
-     * ...but a `...` that CLOSES the one document is not a second one. It was
-     * refused along with them, so `a: 1\n...\n` errored where node reads
-     * `{a: 1}` — in a data file and in `+++` front matter alike. B28. What
-     * decides is whether anything of substance follows: blanks and comments
-     * do not make a document, a mapping does.
+     * ...but a `...` that CLOSES the one document is not a second one:
+     * `a: 1\n...\n` is `{a: 1}`, in a data file and in `+++` front matter
+     * alike. What decides is whether anything of substance follows — blanks
+     * and comments do not make a document, a mapping does.
      */
     refuses("a second document after a closing marker", "a: 1\n...\nb: 2",
             "line 2: more than one document in a stream is not supported");
@@ -384,7 +383,7 @@ int main(void) {
               "{\"a\":\"first\",\"a\":\"second\"}");
     }
 
-    printf("--- what the text path could not carry (B8) ---\n");
+    printf("--- what a text round-trip could not carry ---\n");
     survives("a double quote", "say \"hi\"", "{\"v\":\"say \\\"hi\\\"\"}");
     survives("a backslash", "C:\\path\\to", "{\"v\":\"C:\\\\path\\\\to\"}");
     survives("a newline", "one\ntwo", "{\"v\":\"one\\ntwo\"}");

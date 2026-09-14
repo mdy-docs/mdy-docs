@@ -5,15 +5,15 @@
  * and asserts the run either produced the same site or said it could not.
  * This is that sweep against `build/wasm/mdy-native-af.mjs`, and it exists
  * because the native one cannot answer the question the wasm target actually
- * raises (B41):
+ * raises:
  *
- *   B24's fix ends a hopeless run with `_Exit(1)`. Under emscripten main() is
+ *   A run that cannot finish ends with `_Exit(1)`. Under emscripten main() is
  *   called through `callMain` with EXIT_RUNTIME=0, and an exit arrives at the
  *   host as a thrown ExitStatus rather than a process that stopped. The
  *   wrapper turns that back into a status — but the FILES are still read out
  *   of MEMFS afterwards and handed back beside it. If that status were ever
  *   lost, a caller would be given a half-written site with nothing to say it
- *   was half-written, which is the exact failure B24 was about.
+ *   was half-written — the whole failure this sweep exists to rule out.
  *
  * So the invariant is the native one, plus the reason it holds here:
  *
@@ -45,9 +45,9 @@ const SITES = {
     site: 'fixture-pkg',
   },
   messaging: { mounts: [join(pkg, '..', '..', 'examples', 'messaging')], site: 'messaging' },
-  // The inputs that WERE bugs, and the only site here with a `.md` in it —
-  // which is the whole markdown front end, and the three unchecked strdups in
-  // render_tree_out that `fixture` could not reach (B47).
+  // The awkward inputs, and the only site here with a `.md` in it — which is
+  // the whole markdown front end, and the parts of render_tree_out that
+  // `fixture` cannot reach.
   'fixture-awkward': { mounts: [join(pkg, 'test', 'fixture-awkward')], site: 'fixture-awkward' },
   // blog imports "../blog-style-x", so that directory is mounted beside it
   // the way check-golden.mjs mounts fixture-style beside fixture-pkg.
