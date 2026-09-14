@@ -45,7 +45,7 @@ only files here knowing what an operating system is are src/fsx.c and
 src/nis.c.
 
 Upstream's own test suite is not vendored. md4c's is, because
-`scripts-build-corpus.mjs` turns its spec files into the corpus that
+`test/build-corpus.mjs` turns its spec files into the corpus that
 `check-markdown` runs over; lexbor's would be testing lexbor, which upstream
 already does.
 

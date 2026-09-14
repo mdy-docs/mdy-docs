@@ -32,7 +32,7 @@
  *             because a dev server that neither dies nor answers is the
  *             worst of the three and the other modes have no analogue.
  *
- *   node scripts-alloc-sweep.mjs --bin build/mdy-af --ref build/mdy \
+ *   node test/alloc-sweep.mjs --bin build/mdy-af --ref build/mdy \
  *        --site test/fixture [--mode build|document|dev] [--jobs N] [--from N] [--to N]
  */
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';

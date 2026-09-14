@@ -1,7 +1,7 @@
 /*
  * Emoji: `:rocket:` and `:)`.
  *
- * The tables are generated (scripts-generate-emoji.mjs) from the same two
+ * The tables are generated (scripts/generate-emoji.mjs) from the same two
  * packages mdy-docs imports, so the two agree by construction rather than by
  * someone copying 2,235 entries carefully.
  *

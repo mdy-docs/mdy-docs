@@ -1,7 +1,7 @@
 # The GitHub Flavored Markdown spec
 
 `spec.txt`, vendored: 672 examples of what GFM is, which
-`scripts-build-corpus.mjs` turns into the `gfm` group of the corpus
+`test/build-corpus.mjs` turns into the `gfm` group of the corpus
 `make check-markdown` runs over.
 
     version 0.29, 2019-04-06
@@ -24,7 +24,7 @@ With this the spec half of the corpus is **904 documents in 23 KB**, built
 from files in this tree and byte-identical every time. `make corpus` needs a
 network only for the `real` group, which is other people's documents found on
 the machine and is not reproducible anywhere — see
-`scripts-build-corpus.mjs` for what that group is for.
+`test/build-corpus.mjs` for what that group is for.
 
 Nothing of the spec is used as expectations: the examples are INPUT, and what
 each should produce is whatever mdy-docs' JavaScript produces for it. The

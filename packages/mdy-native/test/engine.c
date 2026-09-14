@@ -789,7 +789,7 @@ static void caret_bracket_checks(void) {
  * remark-github-blockquote-alert builds around it — a <div> with two classes
  * and `dir="auto"`, and a title paragraph carrying an octicon in front of
  * what the quote said. The five icons are in alert_table.h, which
- * scripts-generate-alerts.mjs reads out of the plugin and check-generated
+ * scripts/generate-alerts.mjs reads out of the plugin and check-generated
  * holds to it.
  *
  * The assertion is the whole <div> rather than a piece of it, because every

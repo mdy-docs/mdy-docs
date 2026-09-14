@@ -8,7 +8,7 @@ reason stb is here as headers and lamassu and nisaba as source.
     src/entity.c, entity.h the HTML5 entity table, which md4c hands over
                            verbatim and src/parse/markdown.c resolves
     test/*.txt             the CommonMark spec and md4c's own extension specs,
-                           which scripts-build-corpus.mjs turns into the
+                           which test/build-corpus.mjs turns into the
                            corpus check-markdown runs over
 
 Vendored from **https://github.com/mdy-docs/md4c**, which is this project's

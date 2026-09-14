@@ -391,7 +391,7 @@ The epilogue is mdy-docs' own: a document with no transform hands back its
 LINES and the host composes them; one with a transform asks for its tree
 through `$.compose`, runs each transform over it, and hands the TREE back. The
 four names a document can use — `toText`, `slug`, `visit`, `h` — are spliced in
-as guest source, generated from mdy.js by `scripts-toolkit.mjs` rather than
+as guest source, generated from mdy.js by `scripts/toolkit.mjs` rather than
 kept as a copy that can drift.
 
 One result is worth recording because it looks like a bug and is not. An

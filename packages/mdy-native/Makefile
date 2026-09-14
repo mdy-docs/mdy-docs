@@ -406,7 +406,7 @@ check-links: build/linkify$(EXE)
 
 # The markdown front end against remark, over a borrowed corpus — the
 # CommonMark and GFM specs, md4c's extension specs, and real .md files found
-# under SITE's parent. Nothing is committed; see scripts-build-corpus.mjs.
+# under SITE's parent. Nothing is committed; see test/build-corpus.mjs.
 # CORPUS_ROOTS is where the `real` group is found — whatever markdown is on
 # this machine. Empty builds the SPEC groups alone: 904 documents in 23 KB,
 # every one of them from a file in this tree, so it is the same corpus on any
@@ -414,10 +414,10 @@ check-links: build/linkify$(EXE)
 CORPUS_ROOTS ?= $(SITE_ABS)/..
 
 corpus:
-	@node scripts-build-corpus.mjs --roots "$(CORPUS_ROOTS)"
+	@node test/build-corpus.mjs --roots "$(CORPUS_ROOTS)"
 
 corpus-specs:
-	@node scripts-build-corpus.mjs --roots ""
+	@node test/build-corpus.mjs --roots ""
 
 # The baseline is the 81 spec documents this front end still gets wrong, named
 # one per line. Rewriting it is deliberate: see test/markdown-baseline.txt.
@@ -685,7 +685,7 @@ check-engine: build/engine-test$(EXE)
 #
 #   make check-site SITE=<dir>
 check-site: build/mdy$(EXE)
-	@node scripts-compare-site.mjs "$(SITE)"
+	@node test/compare-site.mjs "$(SITE)"
 
 # THE SUITE. Every site in this repository, built both ways and diffed.
 #
@@ -768,7 +768,7 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 ALLOC_SITE ?= test/fixture-awkward
 
 check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
-	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	@node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	  --site "$(ALLOC_SITE)" $(if $(JOBS),--jobs $(JOBS),)
 
 # The other two commands. `build` was the only thing swept for a while, and
@@ -787,12 +787,12 @@ check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
 check-alloc-doc: build/mdy$(EXE) build/mdy-af$(EXE)
 	@fail=0; for s in ../../examples/elements.mdy ../../examples/hashtags.mdy \
 	                  ../../examples/invoice.mdy ../../examples/roster.mdy; do \
-	  node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	  node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	    --mode document --site "$$s" $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
 	done; exit $$fail
 
 check-alloc-dev: build/mdy$(EXE) build/mdy-af$(EXE)
-	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	@node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	  --mode dev --site "$(ALLOC_SITE)" $(if $(JOBS),--jobs $(JOBS),)
 
 # Everything a native sweep can reach, which is what a pre-push or a nightly
@@ -802,7 +802,7 @@ check-alloc-dev: build/mdy$(EXE) build/mdy-af$(EXE)
 check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
 	@fail=0; for s in test/fixture-awkward test/fixture ../../examples/blog \
 	          ../../examples/docs-site; do \
-	  node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	  node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	    --site "$$s" $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
 	done; \
 	$(MAKE) --no-print-directory check-alloc-doc || fail=1; \
@@ -825,26 +825,26 @@ check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
 # check-sites is not.
 check-generated:
 	@fail=0; tmp=$$(mktemp -d); \
-	for pair in scripts-generate-props.mjs:src/parse/props_table.h \
-	            scripts-generate-schema.mjs:src/parse/schema_table.h \
-	            scripts-generate-emoji.mjs:src/parse/emoji_table.h \
-	            scripts-generate-alerts.mjs:src/parse/alert_table.h; do \
+	for pair in scripts/generate-props.mjs:src/parse/props_table.h \
+	            scripts/generate-schema.mjs:src/parse/schema_table.h \
+	            scripts/generate-emoji.mjs:src/parse/emoji_table.h \
+	            scripts/generate-alerts.mjs:src/parse/alert_table.h; do \
 	  g=$${pair%%:*}; h=$${pair##*:}; \
 	  node $$g "$(MDY_DOCS_ABS)" > "$$tmp/out.h" || { echo "  $$g FAILED to run"; fail=1; continue; }; \
 	  if diff -q "$$h" "$$tmp/out.h" >/dev/null; then printf '  %-22s in sync\n' "$$h"; \
 	  else printf '  %-22s DIFFERS from %s\n' "$$h" "$$g"; diff "$$h" "$$tmp/out.h" | head -20; fail=1; fi; \
 	done; \
-	node scripts-toolkit.mjs > "$$tmp/toolkit.h" 2>/dev/null && \
+	node scripts/toolkit.mjs > "$$tmp/toolkit.h" 2>/dev/null && \
 	  { if diff -q src/toolkit.h "$$tmp/toolkit.h" >/dev/null; then printf '  %-22s in sync\n' src/toolkit.h; \
-	    else printf '  %-22s DIFFERS from scripts-toolkit.mjs\n' src/toolkit.h; fail=1; fi; } || \
-	  { echo "  scripts-toolkit.mjs FAILED to run"; fail=1; }; \
+	    else printf '  %-22s DIFFERS from scripts/toolkit.mjs\n' src/toolkit.h; fail=1; fi; } || \
+	  { echo "  scripts/toolkit.mjs FAILED to run"; fail=1; }; \
 	rm -rf "$$tmp"; exit $$fail
 
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \
 	  dir=$${s%:*}; want=$${s##*:}; \
 	  printf '%-34s ' "$$dir"; \
-	  node scripts-compare-site.mjs "$$dir" --expect "$$want" || fail=1; \
+	  node test/compare-site.mjs "$$dir" --expect "$$want" || fail=1; \
 	done; exit $$fail
 
 

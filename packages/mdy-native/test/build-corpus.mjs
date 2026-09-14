@@ -27,7 +27,7 @@
  * 4.0, licensed in third_party/md4c/test/LICENSE.md) and the GFM spec is
  * fetched once and cached.
  *
- *   node scripts-build-corpus.mjs [--roots <dir>[,<dir>…]] [--offline]
+ *   node test/build-corpus.mjs [--roots <dir>[,<dir>…]] [--offline]
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -36,7 +36,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = here;
+const repo = join(here, '..');
 const out = join(repo, 'build', 'corpus');
 const cache = join(repo, 'build', 'spec-cache');
 

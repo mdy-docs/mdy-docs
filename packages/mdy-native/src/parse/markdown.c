@@ -669,7 +669,7 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
              * frame and the title.
              *
              * The icons are data and come from alert_table.h, which
-             * scripts-generate-alerts.mjs reads out of the plugin itself —
+             * scripts/generate-alerts.mjs reads out of the plugin itself —
              * a redrawn octicon is then one command rather than a divergence
              * nothing reports.
              */

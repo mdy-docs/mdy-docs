@@ -1608,7 +1608,7 @@ tell. It is not a sweep fixture, and the Makefile says why.
 it was obvious: *which* allocation is the nth depends on the exact sequence,
 and a sweep's sequence — start, wait for the banner, fetch these five paths in
 this order, stop — is not one a shell reproduces by eye. `--trace`
-([scripts-alloc-sweep.mjs:60](../scripts-alloc-sweep.mjs#L60)) makes the sweep
+([test/alloc-sweep.mjs:60](../test/alloc-sweep.mjs#L60)) makes the sweep
 explain its own failures instead: the shim's backtrace is on for every run,
 kept for the ones that fail, and resolved through `atos`.
 
@@ -1920,7 +1920,7 @@ noise in both directions. It is reset explicitly
 said blog and docs-site take 25 and 35 minutes "so they are not a target and
 nothing re-runs them", and that a `check-alloc-all` nobody runs would not be
 the answer. One ordinal is one process with its own output directory, so the
-sweep is embarrassingly parallel; `scripts-alloc-sweep.mjs` runs it across the
+sweep is embarrassingly parallel; `test/alloc-sweep.mjs` runs it across the
 cores there are:
 
 | | serial | at -j12 |
@@ -3124,10 +3124,10 @@ against the checked-in header. All four are in sync.
 Two of the generators had **never run as their own instructions said**. They
 built `` `file://${base}` `` from what the usage line documents as a relative
 path, and a URL reads what follows `//` as the HOST — so
-`node scripts-generate-props.mjs ../..` answered
+`node scripts/generate-props.mjs ../..` answered
 `ERR_INVALID_FILE_URL_HOST: File URL host must be "localhost" or empty`.
 `pathToFileURL(resolve(base))` is what that wanted
-([scripts-generate-props.mjs:36](../scripts-generate-props.mjs#L36)).
+([scripts/generate-props.mjs:36](../scripts/generate-props.mjs#L36)).
 
 Not in CI, for the reason `check-sites` is not: it needs node and the
 `node_modules` mdy-docs installs.

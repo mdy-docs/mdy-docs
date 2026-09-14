@@ -13,7 +13,7 @@
  * second time — none of these fail a unit test, and every one of them changes
  * a page.
  *
- *   node scripts-compare-site.mjs <site-dir> [--entry main.mdy]
+ *   node test/compare-site.mjs <site-dir> [--entry main.mdy]
  */
 import { execFile } from 'node:child_process';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
@@ -36,7 +36,7 @@ async function walk(root, at = root, out = []) {
 
 const [, , site, ...rest] = process.argv;
 if (!site) {
-  console.error('usage: node scripts-compare-site.mjs <site-dir> [--entry main.mdy]');
+  console.error('usage: node test/compare-site.mjs <site-dir> [--entry main.mdy]');
   process.exit(2);
 }
 const entryAt = rest.indexOf('--entry');
@@ -69,10 +69,10 @@ try {
   };
 
   if (!await build('JavaScript', process.execPath,
-        [join(here, '../../bin/mdy.js'), 'build', site, '--entry', entry, '--out', jsOut])) {
+        [join(here, '../../../bin/mdy.js'), 'build', site, '--entry', entry, '--out', jsOut])) {
     process.exit();
   }
-  if (!await build('C', join(here, 'build/mdy'),
+  if (!await build('C', join(here, '..', 'build/mdy'),
         ['build', site, '--entry', entry, '--out', cOut, '--quiet'])) {
     process.exit();
   }
