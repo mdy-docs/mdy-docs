@@ -61,3 +61,24 @@ new paragraph~~.
 .
 --fstrikethrough
 ````````````````````````````````
+
+The markers follow CommonMark's left/right-flanking rules, as the delimiters
+of regular emphasis do. In particular a run INSIDE a word opens and closes: it
+is not followed by whitespace, which is all left-flanking asks of it.
+
+```````````````````````````````` example
+H~2~O
+.
+<p>H<del>2</del>O</p>
+.
+--fstrikethrough
+````````````````````````````````
+
+```````````````````````````````` example
+log~2~x
+.
+<p>log<del>2</del>x</p>
+.
+--fstrikethrough
+````````````````````````````````
+

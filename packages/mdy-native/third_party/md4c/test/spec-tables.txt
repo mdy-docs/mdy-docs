@@ -272,3 +272,47 @@ quux     | quuz
 .
 --ftables
 ````````````````````````````````
+
+The delimiter row must match the header row in the number of cells. If it does
+not, a table is not recognized at all. (This is the
+[GFM specification](https://github.github.com/gfm/#tables-extension-)'s own
+example.)
+
+```````````````````````````````` example
+| abc | def |
+| --- |
+| bar |
+.
+<p>| abc | def |
+| --- |
+| bar |</p>
+.
+--ftables
+````````````````````````````````
+
+The remainder of the rows may vary in the number of cells; only the delimiter
+row is held to the header:
+
+```````````````````````````````` example
+| abc | def |
+| --- | --- |
+| bar |
+.
+<table>
+<thead>
+<tr>
+<th>abc</th>
+<th>def</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bar</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+.
+--ftables
+````````````````````````````````
+

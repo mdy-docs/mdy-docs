@@ -29,11 +29,18 @@ Raw HTML block:
 
 ## Footnote reference inside wiki-link destination
 
+Added for [issue 348](https://github.com/mity/md4c/issues/348), where this
+fired an assert, so what it pins is that the input is handled without
+asserting. The expected HTML changed when `md_resolve_bracket_footnote()`
+stopped advancing `opener->end` before it knew the label resolved: the
+wiki-link had been reading the advanced value on a path where the footnote
+was already rejected.
+
 ```````````````````````````````` example
 [[[^|]]]
 [^|]:
 .
-<p><x-wikilink data-target="[^">]</x-wikilink>
+<p>[<x-wikilink data-target="^">^</x-wikilink>]
 [^|]:</p>
 .
 --ffootnotes --fwiki-links
@@ -1100,3 +1107,65 @@ baz
 <hr>
 <p>baz</p>
 ````````````````````````````````
+
+
+## A bracket that is not a footnote keeps its `^`
+
+`md_resolve_bracket_footnote()` expanded the opener past the `^` before three
+checks that can each fail. On any of them the pair goes on to be resolved as
+an ordinary link, whose text is taken from `opener->end`, so the `^` was lost
+from a link that is not a footnote at all.
+
+A label containing a space is not a footnote label, so this is a link
+reference and its definition, and CommonMark's link text is the label as it
+was written.
+
+```````````````````````````````` example
+a[^a b]
+
+[^a b]: /url
+.
+<p>a<a href="/url">^a b</a></p>
+.
+--ffootnotes
+````````````````````````````````
+
+The same for an empty label, which is the other failing check:
+
+```````````````````````````````` example
+a[^]
+
+[^]: /url
+.
+<p>a<a href="/url">^</a></p>
+.
+--ffootnotes
+````````````````````````````````
+
+
+## A link label matches one written with trailing whitespace
+
+CommonMark normalises a link label by stripping leading and trailing
+whitespace and collapsing what is inside, and `md_label_cmp()` implements
+that: it treats the end of a label as whitespace, so `[foo ]` and `[foo]` are
+equal to it. `md_label_hash()` did not, so the two landed in different buckets
+and the comparison that would have matched them was never reached.
+
+```````````````````````````````` example
+a[x ]
+
+[x ]: /url
+.
+<p>a<a href="/url">x </a></p>
+````````````````````````````````
+
+And against a definition written without the whitespace:
+
+```````````````````````````````` example
+a[x ]
+
+[x]: /url
+.
+<p>a<a href="/url">x </a></p>
+````````````````````````````````
+

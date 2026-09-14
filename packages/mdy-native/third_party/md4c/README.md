@@ -27,8 +27,26 @@ in `src/parse/markdown.c` rather than changed here — so what reaches the fork
 is the cases where the information is destroyed inside the parser and nothing
 outside it can see what happened.
 
-Ours so far, both of them bugs against CommonMark rather than differences of
-opinion, and both still live on `mity/md4c`'s master when they were written:
+**The standard a change has to meet.** md4c's behaviour is the default. A
+commit goes in only where md4c is clearly not compliant with a specification
+it follows — CommonMark, GFM, or md4c's own documented rules — and it comes
+with an example in `test/` that fails without it, because that is what makes
+it worth sending upstream. Where md4c has simply CHOSEN something different,
+that choice stands and the divergence is recorded in
+`packages/mdy-native/test/markdown-baseline.txt` instead.
+
+That rule cost something the first time it was applied: a set of changes
+aligning md4c's permissive autolinks with GFM's extended autolink was reverted
+(8fdafad), because md4c's permissive autolinks are its own flags with rules
+`test/spec-permissive-autolinks.txt` documents deliberately and in detail —
+"more strict rules apply", "only opening brackets `(`, `{` or `[`", "only
+`http://`, `https://` and `ftp://`" — each with an example asserting it. Four
+corpus documents went back to differing, which is the right price.
+
+`python3 scripts/run-tests.py` in the fork: **1030 passed, 0 failed**.
+
+Ours so far, each a specification md4c follows rather than a difference of
+opinion, and each with a test:
 
 - **`md_resolve_bracket_footnote`: do not eat the `^` until the label
   resolves (B48).** The opener was expanded past the `^` before three checks
@@ -42,11 +60,25 @@ opinion, and both still live on `mity/md4c`'s master when they were written:
   the comparison was never reached. A reference written `[x ]` found no
   definition at all.
 
-Each was verified inert before it was committed: every document in
-`make corpus-specs` through a tree dump with and without the change, and zero
-differences beyond the case being fixed.
+- **Strikethrough: use CommonMark's flanking rules for `~`.** md4c's own
+  documentation says a run "cannot open ... if followed with a whitespace" and
+  "cannot close ... if preceded with a whitespace", which is flanking; the code
+  additionally demanded whitespace or punctuation BEFORE an opener, so an
+  intra-word run was no delimiter at all. `H~2~O` came out literal.
 
-Both are worth sending upstream.
+- **Tables: the delimiter row must match the header's cell count.** GFM says
+  so in as many words, and gives the example; md4c recognised a table anyway.
+
+- **`<video>` out of the type 6 HTML block list.** `test/spec-addendum.txt`
+  documents it as a deliberate divergence from CommonMark. It is a divergence
+  in DEFAULT behaviour with no flag to turn it off, which is the one kind this
+  fork does not keep.
+
+The first two were also verified inert before they were committed: every
+document in `make corpus-specs` through a tree dump with and without the
+change, and zero differences beyond the case being fixed.
+
+All of them are worth sending upstream.
 
 It is the markdown front end: `.md` documents arrive as hast through it the
 way `.mdy` ones do through the parser, and `make check-markdown` measures how

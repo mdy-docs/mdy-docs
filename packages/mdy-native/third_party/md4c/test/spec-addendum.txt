@@ -22,11 +22,17 @@ the [CommonMark specification](spec.txt) in its default behavior.
 
 ## Extended HTML Blocks
 
-MD4C adds the `<video>` into the list of recognized HTML tags which can start
-the [HTML block of the type 6](https://spec.commonmark.org/0.31.2/#html-blocks).
+> [!NOTE] **Removed in this fork.** `<video>` is not in CommonMark's type 6
+> list, and cmark, cmark-gfm and remark all parse
+> `<video src="v.mp4"></video>` followed by text as a paragraph containing raw
+> HTML rather than as an HTML block. This fork exists to keep md4c's trees
+> identical to remark's, so a divergence in DEFAULT behaviour -- one with no
+> flag to turn it off -- is out, however small. The examples below are left in
+> place, with the outputs the CommonMark specification gives.
 
-In all aspects this tag behaves as any other HTML tag listed for this purpose
-in the CommonMark specification.
+MD4C upstream adds the `<video>` into the list of recognized HTML tags which
+can start the
+[HTML block of the type 6](https://spec.commonmark.org/0.31.2/#html-blocks).
 
 A single-line `<video>` tag is parsed as an HTML block:
 
@@ -35,7 +41,7 @@ A single-line `<video>` tag is parsed as an HTML block:
 
 okay.
 .
-<video src="video.mp4"></video>
+<p><video src="video.mp4"></video></p>
 <p>okay.</p>
 ````````````````````````````````
 
@@ -54,7 +60,7 @@ A `<video>` tag with attributes:
 ```````````````````````````````` example
 <video src="video.mp4" controls autoplay></video>
 .
-<video src="video.mp4" controls autoplay></video>
+<p><video src="video.mp4" controls autoplay></video></p>
 ````````````````````````````````
 
 Unlike type 7, the `<video>` tag starts the HTML block even if there's
@@ -63,7 +69,7 @@ any additional contents on the tag's line:
 ```````````````````````````````` example
 <video src="video.mp4"></video>some trailing text
 .
-<video src="video.mp4"></video>some trailing text
+<p><video src="video.mp4"></video>some trailing text</p>
 ````````````````````````````````
 
 HTML block can be nested in a blockquote:
@@ -72,7 +78,7 @@ HTML block can be nested in a blockquote:
 > <video src="video.mp4"></video>
 .
 <blockquote>
-<video src="video.mp4"></video>
+<p><video src="video.mp4"></video></p>
 </blockquote>
 ````````````````````````````````
 
@@ -83,9 +89,7 @@ And also in a list:
 - plain item
 .
 <ul>
-<li>
-<video src="video.mp4"></video>
-</li>
+<li><video src="video.mp4"></video></li>
 <li>plain item</li>
 </ul>
 ````````````````````````````````

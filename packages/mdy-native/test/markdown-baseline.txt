@@ -9,9 +9,9 @@
 #
 #   commonmark                 6
 #   ext-footnotes              1
-#   ext-permissive-autolinks   3
+#   ext-permissive-autolinks   5
 #   ext-tables                 2
-#   gfm                        4
+#   gfm                        7
 commonmark/0172.md
 commonmark/0179.md
 commonmark/0299.md
@@ -22,9 +22,14 @@ ext-footnotes/0011.md
 ext-permissive-autolinks/0002.md
 ext-permissive-autolinks/0004.md
 ext-permissive-autolinks/0007.md
+ext-permissive-autolinks/0008.md
+ext-permissive-autolinks/0012.md
 ext-tables/0006.md
 ext-tables/0011.md
 gfm/0199.md
 gfm/0609.md
+gfm/0622.md
+gfm/0624.md
 gfm/0625.md
+gfm/0626.md
 gfm/0651.md

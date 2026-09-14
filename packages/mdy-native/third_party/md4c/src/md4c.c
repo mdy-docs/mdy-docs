@@ -3510,13 +3510,10 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                     const CHAR* suffix;
                     SZ suffix_size;
                 } scheme_map[] = {
-                    /* GFM's extended autolink covers http and https, and
-                     * nothing else with a scheme; see the "Autolinks
-                     * (extension)" section of the GFM spec. `ftp` was here as
-                     * well and made MD_DIALECT_GITHUB link something GitHub
-                     * does not. */
+                    /* In the order from the most frequently used, arguably. */
                     { _T("http"), 4,    _T("//"), 2 },
-                    { _T("https"), 5,   _T("//"), 2 }
+                    { _T("https"), 5,   _T("//"), 2 },
+                    { _T("ftp"), 3,     _T("//"), 2 }
                 };
                 int scheme_index;
 
@@ -4489,6 +4486,7 @@ md_analyze_permissive_autolink_segment(MD_CTX* ctx, OFF off, OFF end, OFF* p_end
             const MD_CHAR* word_delims, MD_MARK** p_cursor)
 {
     int n_components = 0;
+    int n_open_brackets = 0;
     int seen_word_delim = true;
     int seen_component_delim = true;
     OFF component_beg = off;
@@ -4513,11 +4511,17 @@ md_analyze_permissive_autolink_segment(MD_CTX* ctx, OFF off, OFF end, OFF* p_end
             }
         }
 
-        /* An unbalanced bracket no longer ends the scan. GFM handles an
-         * autolink written inside parentheses by trimming UNMATCHED TRAILING
-         * ')' afterwards (md_autolink_trim()), which is not the same rule:
-         * breaking here cut "www.google.com/search?q=(business))+ok" at the
-         * first unmatched ')' where the spec keeps all of it. */
+        /* The autolink can be _inside_ brackets so we disallow unbalanced bracket pairs in the URL.
+         * (Note the brackets are not allowed in e-mail username, so we happily skip this in that case.) */
+        if(!scan_backwards) {
+            if(CH(off) == _T('(')) {
+                n_open_brackets++;
+            } else if(CH(off) == _T(')')) {
+                if(n_open_brackets <= 0)
+                    break;
+                n_open_brackets--;
+            }
+        }
 
         if(ISALNUM(off)  ||  ISANYOF(off, word_extra)) {
             seen_word_delim = false;
@@ -4552,67 +4556,11 @@ md_analyze_permissive_autolink_segment(MD_CTX* ctx, OFF off, OFF end, OFF* p_end
     if(off != component_beg)
         n_components++;
 
+    if(n_open_brackets != 0)
+        return -1;
+
     *p_end = off;
     return n_components;
-}
-
-/* GFM's "extended autolink path validation": what the scan above took, minus
- * what the spec says is not part of the link. Three rules, in the order the
- * spec gives them, applied until none of them fires:
- *
- *   - trailing '?', '!', '.', ',', ':', '*', '_' and '~' are not part of it;
- *   - when it ends in ')' and there are more ')' than '(' in the whole of it,
- *     the unmatched trailing ones are not part of it;
- *   - when it ends in ';' preceded by '&' and one or more alphanumerics, that
- *     looks like an entity reference and is not part of it.
- */
-static void
-md_autolink_trim(MD_CTX* ctx, OFF beg, OFF* p_end)
-{
-    OFF end = *p_end;
-    int again = true;
-
-    while(again) {
-        again = false;
-
-        while(end > beg  &&  ISANYOF_(CH(end-1), _T("?!.,:*_~"))) {
-            end--;
-            again = true;
-        }
-
-        if(end > beg  &&  CH(end-1) == _T(')')) {
-            OFF off;
-            int n_open = 0;
-            int n_close = 0;
-
-            for(off = beg; off < end; off++) {
-                if(CH(off) == _T('('))
-                    n_open++;
-                else if(CH(off) == _T(')'))
-                    n_close++;
-            }
-
-            while(n_close > n_open  &&  end > beg  &&  CH(end-1) == _T(')')) {
-                n_close--;
-                end--;
-                again = true;
-            }
-        }
-
-        if(end > beg  &&  CH(end-1) == _T(';')) {
-            OFF off = end - 1;
-
-            while(off > beg  &&  ISALNUM(off-1))
-                off--;
-
-            if(off > beg  &&  off < end-1  &&  CH(off-1) == _T('&')) {
-                end = off - 1;
-                again = true;
-            }
-        }
-    }
-
-    *p_end = end;
 }
 
 static void
@@ -4647,12 +4595,7 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
 
     /* Verify there's line boundary, whitespace, allowed punctuation or
      * resolved opener mark just before the suspected autolink. */
-    /* GFM: "All such recognized autolinks can only come at the beginning of a
-     * line, after whitespace, or any of the delimiting characters '*', '_',
-     * '~', and '('." The three it names besides '(' were missing, so
-     * "*john.doe@example.com" was no link where the spec makes one; '{' and
-     * '[' are md4c's own and stay. */
-    if(beg > line_beg  &&  !ISUNICODEWHITESPACEBEFORE(beg)  &&  !ISANYOF(beg-1, _T("({[*_~"))) {
+    if(beg > line_beg  &&  !ISUNICODEWHITESPACEBEFORE(beg)  &&  !ISANYOF(beg-1, _T("({["))) {
         MD_MARK* mark;
 
         mark = md_scan_left_for_resolved_mark(ctx, left_cursor, beg-1, &left_cursor);
@@ -4694,29 +4637,14 @@ md_analyze_permissive_autolink(MD_CTX* ctx, int mark_index)
     }
 
     /* Verify there's line boundary, whitespace, allowed punctuation or
-     * resolved closer mark just after the suspected autolink.
-     *
-     * '<' is among them because GFM says so in as many words -- "'<'
-     * immediately ends an autolink" -- so "www.commonmark.org/he<lp" is a
-     * link to ".../he" and was no link at all.
-     *
-     * BEFORE the path validation below, not after: trimming moves the end
-     * back into what the scan had already accepted, so whatever follows it
-     * then is by construction part of the link's own text and has nothing to
-     * say about whether this is a link. Checking after it rejected
-     * "www.google.com/search?q=commonmark&hl;" outright, where the spec wants
-     * a link to ".../search?q=commonmark". */
-    if(end < line_end  &&  !ISUNICODEWHITESPACE(end)  &&  !ISANYOF(end, _T(")}].!?,;<"))) {
+     * resolved closer mark just after the suspected autolink. */
+    if(end < line_end  &&  !ISUNICODEWHITESPACE(end)  &&  !ISANYOF(end, _T(")}].!?,;"))) {
         MD_MARK* mark;
 
         mark = md_scan_right_for_resolved_mark(ctx, right_cursor, end, &right_cursor);
         if(mark == NULL  ||  !(mark->flags & MD_MARK_CLOSER))
             return;
     }
-
-    /* GFM's path validation, which decides where the link actually ends. */
-    if(opener->ch != '@')
-        md_autolink_trim(ctx, beg, &end);
 
     /* Success, we are an autolink. */
     opener->beg = beg;
