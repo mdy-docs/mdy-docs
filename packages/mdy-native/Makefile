@@ -198,7 +198,7 @@ build/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 # YAML reader, the script compiler, the markdown front end and the HTML
 # writer. It is here because the front end is where a native build's time
 # went: a profile put every frame in the JavaScript layer, and this was the
-# largest single thing in it. See docs/parser.md.
+# largest single thing in it.
 #
 # It was github.com/mdy-docs/parse, a repo of its own, and is folded in here
 # because nothing else uses it. Its two dependencies are handled differently:
@@ -312,7 +312,7 @@ build/lexbor-test$(EXE): test/lexbor.c $(LX_LIB)
 # ```data scanner. The harder question — does each agree with mdy-docs'
 # JavaScript over real input, byte for byte — is the node-driven targets below
 # it, and it is how every rule in src/parse was written: measured against the
-# JavaScript rather than read from it. See docs/parser.md.
+# JavaScript rather than read from it.
 PARSE_CHECKS := build/parse-test$(EXE) build/html-test$(EXE) build/script-test$(EXE) \
                 build/yaml-test$(EXE) build/data-test$(EXE) build/lexbor-test$(EXE)
 
@@ -346,7 +346,7 @@ build/md4cprobe$(EXE): test/md4cprobe.c $(MD4C_SRCS)
 # bin/mdy.js's own tests (test/cli.test.js), with this binary in its place:
 # every case spawns the CLI and asserts on its output and exit code, so the
 # same file is the specification for both. MDY_CLI is how the test file
-# swaps the executable. See docs/cli-plan.md.
+# swaps the executable.
 check-cli: build/mdy$(EXE)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test ../../test/cli.test.js
 
@@ -366,8 +366,8 @@ check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
 	@./build/data-test$(EXE)
 
 # The differential harnesses. mdy-docs is this repository; the corpora are
-# the site next to it, which is where the reference numbers in docs/parser.md
-# come from. Point CORPUS, SITE and THEME elsewhere as needed. Absolute,
+# the site next to it. Point CORPUS, SITE and THEME elsewhere as needed.
+# Absolute,
 # because the harnesses `import()` mdy-docs' modules from the path they are
 # given, and a relative one would resolve against test/ rather than here.
 MDY_DOCS ?= ../..

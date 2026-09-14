@@ -122,11 +122,9 @@ scalar `_id`, and the primary tree's keys are fixed-width OID bytes.
 ## The MDY front end, in C
 
 `src/parse` is the same parser mdy-docs has in JavaScript — the tree, the
-YAML reader, the script compiler, the markdown front end and the HTML writer
-— and [docs/parser.md](docs/parser.md) is its own account: what it does, the
-numbers, how it works inside, and the rule for changing it. It was a
-repository of its own, github.com/mdy-docs/parse, and is folded in here
-because nothing else uses it.
+YAML reader, the script compiler, the markdown front end and the HTML writer.
+It was a repository of its own, github.com/mdy-docs/parse, and is folded in
+here because nothing else uses it.
 
 It is where a native build's time went: a profile put every frame in the
 JavaScript layer, and the front end was the largest single thing in it. On
@@ -176,7 +174,6 @@ mode (`mdy file.mdy`, a directory, or stdin, with `-o`, `--html`, `--emit-js`,
 `-d`, `--data-file`, `--watch`), `mdy dev` and `mdy dead`. Its specification
 is bin/mdy.js's own test file: `make check-cli` runs test/cli.test.js with
 this binary in the JavaScript's place, and all 34 cases pass.
-[docs/cli-plan.md](docs/cli-plan.md) is how it got there.
 
 `mdy dev` carries a broker. With `--broker`, it registers with the sukkal it
 names and publishes and delivers as @mdy-docs/mdy-bus does; without one, it

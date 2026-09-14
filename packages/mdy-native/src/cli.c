@@ -8,8 +8,8 @@
  * care which one wrote it.
  *
  *   mdy [path] [options]      one document (a file, a directory, or stdin)
- *   mdy build [dir] [options]  a whole site — see docs/cli-plan.md
- *   mdy dev / mdy dead         later phases of the same plan
+ *   mdy build [dir] [options]  a whole site
+ *   mdy dev / mdy dead         the server, and its dead-letter queue
  *
  * Where an emit lands is the embedder's business, and this embedder writes
  * files. `static/` is copied through verbatim, last, exactly as buildSite
