@@ -37,35 +37,36 @@ Checked by the corpora rather than by reading: `check-markdown` at 893/914
 with its 21-line baseline unmoved, `check-html` 642/642 over 45 MB,
 `check-parse`, all six sites, and the allocation sweep unchanged.
 
-## 2. `open_dir_inner` is 423 lines
+## 2. ~~`open_dir_inner` is 423 lines~~ — DONE
 
-[`src/engine_walk.c:686`](../src/engine_walk.c#L686) — 423 lines, to 1108.
+195 lines, with the per-file pass — 225 lines of it — as `walk_one_file`.
 
-It walks the directory, reads every file, decides what kind each is, builds a
-`.md` file's synthetic front matter, parses a `.yaml` file's own mapping, builds
-each file's identity, stages one big source buffer, splits it, and hands the
-result to `open_documents`. That is seven jobs with one set of locals and one
-`return -1` per failure — twenty-odd of them, each freeing a slightly different
-subset of six allocations.
+The seam is the one this file predicted: everything in `walk_one_file` is per
+FILE, and everything the caller does after the loop is per DOCUMENT, because
+only the splitter knows how many documents a file became.
 
-This function produced B1, B2 and B8, which is three of the highest-severity
-findings this engine has had, and all three were ownership or ordering mistakes
-that its length is what hid.
+What the extraction actually bought is not the length. Every failure inside
+the loop used to end
 
-Two of the seven jobs have already come out of it, and the change got simpler
-each time: identity is values now (`mdy_yaml_builder`, `mdyyaml.h`) rather than
-YAML text assembled in place, which deleted two of the writers entirely.
+    free(bytes); free(source); free(listing);
+    walked_free(files, file_count); return -1;
 
-**What makes it worth opening**: the next thing that changes what a walk
-*collects*. The staging buffer is the seam — everything before it is per-file
-and everything after it is per-document.
+with a slightly different subset at each of twenty-odd sites — which is
+exactly the shape a leak hides in, and this is the function B1, B2 and B8 all
+lived in. The staging buffer and the file array are one `Staging` struct now:
+a failure frees only what it allocated itself and returns -1, and the caller
+frees the staging and the listing once.
 
-**What would check it**: `check-sites` over all six sites, outputs *and* build
-logs; `check-golden` on four; `check-alloc`, which sweeps every allocation in a
-build one at a time and is the only thing that exercises those twenty error
-paths at all.
+It also surfaced a bug that was being written as it was extracted, and is
+worth recording because nothing would have caught it later. `Staging st = {0}`
+starts with a capacity of zero, and the growth is `cap *= 2` — which never
+reaches `need`, so the first file would have hung the build. The caller used
+to pre-allocate 65536 bytes, and moving the buffer into a struct quietly took
+that away. Both growth sites start from a real size now.
 
----
+Verified on the sweep rather than by reading, because the sweep is the only
+thing that runs those error paths: 3933 refusals over fixture-awkward and
+**14370 over examples/blog**, each one either survived exactly or reported.
 
 ## 3. ~~`resize_in` uses its own failure macro for two of its eight failures~~ — DONE
 
