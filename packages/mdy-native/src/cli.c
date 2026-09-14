@@ -1200,7 +1200,7 @@ static char *emit_output(const DocOptions *o, const char *output) {
  * returns 0 and writes nothing, so the whole stamp disappears rather than
  * losing a space. A `strftime` that returns 0 also leaves the buffer
  * UNSPECIFIED, which is why `out` is terminated here before anything reads
- * it: report() used to walk it looking for spaces to skip.
+ * it.
  *
  * The zero %I pads with is dropped, which is what %l was reached for.
  */
@@ -1449,10 +1449,10 @@ typedef struct {
     const char *root_arg, *entry, *broker, *consumer, *group;
     int port, drafts, future, max_attempts, backoff, max_backoff;
     /*
-     * Which interfaces to answer on. Loopback unless --host, which is the
-     * opposite of what this used to do: it bound 0.0.0.0 always, so every
-     * machine on the network can reach a server that rebuilds a directory on
-     * disk and, with a broker, renders whatever a POST tells it to. node's
+     * Which interfaces to answer on. Loopback unless --host: binding 0.0.0.0
+     * means every machine on the network can reach a server that rebuilds a
+     * directory on disk and, with a broker, renders whatever a POST tells it
+     * to. node's
      * `server.listen(port)` binds everything, and this is the one place worth
      * diverging from it — node has no delivery endpoint to reach.
      */
@@ -1614,9 +1614,9 @@ static void dev_send(Dev *d, int dedupe, int announce) {
         /*
          * Zeroed at the declaration, and freed on every path.
          *
-         * The refusal branch used to skip http_response_free, so a broker that
-         * answered a publish with anything but a 2xx kept its response body
-         * for the life of the process. That is not one leak: it is one per
+         * A refusal branch that skips http_response_free keeps the response
+         * body of every non-2xx answer for the life of the process. That is
+         * not one leak: it is one per
          * refused message per rebuild, in a server meant to run all day —
          * measured at 57 leaks and 89,984 bytes after twenty rebuilds
          * against a broker returning 500, the leaked blocks being the refusal
@@ -1928,9 +1928,9 @@ static void dev_deliver(Dev *d, Httpd *s, HttpdRequest *req) {
     /*
      * No build to deliver to. `mdy dev` goes on serving when the FIRST build
      * fails — there is nothing to fall back to and a broken save should not
-     * take the server down with it — so the engine can be absent here, and
-     * this used to read documents off it: the first message delivered killed
-     * the server outright.
+     * take the server down with it — so the engine can be ABSENT here, and
+     * reading documents off it would kill the server on the first message
+     * delivered.
      *
      * 500 returns them to the broker, which brings them back after a backoff,
      * and by then a save may have fixed the build. Routing them with no engine

@@ -140,11 +140,11 @@ static int is_arrow_letter(char c) {
 
 /*
  * URL detection is linkify-it's, ported in src/linkify.c, and none of it is
- * here any more. What used to be here was a reasonable-looking guess — a
- * scheme or `//host`, then bytes until whitespace, then trailing punctuation
- * trimmed — and it was wrong in five documents in ways nobody would predict:
- * a comma kept in one place and dropped in another, a hyphen in a host's last
- * label, a full stop at the end of a sentence versus one inside a path.
+ * here. The reasonable-looking guess — a scheme or `//host`, then bytes until
+ * whitespace, then trailing punctuation trimmed — is wrong in ways nobody
+ * would predict: a comma kept in one place and dropped in another, a hyphen
+ * in a host's last label, a full stop ending a sentence against one inside a
+ * path.
  */
 
 /* ---- the scanner --------------------------------------------------------- */

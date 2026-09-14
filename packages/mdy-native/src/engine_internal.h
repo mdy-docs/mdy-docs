@@ -402,10 +402,8 @@ void resolve_path(const char *base, const char *spec, char *out, size_t out_len)
  *
  * A message is not an error: the build carries on, and what it reports is
  * something the AUTHOR should know — a `.yaml` that is not a mapping, a
- * highlighter that would not load. The engine used to print those itself
- * with `fprintf(stderr)`, which was the fourth of this project's four error
- * conventions and the one that was a defect rather than a preference: a
- * library with a callback for exactly this should not own a stream.
+ * highlighter that would not load. A library with a callback for exactly this
+ * must not own a stream.
  *
  * Nothing is printed here. It formats and hands over to `cb.on_message`, and
  * an engine whose embedder registered none says nothing — which is what a

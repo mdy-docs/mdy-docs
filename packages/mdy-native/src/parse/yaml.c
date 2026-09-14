@@ -421,7 +421,7 @@ static mdy_yaml_node *read_quoted(P *p, size_t line, size_t from, char quote,
     }
 
     /* `out.ok` is the whole point of the flag: a buf_put that could not grow
-     * used to leave a scalar silently TRUNCATED, and a truncated title is a
+     * would leave the scalar silently TRUNCATED, and a truncated title is a
      * document that means something its author did not write. */
     if (!out.ok) { oom(p); free(out.s); return NULL; }
 
@@ -749,11 +749,10 @@ static int is_seq_item(const Line *l) {
  */
 /*
  * A quoted scalar ENDS at its closing quote, and what may follow on that line
- * is nothing, or a comment. `title: "Hello" world` used to come back as
- * `Hello` with `world` dropped on the floor, and `name: "it"s.mdy"` as `it` —
- * which is exactly what this file says it will not do: "a parser that
- * silently mis-reads data is worse than one that refuses it". node's reader
- * refuses both.
+ * is nothing, or a comment. Accepting `title: "Hello" world` as `Hello` drops
+ * `world` on the floor, and `name: "it"s.mdy"` becomes `it` — which is what
+ * this file says it will not do: "a parser that silently mis-reads data is
+ * worse than one that refuses it". node's reader refuses both.
  */
 static int nothing_after(const Line *l, size_t from) {
     while (from < l->len && is_space(l->s[from])) from++;

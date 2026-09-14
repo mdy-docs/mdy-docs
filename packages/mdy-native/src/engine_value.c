@@ -339,7 +339,7 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
                         /* An infinity or a NaN is null under mdy-docs, and a
                          * null property is one the HTML writer leaves out — so
                          * it is left unset here, which is the same attribute
-                         * list. This used to emit `data-x="inf"`. */
+                         * list — never `data-x="inf"`. */
                         double pn = js_get_number(pv);
                         if (pn == pn && pn <= 1.7976931348623157e308 && pn >= -1.7976931348623157e308)
                             mdy_set_number(doc, out, pname, pn);
@@ -372,8 +372,8 @@ int js_to_binjson(mdy_engine *e, bj_builder *b, JsValue v) {
         /*
          * Non-finite FIRST, for two reasons. It is what mdy-docs sends —
          * `$.find({ big: 1/0 })` is stringified to `{"big":null}`, so it asks
-         * the store for null and matches nothing, where this used to ask for
-         * infinity and match a record that held one. And `(int64_t)d` of an
+         * the store for null and matches nothing. Asking for the infinity
+         * instead matches a record that holds one. And `(int64_t)d` of an
          * infinity or a NaN is undefined behaviour, so the range test has to
          * come before the cast rather than after it.
          */

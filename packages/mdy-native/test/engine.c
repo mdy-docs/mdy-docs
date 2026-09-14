@@ -27,11 +27,10 @@
 static int failures;
 
 /*
- * One session for the whole run, which is exactly what the memo's globality
- * used to be: engines come and go, the memo does not. Several checks below
- * depend on that — a tree rendered by one engine and found again by the next
- * is what memo_key_checks and reopen_checks are about — so a session per
- * engine would quietly make them test nothing.
+ * ONE session for the whole run: engines come and go, the memo does not.
+ * memo_key_checks and reopen_checks are about a tree rendered by one engine
+ * and found again by the next, so a session per engine would quietly make
+ * them test nothing.
  */
 static mdy_session *S;
 
@@ -42,12 +41,10 @@ static char last_emit_content[4096];
 /*
  * What the library SAYS, which is not the same as what it writes.
  *
- * These used to reach the terminal through an `fprintf(stderr)` inside the
- * engine, and this file printed "(two warnings below are the point)" and left
- * a reader to look at them. They go through `on_message` now, so an engine
- * whose embedder registers nothing says nothing — which is what a callback
- * means, and is exactly the way this change could have lost them silently.
- * Collected and asserted rather than displayed.
+ * Messages go through `on_message`, so an engine whose embedder registers
+ * nothing says nothing — which is what a callback means, and is the one way
+ * a message can go missing without anything failing. Collected and asserted
+ * rather than printed for a reader to look at.
  */
 static char warnings[8][512];
 static size_t warning_count;
@@ -289,13 +286,12 @@ static void site_checks(void) {
 
 /* ---- a data file's own YAML -------------------------------------------------
  *
- * A .yaml file is a record, and its bytes are read as YAML and nothing else.
- * They used to be written into the one source the walk builds, as the
- * document's front matter — and that source is split on `---` lines, so a data
- * file opening with the document marker YAML itself allows became TWO
- * documents where the walk had counted one. Every identity after it then
- * belonged to the wrong document: the roll call below came back shifted, and
- * `$.render({ path: … })` answered with a neighbour.
+ * A .yaml file is a record, and its bytes are read as YAML and NOTHING else.
+ * Written into the source the walk builds, as front matter, they would be
+ * split on `---` lines — so a data file opening with the document marker YAML
+ * itself allows becomes TWO documents where the walk counted one. Every
+ * identity after it then belongs to the wrong document: the roll call below
+ * comes back shifted, and `$.render({ path: … })` answers with a neighbour.
  *
  * The roll call is the check. Each line is one document's own path beside the
  * field only that file declared, so a document wearing another's identity
@@ -401,11 +397,11 @@ static void data_file_checks(void) {
  * nothing but a `---`: each is ONE empty document, because that is what the
  * splitter says an empty source is.
  *
- * The files used to be joined into one text with `---` between them, where a
- * file holding no document is a blank chunk between two separators and
- * disappears. The walk had counted a document and an identity for it either
- * way, so every document after it wore its neighbour's: asked for main.mdy
- * this engine rendered zed.mdy, which is the whole of the bug.
+ * Joining the files into one text with `---` between them makes a file
+ * holding no document a blank chunk between two separators, which disappears
+ * — while the walk has counted a document and an identity for it. Every
+ * document after it then wears its neighbour's, and asking for main.mdy
+ * renders zed.mdy.
  *
  * The roll call is the check, and `$.text` beside it — a file's trailing
  * newline is its own, which a joined text made surprisingly easy to lose.
@@ -484,12 +480,11 @@ static void blank_file_checks(void) {
 /* ---- a .md document through $.render ----------------------------------------
  *
  * The other front end has no code to run, so it parses and hands the tree
- * back — and it used to hand it back from the middle of render_tree_out
- * rather than through `done`, which is where the key a render is HELD under
- * gets written. The tree was parked under whatever the last render had left
- * there: nothing at all on the first render, so the token carried no id, could
- * not be read back, and the content silently disappeared — or the PREVIOUS
- * render's key, and the page showed that render twice.
+ * back — and it has to do that through `done`, which is where the key a
+ * render is HELD under gets written. Returning early parks the tree under
+ * whatever the last render left there: nothing at all on the first render, so
+ * the token carries no id and the content disappears, or the PREVIOUS
+ * render's key, and the page shows that render twice.
  *
  * Both shapes are here, and each uses a .md nothing has rendered yet —
  * a SECOND render of one is answered from the memo, which took the same exit
@@ -1123,10 +1118,10 @@ static void raw_html_checks(void) {
  *
  * A hit carries the `_id` it was inserted with, and the answer is put back
  * into the order the documents were written in — never the order the database
- * happened to walk its keys in. Resolving a hit's id to its document used to
- * be a scan that re-formatted every id in the set on every step, inside a loop
- * over every document, inside a loop over every hit: cubic, and a $.find({})
- * over 1,200 documents took twelve seconds. It is a map now, built once.
+ * happened to walk its keys in. Resolving a hit's id to its document is a
+ * map built once: a scan that re-formats every id on every step, inside a
+ * loop over every document, inside a loop over every hit, is cubic — twelve
+ * seconds for a $.find({}) over 1,200 documents.
  *
  * That is a change of cost and not of answer, so what this pins is the answer,
  * at a size where the map has real collisions and probe runs in it. Two
@@ -1882,8 +1877,7 @@ static void crlf_checks(void) {
 
     /*
      * $.text is the other half. Emitted to a file the bytes are
-     * "crlf line\n\nsecond\n\n" on both sides, where
-     * this engine used to write "crlf line\nsecond\n"; through markdown the
+     * "crlf line\n\nsecond\n\n" on both sides; through markdown the
      * backslashes of JSON.stringify are eaten identically by both, which is
      * what this pins.
      */
@@ -2195,8 +2189,8 @@ static void import_checks(void) {
  * Two thousand rather than sixty: what is checked here is the BOUND, which
  * bites at two hundred and fifty-six either way, and sixty thousand nested
  * objects built in the guest is a minute of this suite's time for nothing.
- * Where the old engine used to die is in the review; what stops it is that the
- * tree comes back the depth this says and not the depth it was given.
+ * What this asserts is that the tree comes back the depth this says and not
+ * the depth it was given.
  */
 static void deep_value_checks(void) {
     printf("\n--- engine: values deeper than the walk ---\n");
@@ -3601,12 +3595,10 @@ int main(void) {
      * ATTRIBUTE ORDER through the round trip: an element written `href class
      * rel title` comes back exactly so after passing through a transform.
      *
-     * It did not always. lamassu kept an object's keys in hash order, so the
-     * tree's properties came back shuffled — `href title class rel` — and
-     * mdy-docs under node, running its transforms in the same lamassu, did
-     * the same, which is what this check used to pin. lamassu keeps string
-     * keys in insertion order now, as the language requires, and both
-     * engines answer with the document's own order.
+     * lamassu keeps string keys in insertion order, as the language
+     * requires, so both engines answer with the document's own order. In
+     * hash order the tree's properties come back shuffled — `href title
+     * class rel` — on both sides, which looks like agreement and is not.
      */
     check("attribute order survives the round trip",
           "%% transform((tree) => {})\n"

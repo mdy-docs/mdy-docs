@@ -65,12 +65,10 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     if (!text) { *result = js_array_new(ctx, 0); return true; }
 
     size_t len = strlen(text);
-    /*
-     * Every allocation below used to answer failure with `break` or an empty
-     * array, and the result is what a site INDEXES: a truncated word list is
-     * a search box that cannot find a page, on a build that succeeded. See
-     * xalloc.h.
-     */
+    /* The result is what a site INDEXES, so a truncated word list is a
+     * search box that cannot find a page on a build that succeeded. Nothing
+     * below may answer a refused allocation with a short list. See
+     * xalloc.h. */
     char *word = mdy_xmalloc(len + 1);
     /*
      * The words are collected and deduplicated ON THIS SIDE, and the JS array
@@ -447,10 +445,10 @@ static void close_set(mdy_engine *e) {
      * the process grew by a third of a megabyte on every keystroke that
      * landed.
      *
-     * The handle goes back to -1 rather than being reused, which is also what
-     * makes opening a set TWICE on one engine mean what it says: the second
-     * open used to insert into the collection the first one filled, so the
-     * old documents were still there to be found.
+     * The handle goes back to -1 rather than being reused, which is what
+     * makes opening a set TWICE on one engine mean what it says: otherwise
+     * the second open inserts into the collection the first one filled and
+     * the old documents are still there to be found.
      */
     if (e->set.handle >= 0) nis_close(e->set.handle);
     e->set.handle = -1;
@@ -868,13 +866,12 @@ static uint32_t oid_hash(const char *hex) {
 }
 
 /*
- * The map, built once for the set.
+ * The map, built ONCE for the set.
  *
- * This used to be a linear search that re-formatted every `_id` in the set on
- * every step — inside a loop over every document, itself inside a loop over
- * every hit. A `$.find({})` over 600 documents took 1.8 seconds against
- * node's 0.7, and 1,200 took 12.7: doubling the corpus cost seven times the
- * work, because the work was cubic in the size of the set.
+ * The alternative is a linear search re-formatting every `_id` on every step,
+ * inside a loop over every document, inside a loop over every hit — cubic in
+ * the size of the set. `$.find({})` over 600 documents is 1.8s that way
+ * against node's 0.7, and 1,200 is 12.7.
  */
 /*
  * It does not fail, because its caller has no way to say that it did.
@@ -1494,9 +1491,9 @@ static bool markdown_native(JsContext *ctx, JsValue this_val, const JsValue *arg
  * A tree the document built ITSELF — with `h`, by hand, or in a module it
  * imported — parked like any other and spliced where its token lands.
  *
- * This is what a helper that used to return a string of HTML returns instead:
- * hast is plain data, so it crosses as it is, and a fragment built this way is
- * a node from the start rather than text somebody has to parse back.
+ * Hast is plain data, so it crosses as it is: a fragment built this way is a
+ * node from the start rather than a string of HTML somebody has to parse
+ * back.
  */
 static bool node_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
@@ -2144,11 +2141,10 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
      * because five of the messages interpolate `path` or `ext` and cannot be
      * formatted after those are freed.
      *
-     * That ordering is why the macro used to cover two of the seven: it did
-     * not free, so the five that had something to say about the file could
-     * not use it and open-coded all four lines instead. Freeing INSIDE it is
-     * what makes it fit every case — `path`, `ext` and `shown` are declared
-     * above every use, and a NULL among them is what `free` is for.
+     * That ordering is why the macro FREES: a macro that did not could only
+     * be used by the two messages that say nothing about the file. `path`,
+     * `ext` and `shown` are declared above every use, and a NULL among them
+     * is what `free` is for.
      */
 #define RESIZE_FAIL(...) do { \
         snprintf(msg, sizeof msg, __VA_ARGS__); \

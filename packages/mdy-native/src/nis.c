@@ -5,7 +5,7 @@
  * Module.bjioHandles, a table of JS FileSystemSyncAccessHandle objects, which
  * is the browser's storage bridged through emscripten. bj_io is four
  * callbacks, so this is a buffer in memory — see Store below for why it is
- * not the temp file it used to be.
+ * not a temp file.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,11 +24,10 @@ typedef struct Store Store;
 typedef struct {
     /*
      * The store is a POINTER, and that is not incidental. `bj_io.ctx` is kept
-     * by the B+tree for the tree's whole life, and it used to be
-     * `&g_slots[slot].fd` — an address INSIDE this table, which is realloc'd
-     * when it grows. Every collection opened before a growth was then reading
-     * and writing through a dangling pointer. A separately allocated store has
-     * an address that does not move.
+     * by the B+tree for the tree's whole life, so it must not be an address
+     * INSIDE this table — the table is realloc'd when it grows, and every
+     * collection opened before a growth would then read and write through a
+     * dangling pointer. A separately allocated store does not move.
      */
     Store *store;
     bpt *tree;
@@ -226,8 +225,8 @@ int nis_create_index(int handle, const char *name, const uint8_t *fields, uint32
  * TREES, which nisaba never owned: bpt_create made each one over a bj_io of
  * ours and dc_collection_add_index only borrowed it, so dc_collection_free
  * leaves them — that is a B+tree's buffers per index plus one for the primary
- * store, and they used to be left here too. Then the stores the trees read and
- * wrote through, and the slot goes back in the pool.
+ * store. Then the stores the trees read and wrote through, and the slot goes
+ * back in the pool.
  */
 void nis_close(int handle) {
     Slot *s = slot_of(handle);

@@ -247,7 +247,7 @@ int mdy_protocol_allowed(const char *attr, const char *value, size_t len) {
 }
 
 /*
- * The Unicode this file used to carry by hand — a partial lowercase table and
- * a guess at `\p{L}` — now lives in unicode.c, over baru-re's generated UCD
- * data. Both were wrong in ways only a non-English document would show.
+ * Unicode lives in unicode.c, over baru-re's generated UCD data. A partial
+ * lowercase table and a guess at `\p{L}` are wrong in ways only a
+ * non-English document shows.
  */

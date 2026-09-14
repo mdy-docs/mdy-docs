@@ -607,12 +607,11 @@ static void cache_put(ImportCache *c, const char *dir, mdy_engine *set) {
         /*
          * Each realloc taken as it succeeds.
          *
-         * This used to do both and then `free(d); free(s)` if either failed,
-         * which left `c->dirs` DANGLING whichever way it went: if realloc
-         * moved the block it had already freed the old pointer, and if it did
-         * not then `free(d)` freed the block `c->dirs` still pointed at. The
-         * function returned without adding, the caller carried on, and the
-         * next cache_get read freed memory — a use-after-free reached FROM an
+         * Doing both and then `free(d); free(s)` if either failed leaves
+         * `c->dirs` DANGLING whichever way it goes: if realloc moved the
+         * block the old pointer is already freed, and if it did not then
+         * `free(d)` frees the block `c->dirs` still points at. The next
+         * cache_get then reads freed memory — a use-after-free reached FROM an
          * allocation failure rather than at it.
          *
          * Each grow is still taken as it succeeds, for that reason. What has
@@ -698,21 +697,15 @@ static void staging_free(Staging *st) {
  * ONE FILE: read it, decide what kind it is, build its identity, and append
  * its text to the staging buffer.
  *
- * The seam is the staging buffer: everything here is per FILE, and
- * everything the caller does
- * after the loop is per DOCUMENT, because only the splitter knows how many
- * documents a file became.
+ * The seam is the staging buffer: everything here is per FILE, and everything
+ * the caller does after the loop is per DOCUMENT, because only the splitter
+ * knows how many documents a file became.
  *
- * The `Staging` struct is most of what the extraction buys. Every failure in
- * here used to end
- *
- *     free(bytes); free(source); free(listing);
- *     walked_free(files, file_count); return -1;
- *
- * with a slightly different subset at each of twenty-odd sites -- which is
- * precisely the shape a leak hides in. A failure now frees only what this
- * function itself allocated and returns -1; the caller frees the staging and
- * the listing, once.
+ * `Staging` is why the twenty-odd failures below are one line each. Freeing
+ * the whole walk at each of them means a slightly different subset every
+ * time, which is the shape a leak hides in; a failure here frees only what
+ * this function allocated, and the caller frees the staging and the listing
+ * once.
  */
 static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
                          Staging *st, char *error, size_t error_len) {
@@ -808,9 +801,8 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
     if (!ident) { free(bytes); if (error && error_len) snprintf(error, error_len, "out of memory");
                   return -1; }
 
-    /* Doubling from a cap of ZERO never reaches `need`, so the first file is
-     * what sizes the buffer. It used to be allocated up front by the caller,
-     * which is the one thing `Staging st = { 0 }` quietly took away. */
+    /* Doubling from a cap of ZERO never reaches `need`, so the growth starts
+     * from a real size and the first file is what sizes the buffer. */
     size_t need = st->len + body_len + 4096;
     if (need > st->cap) {
         size_t want = st->cap ? st->cap : 65536;
@@ -969,11 +961,11 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
      * than one per file, so a file is a span until the walk is over — the
      * buffer moves under a pointer taken early.
      *
-     * They used to be one source joined by the `---` the splitter reads,
-     * which looks the same until a file holds no document: joined, an empty
-     * .mdy is a blank chunk between two separators and the splitter drops it,
-     * while the walk had counted a document and an identity for it. Every
-     * identity after it then belonged to the wrong document.
+     * NOT one source joined by the `---` the splitter reads, which looks the
+     * same until a file holds no document: joined, an empty .mdy is a blank
+     * chunk between two separators and the splitter drops it, while the walk
+     * has counted a document and an identity for it. Every identity after it
+     * then belongs to the wrong document.
      */
     Staging st = { 0 };
     for (const char *rel = listing; *rel; rel += strlen(rel) + 1) {
