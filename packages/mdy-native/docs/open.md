@@ -61,26 +61,21 @@ paths at all.
 
 ---
 
-## 3. `resize_in` uses its own failure macro for two of its eight failures
+## 3. ~~`resize_in` uses its own failure macro for two of its eight failures~~ — DONE
 
-[`src/engine.c:2123`](../src/engine.c#L2123). `RESIZE_FAIL` is defined at
-[2127](../src/engine.c#L2127) and used at [2184](../src/engine.c#L2184) and
-[2229](../src/engine.c#L2229). The other six failures are a bare `return false`
-with the error written out by hand above it.
+`RESIZE_FAIL` covers all **seven** of its failures now (eight counted the
+macro's own `return false`).
 
-A macro used for a quarter of the cases it was written for is worse than no
-macro: a reader cannot tell whether the six are deliberate — a different
-message shape, a different cleanup — or whether the macro simply arrived after
-they did. (It is the latter.)
+The reason it had covered two turned out to be a real one rather than
+carelessness: `$.resize` reports by ANSWERING with its message rather than
+throwing, so each exit has to format, release the three strings it borrowed,
+hand the text back and return false — *in that order*, because five of the
+messages interpolate `path` or `ext` and cannot be formatted after those are
+freed. The macro did not free, so those five could not use it and open-coded
+four lines each. Freeing inside it is what makes it fit every case.
 
-This is the smallest item here by a wide margin: six call sites in one function.
-It is listed because it is the kind of thing that is never worth a commit of its
-own and so never gets made.
-
-**What would check it**: `check-engine`'s resize assertions, and `check-sites`
-over `examples/blog`, which is the one site that resizes an image.
-
----
+Only one of the seven messages had a test. All four that a document can reach
+do now, byte for byte against what node prints, in `resize_checks`.
 
 ## 4. Error reporting has four conventions
 

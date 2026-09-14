@@ -2758,6 +2758,19 @@ static void resize_checks(void) {
 
     write_png(root, "static/logo.png", 64, 40);
     write_file(root, "notes.md", "not an image\n");
+    write_file(root, "static/notes.txt", "hello\n");
+    write_file(root, "static/bad.png", "not a PNG at all\n");
+    /*
+     * Every refusal as well as every success. `$.resize` reports by ANSWERING
+     * with its message rather than throwing an Error, so the guest sees a
+     * bare string — which is why each is caught as `String(err)` and not
+     * `err.message`.
+     *
+     * They are checked BYTE for byte because they are parity: node prints the
+     * same text, and a message that drifts is a build whose log stops matching
+     * even though its output still does. Only the first of these was covered
+     * before the seven exits were unified behind one macro.
+     */
     write_file(root, "main.mdy",
         "% const logo = $.findOne({ path: 'static/logo.png' })\n"
         "% $.emit('dims.txt', logo.width + 'x' + logo.height)\n"
@@ -2766,7 +2779,13 @@ static void resize_checks(void) {
         "% const b = $.resize(logo, { height: 10 })\n"
         "% $.emit('b.txt', [b.path, b.url, b.width, b.height].join('|'))\n"
         "% const again = $.resize(logo, { width: 20 })\n"
-        "% $.emit('memo.txt', String(again.path === a.path))\n");
+        "% $.emit('memo.txt', String(again.path === a.path))\n"
+        "% const refused = (label, fn) => { try { fn(); $.emit(label, 'NO REFUSAL') }\n"
+        "%                                  catch (err) { $.emit(label, String(err)) } }\n"
+        "% refused('r-notdoc.txt', () => $.resize({ nope: 1 }, { width: 4 }))\n"
+        "% refused('r-notpng.txt', () => $.resize($.findOne({ path: 'static/notes.txt' }), { width: 4 }))\n"
+        "% refused('r-nodims.txt', () => $.resize($.findOne({ path: 'static/bad.png' }), { width: 4 }))\n"
+        "% refused('r-nosize.txt', () => $.resize(logo, {}))\n");
 
     mdy_engine *e = mdy_engine_new(S);
     char err[512];
@@ -2813,6 +2832,25 @@ static void resize_checks(void) {
     ok_("...and asking twice decodes once",
         emitted("memo.txt") && strcmp(emitted("memo.txt"), "true") == 0 && image_count == 2,
         emitted("memo.txt"));
+
+    /* Each one's exact text, against what node prints. */
+    ok_("a refusal names what was passed instead of a document",
+        emitted("r-notdoc.txt") && strcmp(emitted("r-notdoc.txt"),
+            "resize: expected a file document (path/ext, from $.find/$.findOne), not {\"nope\":1}") == 0,
+        emitted("r-notdoc.txt"));
+    ok_("...names the extension it will not take",
+        emitted("r-notpng.txt") && strcmp(emitted("r-notpng.txt"),
+            "resize: unsupported image type \".txt\" (supported: .png)") == 0,
+        emitted("r-notpng.txt"));
+    ok_("...names the file whose dimensions would not read",
+        emitted("r-nodims.txt") && strcmp(emitted("r-nodims.txt"),
+            "resize: static/bad.png has no known width/height "
+            "(its dimensions could not be read)") == 0,
+        emitted("r-nodims.txt"));
+    ok_("...and says what it wanted when neither side was given",
+        emitted("r-nosize.txt") && strcmp(emitted("r-nosize.txt"),
+            "resize: pass at least one of { width, height }") == 0,
+        emitted("r-nosize.txt"));
 
     /* The bytes are a real PNG of the size asked for — checked by reading the
      * header back, because "it wrote something" is not the claim. */
