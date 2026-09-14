@@ -1,11 +1,25 @@
-# What is still open
+# The four structural changes
 
-Four items, all of them structural. None was ever a *finding* — none is a bug,
-and none changes what this engine produces — which is exactly why each is still
-here: nothing forces them, and each costs more than it obviously returns.
+**Nothing here is open.** This began as a list of four things that were, all
+of them structural — none was ever a *finding*, none was a bug, and none
+changed what this engine produces, which is why each had survived so long:
+nothing forced them, and each cost more than it obviously returned.
 
-Every line number below was measured against the tree at the commit that wrote
-this file, not carried over from anywhere.
+All four are done, one commit each. What is kept is the reasoning, because
+three of the four turned out to be worth more than the tidying, and one of
+them is a trap:
+
+- **Item 4's correction.** The obvious fix — send the library's `fprintf`s
+  through `on_message` — is *wrong*, and the reason is not visible from the
+  call site. Anyone who reaches for it again should read that entry first.
+- **Item 2 grew a bug while being extracted** that nothing downstream would
+  have caught: a capacity of zero and a doubling loop.
+- **Item 1's `parse_list` takes no `base`**, which is a fact about the list
+  grammar that was invisible while it lived inside a 524-line function.
+
+Each entry says what the item WAS before it says what became of it, because
+the before is what makes the reasoning legible. Every line number was measured
+against the tree, not carried over.
 
 ---
 

@@ -20,7 +20,7 @@ Pinned at the commit in `COMMIT` (3.1.0). Apache-2.0; the licence is LICENSE.
 last stage is `rehype-raw`: the tree goes through an HTML5 parser, which turns
 raw HTML into real elements and repairs what the document got wrong. There was
 no such stage here, so a `raw` node stayed a `raw` node. That was **B49** of
-the 2026-09 review (retired — `docs/open.md` says where it went), and the
+the 2026-09 review (retired — `docs/structure.md` says where it went), and the
 sharpest thing it cost was that an unclosed `<div>` in one document reached
 the next one on the page.
 
