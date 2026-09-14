@@ -1,4 +1,5 @@
 /* The contract, and what is not here yet, is in engine.h. */
+#include <stddef.h>
 #include "engine_internal.h"
 #include "xalloc.h"
 
@@ -3151,14 +3152,62 @@ static uint64_t memo_key(mdy_engine *e, size_t index, JsValue request) {
     return h ? h : 1;
 }
 
-static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
-                                char **wrote, char *error, size_t error_len) {
-    if (error && error_len) error[0] = '\0';
-    if (wrote) *wrote = NULL;
+/*
+ * Every GC root one render holds, in one place.
+ *
+ * A root is an ADDRESS the collector keeps, so the rule these seven live
+ * under is that they are registered together and released together: one left
+ * registered when the frame returns points at reused stack memory, and the
+ * next collection marks whatever now sits there — a crash with no relation to
+ * the code that caused it.
+ *
+ * Being a struct rather than seven locals is what lets the phases below be
+ * functions at all. A phase takes `RenderRoots *`, so every address the
+ * collector was given belongs to `render_tree_out`'s frame and stays valid
+ * for exactly as long as that frame does — which is the same guarantee the
+ * seven locals had, now stated once instead of relied on seven times.
+ *
+ * `rooted` is the whole struct's, not per-field: nothing protects a later
+ * root without having protected `fn` first, so one flag answers "is there
+ * anything to release" for all of them.
+ */
+typedef struct {
+    int rooted;
+    union {
+        struct { JsValue fn, promise, callable, req, res, dollar, result; };
+        JsValue all[7];
+    };
+} RenderRoots;
+/*
+ * Release walks `all` rather than naming the seven, so it cannot forget one —
+ * and this says a root cannot be added without joining the array. Adding an
+ * eighth field to the struct above grows RenderRoots past the union, and this
+ * stops the build rather than leaving a root registered on a dead frame,
+ * which is the failure this whole arrangement exists to prevent. It is worth
+ * a compile-time check because it is worth nothing at run time: a root left
+ * registered is a crash LATER, somewhere else, and the parity suite, the
+ * engine tests and MDY_GC_STRESS=1 were each measured against a deliberately
+ * leaked root here and none of the three noticed.
+ */
+_Static_assert(sizeof(RenderRoots) == offsetof(RenderRoots, all) + sizeof(JsValue[7]),
+               "a root added to RenderRoots must go in all[] too — roots_release walks it");
 
-    /* The memo, first: a hit is a render that does not happen. */
-    if (!memo_now) mdy_engine_rotate_memo();
-    uint64_t mkey = index < e->count ? memo_key(e, index, request) : 0;
+static void roots_release(mdy_engine *e, RenderRoots *r) {
+    if (!r->rooted) return;
+    for (size_t i = 0; i < sizeof r->all / sizeof r->all[0]; i++) js_gc_unprotect(e->vm, &r->all[i]);
+    r->rooted = 0;
+}
+
+/*
+ * The memo, before anything else: a hit is a render that does not happen.
+ *
+ * A hit found in the PREVIOUS table is promoted into the current one, because
+ * the next rotation drops whatever is still only in `prev` — a tree that is
+ * being asked for is a tree the next build will ask for too.
+ *
+ * Returns the entry to answer from, or NULL to go and render.
+ */
+static MemoEntry *memo_take(mdy_engine *e, size_t index, uint64_t mkey) {
     MemoEntry *hit = memo_find(memo_now, mkey);
     if (!hit) {
         hit = memo_find(memo_prev, mkey);
@@ -3172,6 +3221,261 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
         fprintf(stderr, "memo %s %s\n", hit ? "hit " : "miss", path ? path : "?");
         free(path);
     }
+    return hit;
+}
+
+/*
+ * The other front end. A `.md` file is markup with no code in it, so there is
+ * nothing to run: it goes to hast at its own boundary and joins everything
+ * else as a tree. The walk keeps its real text on its DATA rather than as a
+ * body to compile, which is where this reads it from — and `$.text` on it
+ * gives back the file, because no code wrote anything else.
+ *
+ * Holds no root past its own return: `record` is protected and released here.
+ */
+static mdy_doc *render_markdown_document(mdy_engine *e, size_t index, uint64_t mkey,
+                                         char **wrote, char *error, size_t error_len) {
+    JsValue record = document_record(e, index);
+    js_gc_protect(e->vm, &record);
+    char *text = js_string_utf8(get_val(e, record, "body"));
+    js_gc_unprotect(e->vm, &record);
+    mdy_doc *out = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
+    if (!out) {
+        free(text);
+        if (error && error_len) snprintf(error, error_len, "the markdown document could not be read");
+        return NULL;
+    }
+    /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
+    if (mkey) memo_put(memo_now, mkey, memo_copy(out), mdy_xstrdup(text ? text : ""));
+    if (memo_debug()) fprintf(stderr, "memo kept #%zu\n", index);
+    if (wrote) *wrote = text; else free(text);
+    return out;
+}
+
+/*
+ * The document's own code, from its body to a function this can call: the
+ * script layer, the wrapper, the module, and the module's default export.
+ *
+ * Takes the roots because three of them start here and have to outlive it —
+ * `fn`, `promise` and `callable` are live until the render is done with them,
+ * and `rooted` turning 1 is what makes the release at `done` release anything
+ * at all. `script` goes back to the caller for the same reason: it owns the
+ * source the compiled module was made from and is freed at `done`.
+ */
+static int compile_to_callable(mdy_engine *e, Document *d, mdy_script **script,
+                               RenderRoots *r, char *error, size_t error_len) {
+#define CFAIL(...) do { if (error && error_len) snprintf(error, error_len, __VA_ARGS__); return 0; } while (0)
+    /* 1. the body, which `mdy_engine_open` already took the data out of */
+    size_t template_len = 0;
+    const char *template_text = mdy_data_body(d->fences, &template_len);
+
+    /* 2. the script layer */
+    *script = mdy_script_compile(template_text, template_len);
+    if (!*script) CFAIL("the script layer could not compile this document");
+
+    size_t src_len = 0;
+    char *wrapped = wrap(e, mdy_script_source(*script, &src_len));
+    if (!wrapped) CFAIL("out of memory");
+
+    size_t ulen = 0;
+    uint16_t *u = to_utf16(wrapped, strlen(wrapped), &ulen);
+    const char *err_msg = NULL;
+    uint32_t err_pos = 0;
+    r->fn = js_compile_module(e->ctx, u, ulen, &err_msg, &err_pos);
+    free(u);
+    free(wrapped);
+    if (js_is_undefined(r->fn)) CFAIL("the document's code did not compile: %s", err_msg ? err_msg : "?");
+    js_gc_protect(e->vm, &r->fn);
+    r->rooted = 1;
+
+    r->promise = js_run_module(e->ctx, r->fn);
+    js_gc_protect(e->vm, &r->promise);
+    js_run_jobs(e->ctx);
+    r->callable = js_promise_result(r->promise);
+    if (!js_is_function(r->callable)) CFAIL("the document's code did not produce a function");
+    js_gc_protect(e->vm, &r->callable);
+    return 1;
+#undef CFAIL
+}
+
+/*
+ * The three arguments the document's function is called with: the request,
+ * the response, and `$`. All three are roots from here to `done`.
+ */
+static void make_call_arguments(mdy_engine *e, size_t index, JsValue request, RenderRoots *r) {
+    r->req = js_is_object(request) ? request : js_object_new(e->ctx);
+    js_gc_protect(e->vm, &r->req);
+    r->res = js_object_new(e->ctx);
+    js_gc_protect(e->vm, &r->res);
+    /*
+     * `res.data` is the document's OWN data — its front matter, its data
+     * fences and its file identity, the same record `$.data(index)` gives.
+     * That is what lets a template write `req.x ?? res.data.x` and always be
+     * able to reach its own declared value.
+     */
+    set_val(e, r->res, "data", record_without_id(e, document_record(e, index)));
+    r->dollar = js_object_new(e->ctx);
+    js_gc_protect(e->vm, &r->dollar);
+    /* the host's scope values, for the `const`s the wrapper declared */
+    if (e->scope_count) {
+        JsValue scope = js_object_new(e->ctx);
+        set_val(e, r->dollar, "__scope", scope);
+        for (size_t i = 0; i < e->scope_count; i++) {
+            JsValue v = context_value(e, e->scope_json[i], 1);
+            set_val(e, scope, e->scope_names[i], js_is_undefined(v) ? js_null() : v);
+        }
+    }
+    if (e->want_response) set_val(e, r->dollar, "__wantResponse", js_bool(true));
+    /* `$.count`: the documents in THIS set. A render into an imported package
+     * runs on that package's engine, so it counts the package's, which is
+     * what mdy-docs does by giving each set its own program. */
+    set_val(e, r->dollar, "__count", js_number((double)e->count));
+    /* This render's `res`, for the references its parse will find. */
+    e->render_res = r->res;
+}
+
+/*
+ * If the document returned a promise, run the jobs and take what it settled
+ * to. Replaces `result` in place, re-rooting it, because the settled value is
+ * a different object from the promise that carried it.
+ *
+ * Returns 0 when there is nothing to settle to, having said which of the two
+ * different problems it was: a rejection reason is not always a string — a
+ * thrown Error is an object with `message`, and reporting "did not settle"
+ * for one hides the actual fault behind a symptom. Pending and rejected must
+ * not read the same either.
+ */
+static int settle_result(mdy_engine *e, RenderRoots *r, char *error, size_t error_len) {
+    if (!js_is_promise(r->result)) return 1;
+    js_run_jobs(e->ctx);
+    int state = js_promise_state(r->result);
+    if (state != 1) {
+        JsValue reason = js_promise_result(r->result);
+        char *msg = NULL;
+        size_t mlen = 0;
+        const uint16_t *mu = js_string_units(reason, &mlen);
+        if (mu) msg = from_utf16(mu, mlen);
+        if (!msg && js_is_object(reason)) {
+            JsValue m = get_val(e, reason, "message");
+            mu = js_string_units(m, &mlen);
+            if (mu) msg = from_utf16(mu, mlen);
+        }
+        if (error && error_len) {
+            if (msg) snprintf(error, error_len, "%s", msg);
+            else if (state == 0) snprintf(error, error_len,
+                "the document did not settle (a promise is still pending)");
+            else snprintf(error, error_len, "the document was rejected with a non-string reason");
+        }
+        free(msg);
+        return 0;
+    }
+    JsValue settled = js_promise_result(r->result);
+    js_gc_unprotect(e->vm, &r->result);
+    r->result = settled;
+    js_gc_protect(e->vm, &r->result);
+    return 1;
+}
+
+/*
+ * 3. the tree. A document with a transform already has one — it asked for it
+ * through `$.compose` and handed back what its transforms made of it — and
+ * one without hands back its lines for the host to parse.
+ *
+ * `transformed` goes back to the caller because the memo write needs to know
+ * which of the two happened: a transformed document's text is its tree's
+ * HTML, and an untransformed one's is its joined lines.
+ */
+static mdy_doc *tree_from_result(mdy_engine *e, RenderRoots *r, JsValue *transformed,
+                                 char **wrote, char *error, size_t error_len) {
+#define TFAIL(...) do { if (error && error_len) snprintf(error, error_len, __VA_ARGS__); return NULL; } while (0)
+    JsValue lines_out = get_val(e, r->result, "out");
+    if (wrote && js_is_array(lines_out)) {
+        /* No transform: the text is what the code wrote, joined — mdy.js's
+         * `scriptOutput(out).lines.join('\n')`, which is exactly `flatten`. */
+        size_t n = 0;
+        *wrote = flatten(lines_out, &n);
+    }
+
+    *transformed = get_val(e, r->result, "tree");
+    if (js_is_object(*transformed)) {
+        /* Already composed: `$.compose` spliced it before the transforms saw
+         * it, which is what let a transform work on the finished tree. */
+        mdy_doc *doc = mdy_doc_new();
+        if (!doc) TFAIL("out of memory");
+        mdy_node *root = js_to_tree(e, doc, *transformed);
+        /*
+         * `mdy_doc` owns its root, so the tree that came back is hung under
+         * it: a root lends its children, and a transform that returned a
+         * single element becomes that document's one child. Which is what
+         * `blockContent` does with a held tree, for the same reason.
+         */
+        mdy_node *into = (mdy_node *)mdy_root(doc);
+        if (root && root->type == MDY_ROOT) {
+            for (mdy_node *c = root->first; c;) {
+                mdy_node *next = c->next;
+                c->next = NULL;
+                mdy_append(into, c);
+                c = next;
+            }
+        } else if (root) {
+            mdy_append(into, root);
+        }
+        /* A transformed document has no lines left to hand back — it gave up
+         * its `out` for a tree — so its text is that tree's HTML, which is
+         * what mdy.js falls back to for exactly this case. */
+        if (wrote && !*wrote) *wrote = mdy_to_html(mdy_root(doc), NULL);
+        return doc;
+    }
+
+    JsValue lines = get_val(e, r->result, "out");
+    if (!js_is_array(lines)) TFAIL("the document did not produce its lines");
+    mdy_doc *tree = parse_lines(lines, e);
+    if (!tree) TFAIL("the produced lines did not parse");
+    /* The held trees go back where their tokens are. */
+    splice_tree(e, tree, (mdy_node *)mdy_root(tree));
+    note_references(e, tree);
+    return tree;
+#undef TFAIL
+}
+
+/*
+ * What the render answered with, now that the parse has added what the text
+ * refers to — the guest's own serialiser, called from here.
+ */
+static void take_response(mdy_engine *e, RenderRoots *r) {
+    JsValue answer = get_val(e, r->dollar, "__answer");
+    JsValue ignored = js_undefined();
+    if (js_is_function(answer) && js_call(e->ctx, answer, js_undefined(), NULL, 0, &ignored)) {
+        char *text = js_string_utf8(get_val(e, r->dollar, "__response"));
+        if (text) { free(e->last_response); e->last_response = text; }
+    }
+}
+
+/*
+ * Park the finished render under its key: its text as well as its tree, since
+ * a later hit may be asked for either — `$.text` and the CLI's default output
+ * want the text.
+ */
+static void memo_keep(mdy_engine *e, uint64_t mkey, mdy_doc *out,
+                      RenderRoots *r, JsValue transformed, char **wrote) {
+    char *text = wrote && *wrote ? strdup(*wrote) : NULL;
+    if (!text) {
+        JsValue lo = get_val(e, r->result, "out");
+        size_t n = 0;
+        text = js_is_array(lo) && !js_is_object(transformed) ? flatten(lo, &n) : mdy_to_html(mdy_root(out), NULL);
+    }
+    memo_put(memo_now, mkey, memo_copy(out), text ? text : strdup(""));
+}
+
+static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
+                                char **wrote, char *error, size_t error_len) {
+    if (error && error_len) error[0] = '\0';
+    if (wrote) *wrote = NULL;
+
+    /* The memo, first: a hit is a render that does not happen. */
+    if (!memo_now) mdy_engine_rotate_memo();
+    uint64_t mkey = index < e->count ? memo_key(e, index, request) : 0;
+    MemoEntry *hit = memo_take(e, index, mkey);
     if (hit) {
         key_base36(mkey, e->last_render_key);
         if (wrote) *wrote = mdy_xstrdup(hit->text);
@@ -3194,18 +3498,11 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     JsValue transformed = js_undefined();
     mdy_doc *out = NULL;
     mdy_script *script = NULL;
-    /*
-     * Declared up here, and released together at `done`, because every one of
-     * them is a GC ROOT and a root is an ADDRESS the collector keeps. A root
-     * left registered when this frame returns points at reused stack memory,
-     * and the next collection marks whatever now sits there — a crash with no
-     * relation to the code that caused it. `FAIL` jumps straight to `done`, so
-     * there is no path that can skip the release.
-     */
-    int rooted = 0;
-    JsValue fn = js_undefined(), promise = js_undefined(), callable = js_undefined();
-    JsValue req = js_undefined(), res = js_undefined(), dollar = js_undefined();
-    JsValue result = js_undefined();
+    /* The seven roots, released together at `done` — see RenderRoots. `FAIL`
+     * jumps straight there, so there is no path that can skip the release. */
+    RenderRoots r;
+    r.rooted = 0;
+    for (size_t i = 0; i < sizeof r.all / sizeof r.all[0]; i++) r.all[i] = js_undefined();
     /* the enclosing render's `res`, put back at `done` whatever happened */
     JsValue outer_res = e->render_res;
 
@@ -3221,25 +3518,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     if (index >= e->count) FAIL("no document at index %zu", index);
     Document *d = &e->docs[index];
 
-    /*
-     * The other front end. A `.md` file is markup with no code in it, so there
-     * is nothing to run: it goes to hast at its own boundary and joins
-     * everything else as a tree. The walk keeps its real text on its DATA
-     * rather than as a body to compile, which is where this reads it from —
-     * and `$.text` on it gives back the file, because no code wrote anything
-     * else.
-     */
     if (d->is_markdown) {
-        JsValue record = document_record(e, index);
-        js_gc_protect(e->vm, &record);
-        char *text = js_string_utf8(get_val(e, record, "body"));
-        js_gc_unprotect(e->vm, &record);
-        out = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
-        if (!out) { free(text); FAIL("the markdown document could not be read"); }
-        /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
-        if (mkey) memo_put(memo_now, mkey, memo_copy(out), mdy_xstrdup(text ? text : ""));
-        if (memo_debug()) fprintf(stderr, "memo kept #%zu\n", index);
-        if (wrote) *wrote = text; else free(text);
         /*
          * `done`, not a return of its own. The key this render is held under
          * is written there, and a .md tree parked under a key nobody set was
@@ -3247,196 +3526,36 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
          * token unreadable — or parked under the previous render's id, where
          * the page showed that render twice.
          */
+        out = render_markdown_document(e, index, mkey, wrote, error, error_len);
         goto done;
     }
 
-    /* 1. the body, which `mdy_engine_open` already took the data out of */
-    size_t template_len = 0;
-    const char *template_text = mdy_data_body(d->fences, &template_len);
+    if (!compile_to_callable(e, d, &script, &r, error, error_len)) goto done;
+    make_call_arguments(e, index, request, &r);
 
-    /* 2. the script layer */
-    script = mdy_script_compile(template_text, template_len);
-    if (!script) FAIL("the script layer could not compile this document");
-
-    size_t src_len = 0;
-    char *wrapped = wrap(e, mdy_script_source(script, &src_len));
-    if (!wrapped) FAIL("out of memory");
-
-    size_t ulen = 0;
-    uint16_t *u = to_utf16(wrapped, strlen(wrapped), &ulen);
-    const char *err_msg = NULL;
-    uint32_t err_pos = 0;
-    fn = js_compile_module(e->ctx, u, ulen, &err_msg, &err_pos);
-    free(u);
-    free(wrapped);
-    if (js_is_undefined(fn)) FAIL("the document's code did not compile: %s", err_msg ? err_msg : "?");
-    js_gc_protect(e->vm, &fn);
-    rooted = 1;
-
-    promise = js_run_module(e->ctx, fn);
-    js_gc_protect(e->vm, &promise);
-    js_run_jobs(e->ctx);
-    callable = js_promise_result(promise);
-    if (!js_is_function(callable)) FAIL("the document's code did not produce a function");
-    js_gc_protect(e->vm, &callable);
-
-    /* the request, the response, and `$` */
-    req = js_is_object(request) ? request : js_object_new(e->ctx);
-    js_gc_protect(e->vm, &req);
-    res = js_object_new(e->ctx);
-    js_gc_protect(e->vm, &res);
-    /*
-     * `res.data` is the document's OWN data — its front matter, its data
-     * fences and its file identity, the same record `$.data(index)` gives.
-     * That is what lets a template write `req.x ?? res.data.x` and always be
-     * able to reach its own declared value.
-     */
-    set_val(e, res, "data", record_without_id(e, document_record(e, index)));
-    dollar = js_object_new(e->ctx);
-    js_gc_protect(e->vm, &dollar);
-    /* the host's scope values, for the `const`s the wrapper declared */
-    if (e->scope_count) {
-        JsValue scope = js_object_new(e->ctx);
-        set_val(e, dollar, "__scope", scope);
-        for (size_t i = 0; i < e->scope_count; i++) {
-            JsValue v = context_value(e, e->scope_json[i], 1);
-            set_val(e, scope, e->scope_names[i], js_is_undefined(v) ? js_null() : v);
-        }
-    }
-    if (e->want_response) set_val(e, dollar, "__wantResponse", js_bool(true));
-    /* `$.count`: the documents in THIS set. A render into an imported package
-     * runs on that package's engine, so it counts the package's, which is
-     * what mdy-docs does by giving each set its own program. */
-    set_val(e, dollar, "__count", js_number((double)e->count));
-    /* This render's `res`, for the references its parse will find. */
-    e->render_res = res;
-    JsValue args[3] = { req, res, dollar };
-    if (!js_call(e->ctx, callable, js_undefined(), args, 3, &result)) {
+    JsValue args[3] = { r.req, r.res, r.dollar };
+    if (!js_call(e->ctx, r.callable, js_undefined(), args, 3, &r.result)) {
         size_t mlen = 0;
-        const uint16_t *mu = js_string_units(result, &mlen);
+        const uint16_t *mu = js_string_units(r.result, &mlen);
         char *msg = mu ? from_utf16(mu, mlen) : NULL;
         if (error && error_len) snprintf(error, error_len, "%s", msg ? msg : "the document threw");
         free(msg);
         goto done;
     }
-    js_gc_protect(e->vm, &result);
+    js_gc_protect(e->vm, &r.result);
 
-    if (js_is_promise(result)) {
-        js_run_jobs(e->ctx);
-        int state = js_promise_state(result);
-        if (state != 1) {
-            /*
-             * A rejection reason is not always a string — a thrown Error is an
-             * object with `message`, and reporting "did not settle" for one
-             * hides the actual fault behind a symptom. Pending and rejected
-             * are also different problems and must not read the same.
-             */
-            JsValue reason = js_promise_result(result);
-            char *msg = NULL;
-            size_t mlen = 0;
-            const uint16_t *mu = js_string_units(reason, &mlen);
-            if (mu) msg = from_utf16(mu, mlen);
-            if (!msg && js_is_object(reason)) {
-                JsValue m = get_val(e, reason, "message");
-                mu = js_string_units(m, &mlen);
-                if (mu) msg = from_utf16(mu, mlen);
-            }
-            if (error && error_len) {
-                if (msg) snprintf(error, error_len, "%s", msg);
-                else if (state == 0) snprintf(error, error_len,
-                    "the document did not settle (a promise is still pending)");
-                else snprintf(error, error_len, "the document was rejected with a non-string reason");
-            }
-            free(msg);
-            goto done;
-        }
-        JsValue settled = js_promise_result(result);
-        js_gc_unprotect(e->vm, &result);
-        result = settled;
-        js_gc_protect(e->vm, &result);
-    }
+    if (!settle_result(e, &r, error, error_len)) goto done;
+    if (!js_is_object(r.result)) FAIL("the document did not produce a result");
 
-    if (!js_is_object(result)) FAIL("the document did not produce a result");
-
-
-    /*
-     * 3. the tree. A document with a transform already has one — it asked for
-     * it through `$.compose` and handed back what its transforms made of it —
-     * and one without hands back its lines for the host to parse.
-     */
-    JsValue lines_out = get_val(e, result, "out");
-    if (wrote && js_is_array(lines_out)) {
-        /* No transform: the text is what the code wrote, joined — mdy.js's
-         * `scriptOutput(out).lines.join('\n')`, which is exactly `flatten`. */
-        size_t n = 0;
-        *wrote = flatten(lines_out, &n);
-    }
-
-    transformed = get_val(e, result, "tree");
-    if (js_is_object(transformed)) {
-        /* Already composed: `$.compose` spliced it before the transforms saw
-         * it, which is what let a transform work on the finished tree. */
-        mdy_doc *doc = mdy_doc_new();
-        if (!doc) FAIL("out of memory");
-        mdy_node *root = js_to_tree(e, doc, transformed);
-        /*
-         * `mdy_doc` owns its root, so the tree that came back is hung under
-         * it: a root lends its children, and a transform that returned a
-         * single element becomes that document's one child. Which is what
-         * `blockContent` does with a held tree, for the same reason.
-         */
-        mdy_node *into = (mdy_node *)mdy_root(doc);
-        if (root && root->type == MDY_ROOT) {
-            for (mdy_node *c = root->first; c;) {
-                mdy_node *next = c->next;
-                c->next = NULL;
-                mdy_append(into, c);
-                c = next;
-            }
-        } else if (root) {
-            mdy_append(into, root);
-        }
-        out = doc;
-        /* A transformed document has no lines left to hand back — it gave up
-         * its `out` for a tree — so its text is that tree's HTML, which is
-         * what mdy.js falls back to for exactly this case. */
-        if (wrote && !*wrote) *wrote = mdy_to_html(mdy_root(doc), NULL);
-    } else {
-        JsValue lines = get_val(e, result, "out");
-        if (!js_is_array(lines)) FAIL("the document did not produce its lines");
-        mdy_doc *tree = parse_lines(lines, e);
-        if (!tree) FAIL("the produced lines did not parse");
-        /* The held trees go back where their tokens are. */
-        splice_tree(e, tree, (mdy_node *)mdy_root(tree));
-        note_references(e, tree);
-        out = tree;
-    }
+    out = tree_from_result(e, &r, &transformed, wrote, error, error_len);
+    if (!out) goto done;
 
     /* Last of all, on the finished tree: a contents list names every heading
      * the document ended up with, including ones written below it. */
-    if (out) fill_toc(e, out);
-    /* What it answered with, now that the parse has added what the text
-     * refers to — the guest's own serialiser, called from here. */
-    if (out && e->want_response) {
-        JsValue answer = get_val(e, dollar, "__answer");
-        JsValue ignored = js_undefined();
-        if (js_is_function(answer) && js_call(e->ctx, answer, js_undefined(), NULL, 0, &ignored)) {
-            char *text = js_string_utf8(get_val(e, dollar, "__response"));
-            if (text) { free(e->last_response); e->last_response = text; }
-        }
-    }
-    if (out && !e->taint && mkey) {
-        /* Its text as well as its tree, since a later hit may be asked for
-         * either — `$.text` and the CLI's default output want the text. */
-        char *text = wrote && *wrote ? strdup(*wrote) : NULL;
-        if (!text) {
-            JsValue lo = get_val(e, result, "out");
-            size_t n = 0;
-            text = js_is_array(lo) && !js_is_object(transformed) ? flatten(lo, &n) : mdy_to_html(mdy_root(out), NULL);
-        }
-        memo_put(memo_now, mkey, memo_copy(out), text ? text : strdup(""));
-    }
-    if (memo_debug() && out) fprintf(stderr, "memo %s #%zu\n", e->taint ? "impure" : "kept", index);
+    fill_toc(e, out);
+    if (e->want_response) take_response(e, &r);
+    if (!e->taint && mkey) memo_keep(e, mkey, out, &r, transformed, wrote);
+    if (memo_debug()) fprintf(stderr, "memo %s #%zu\n", e->taint ? "impure" : "kept", index);
 
 done:
 #undef FAIL
@@ -3451,15 +3570,7 @@ done:
      * under one id, and the first would be spliced in for the second. */
     if (mkey) key_base36(mkey, e->last_render_key);
     else e->last_render_key[0] = '\0';
-    if (rooted) {
-        js_gc_unprotect(e->vm, &fn);
-        js_gc_unprotect(e->vm, &promise);
-        js_gc_unprotect(e->vm, &callable);
-        js_gc_unprotect(e->vm, &req);
-        js_gc_unprotect(e->vm, &res);
-        js_gc_unprotect(e->vm, &dollar);
-        js_gc_unprotect(e->vm, &result);
-    }
+    roots_release(e, &r);
     e->current = outer_current;
     e->depth--;
     mdy_script_free(script);
