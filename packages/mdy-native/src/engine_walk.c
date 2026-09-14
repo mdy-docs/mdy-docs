@@ -1058,7 +1058,10 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         mdy_engine *have = cache_get(cache, child_dir);
         if (have) { imp->set = have; continue; }
 
-        mdy_engine *child = mdy_engine_new();
+        /* The importer's session: an imported package's renders go in the
+         * same memo as the site's, which is what they did when the memo was
+         * one process-wide table. */
+        mdy_engine *child = mdy_engine_new(e->session);
         if (!child) { if (error && error_len) snprintf(error, error_len, "out of memory"); return -1; }
         /* An `$.emit` from an imported package contributes to the SAME
          * outputs as the site that imported it. */

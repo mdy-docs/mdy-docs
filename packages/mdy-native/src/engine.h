@@ -34,8 +34,47 @@
 
 typedef struct mdy_engine mdy_engine;
 
-mdy_engine *mdy_engine_new(void);
+/*
+ * A SESSION: what outlives an engine.
+ *
+ * The render memo has to. A rebuild is a NEW engine, and the whole point of
+ * the memo is that the previous build's renders are still reachable from this
+ * one — so it cannot live on the engine, and for a long time it lived in
+ * process globals instead. That made "how long does a memo last" a property
+ * of the process: two engines could not be given separate memos, one could
+ * not be given none, and the answer to "what is still remembered here" was
+ * not something a caller could hold or hand over.
+ *
+ * A session is that lifetime, named. Engines are made IN one and share its
+ * memo; a rebuild is a new engine in the SAME session, which is what makes
+ * the second build cheaper than the first; two sessions share nothing at all.
+ * A session is not thread-safe and nothing in this engine is.
+ */
+typedef struct mdy_session mdy_session;
+
+mdy_session *mdy_session_new(void);
+void mdy_session_free(mdy_session *session);
+
+/*
+ * Start a new memo generation — mdy-docs' `rotateRenderMemo`, called at the
+ * start of each build. A render that reached outside its document (a query,
+ * a nested render, an emit, a publish, a native) is never remembered; the
+ * rest — layouts, and any document that is only markup — are, keyed by what
+ * the document is and what it was asked with, and a rebuild may reuse the
+ * build before it. Two generations are kept, nothing older.
+ */
+void mdy_session_rotate_memo(mdy_session *session);
+
+/*
+ * `session` is required and the engine does not own it: one session holds
+ * many engines over its life, which is the point. NULL gives NULL back
+ * rather than an engine that quietly remembers nothing.
+ */
+mdy_engine *mdy_engine_new(mdy_session *session);
 void mdy_engine_free(mdy_engine *engine);
+
+/* The session an engine was made in — what to make its successor in. */
+mdy_session *mdy_engine_session(const mdy_engine *engine);
 
 /*
  * OPEN a source as a document set, then render from it.
@@ -187,15 +226,6 @@ void mdy_engine_clear_context(mdy_engine *engine);
 void mdy_engine_on_source(mdy_engine *engine,
                           void (*fn)(void *ud, const char *path), void *ud);
 
-/*
- * Start a new memo generation — mdy-docs' `rotateRenderMemo`, called at the
- * start of each build. A render that reached outside its document (a query,
- * a nested render, an emit, a publish, a native) is never remembered; the
- * rest — layouts, and any document that is only markup — are, keyed by what
- * the document is and what it was asked with, and a rebuild may reuse the
- * build before it. Two generations are kept, nothing older.
- */
-void mdy_engine_rotate_memo(void);
 /*
  * The document a message NAME addresses — its path without the extension,
  * "/" written as ".", or the `messageName` it declares — as an index; -1

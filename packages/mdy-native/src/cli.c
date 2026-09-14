@@ -737,8 +737,10 @@ static int cmd_build(int argc, char **argv) {
     int rc = 1;
     char *html = NULL;
 
-    mdy_engine_rotate_memo();      /* a build is a memo generation */
-    mdy_engine *e = mdy_engine_new();
+    mdy_session *session = mdy_session_new();
+    if (!session) fail("out of memory");
+    mdy_session_rotate_memo(session);   /* a build is a memo generation */
+    mdy_engine *e = mdy_engine_new(session);
     if (!e) fail("out of memory");
     mdy_engine_on_source(e, build_source, &sink);
 
@@ -966,11 +968,15 @@ static char *write_response(mdy_engine *e, const DocOptions *o) {
     return NULL;
 }
 
-static char *generate_output(const DocOptions *o, char **out, Outputs *emitted) {
+/* `session` is the CALLER's, and outlives this: in watch mode this runs once
+ * per pass, and what the last pass rendered is what makes the next one
+ * cheap. */
+static char *generate_output(const DocOptions *o, mdy_session *session,
+                             char **out, Outputs *emitted) {
     static char msg[4096];
     *out = NULL;
     outputs_clear(emitted);
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(session);
     if (!e) return "out of memory";
     char *cerr = load_context(e, o);
     if (cerr) { mdy_engine_free(e); return cerr; }
@@ -1156,7 +1162,7 @@ static void report(const char *msg, int error) {
 
 typedef struct { char *root; char *only; Snapshot last; } Watched;
 
-static int watch_document(DocOptions *o, Outputs *emitted) {
+static int watch_document(DocOptions *o, mdy_session *session, Outputs *emitted) {
     Watched w[2];
     int nw = 0;
     if (o->is_dir) {
@@ -1189,7 +1195,7 @@ static int watch_document(DocOptions *o, Outputs *emitted) {
     for (;;) {
         double started = now_ms();
         char *output = NULL;
-        char *err = generate_output(o, &output, emitted);
+        char *err = generate_output(o, session, &output, emitted);
         if (!err) {
             if (!o->emit_js) report_emitted(o, emitted);
             size_t n = strlen(output);
@@ -1325,9 +1331,15 @@ static int cmd_document(int argc, char **argv) {
         fprintf(stderr, "mdy: warning: input \"%s\" does not have a .mdy extension\n", o.input);
 
     Outputs emitted = { 0 };
+    /* One session for the command: in watch mode `generate_output` runs once
+     * per pass, and what the last pass rendered is what makes the next one
+     * cheap. It is freed on the way out of the one-shot path; the watch path
+     * does not return. */
+    mdy_session *session = mdy_session_new();
+    if (!session) fail("out of memory");
     if (!o.watch) {
         char *output = NULL;
-        char *err = generate_output(&o, &output, &emitted);
+        char *err = generate_output(&o, session, &output, &emitted);
         if (err) fail(err);
         if (!o.emit_js) report_emitted(&o, &emitted);
         size_t n = strlen(output);
@@ -1340,9 +1352,10 @@ static int cmd_document(int argc, char **argv) {
         err = emit_output(&o, output);
         if (err) fail(err);
         free(output);
+        mdy_session_free(session);
         return 0;
     }
-    return watch_document(&o, &emitted);
+    return watch_document(&o, session, &emitted);
 }
 
 /* ---- mdy dev ----------------------------------------------------------------------
@@ -1392,6 +1405,10 @@ typedef struct {
     char *root;                 /* absolute */
     Httpd *server;
     mdy_engine *engine;         /* the last good build's set; deliveries render against it */
+    /* Outliving every engine above, which is the point of it: a rebuild is a
+     * new engine in the SAME session, so the last build's renders are still
+     * remembered and the second build is cheaper than the first. */
+    mdy_session *session;
     Outputs pages, binaries;    /* the last good build's outputs */
     Messages messages;          /* what the last render made, taken by whoever sends */
     char **roots; size_t root_count;   /* root + every import, for static/ and the watcher */
@@ -1430,8 +1447,8 @@ static void dev_source(void *ud, const char *path) {
 /* One whole build into a fresh engine. Returns the engine, or NULL with
  * `error` set; the caller swaps it in. */
 static mdy_engine *dev_build(Dev *d, Outputs *pages, Outputs *binaries, Messages *messages, char *error, size_t error_len) {
-    mdy_engine_rotate_memo();
-    mdy_engine *e = mdy_engine_new();
+    mdy_session_rotate_memo(d->session);
+    mdy_engine *e = mdy_engine_new(d->session);
     if (!e) { snprintf(error, error_len, "out of memory"); return NULL; }
     mdy_engine_on_source(e, dev_source, d);
     if (mdy_engine_open_dir(e, d->root, error, error_len) != 0) { mdy_engine_free(e); return NULL; }
@@ -1813,6 +1830,7 @@ static void publish_document(mdy_engine *e, Messages *m) {
     Dev d = { 0 };
     d.o = &o;
     d.engine = e;
+    d.session = mdy_engine_session(e);   /* borrowed: the caller's engine owns nothing of it */
     d.messages = *m;
     memset(m, 0, sizeof *m);
     d.show_output = 1;
@@ -2092,6 +2110,8 @@ static int cmd_dev(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     Dev d = { 0 };
     d.o = &o;
+    d.session = mdy_session_new();
+    if (!d.session) { fprintf(stderr, "mdy: out of memory\n"); return 1; }
     d.root = absolute(o.root_arg);
     d.progress.enabled = on_terminal(stderr);
     double started = now_ms();

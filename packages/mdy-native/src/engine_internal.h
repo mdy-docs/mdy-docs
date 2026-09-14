@@ -95,6 +95,9 @@ typedef struct {
 } ImportCache;
 
 struct mdy_engine {
+    /* The session this was made in — not owned, and outliving this engine is
+     * the whole point of it. See engine.h. */
+    mdy_session *session;
     JsVm *vm;
     JsContext *ctx;
     /*

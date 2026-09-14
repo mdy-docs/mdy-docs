@@ -26,6 +26,15 @@
 
 static int failures;
 
+/*
+ * One session for the whole run, which is exactly what the memo's globality
+ * used to be: engines come and go, the memo does not. Several checks below
+ * depend on that — a tree rendered by one engine and found again by the next
+ * is what memo_key_checks and reopen_checks are about — so a session per
+ * engine would quietly make them test nothing.
+ */
+static mdy_session *S;
+
 /* Where an `$.emit` lands, for the check below. */
 static char last_emit_path[256];
 static char last_emit_content[4096];
@@ -37,7 +46,7 @@ static void collect_emit(void *ud, const char *path, const char *content) {
 }
 
 static void check(const char *what, const char *source, const char *expected) {
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[256];
     char *html = NULL;
     if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0)
@@ -56,7 +65,7 @@ static void check(const char *what, const char *source, const char *expected) {
 /* A document that asks for something the engine cannot do yet must FAIL,
  * naming it — not render a page quietly missing it. */
 static void refuses(const char *what, const char *source, const char *expected) {
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[256];
     char *html = NULL;
     if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0)
@@ -180,7 +189,7 @@ static void site_checks(void) {
     write_file(root, "dist/stale.mdy", "= Should not be here\n");
     write_file(root, ".hidden/secret.mdy", "= Nor this\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -295,7 +304,7 @@ static void data_file_checks(void) {
     write_file(root, "plus.yaml", "title: Before\n+++\nafter: yes\n");
     write_file(root, "list.yaml", "- one\n- two\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -381,7 +390,7 @@ static void blank_file_checks(void) {
         "% $.emit('zed.txt', JSON.stringify($.text({ path: 'zed.mdy' })))\n"
         "% $.emit('multi.txt', $.text(4) + '/' + $.text(5))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -466,7 +475,7 @@ static void markdown_render_checks(void) {
         "% $.emit('twice.html', $.html($.render({ path: 'a.md' })) + '|' + $.html($.render({ path: 'a.md' })))\n"
         "% $.emit('text.txt', JSON.stringify($.text({ path: 'a.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -555,7 +564,7 @@ static void footnote_checks(void) {
         "% $.emit('table.html', $.html($.render({ path: 'table.md' })))\n"
         "% $.emit('empty.html', $.html($.render({ path: 'empty.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -719,7 +728,7 @@ static void caret_bracket_checks(void) {
         "% $.emit('cross.html', $.html($.render({ path: 'cross.md' })))\n"
         "% $.emit('inner.html', $.html($.render({ path: 'inner.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -815,7 +824,7 @@ static void alert_checks(void) {
         "% $.emit('a.html', $.html($.render({ path: 'a.md' })))\n"
         "% $.emit('q.html', $.html($.render({ path: 'q.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -884,7 +893,7 @@ static void heading_id_checks(void) {
         "% $.emit('md.html',  $.html($.render({ path: 'dup.md' })))\n"
         "% $.emit('mdy.html', $.html($.render({ path: 'dup.mdy' })))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -973,7 +982,7 @@ static void raw_html_checks(void) {
         "% $.emit('foster.html',   $.html($.render({ path: 'foster.md' })))\n"
         "% $.emit('two.html', $.html($.render({ path: 'one.md' })) + $.html($.render({ path: 'two.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -1109,7 +1118,7 @@ static void query_order_checks(void) {
         wlen += (size_t)snprintf(want + wlen, 4 * 1024 - wlen, i == N ? "%d" : ",%d", i);
     }
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -1180,7 +1189,7 @@ static void reopen_checks(void) {
         "= {{ $.find({ who: { $exists: true } }).map((d) => d.who).join(',') }}\n"
         "---\n+++\nwho: second\n+++\n";
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     err[0] = '\0';
 
@@ -1225,9 +1234,9 @@ static void reopen_checks(void) {
  * fingerprint beside the record, and it is what mdy-docs folds its native
  * names in for.
  */
-static char *composed_text(int sanitize) {
+static char *composed_text_in(mdy_session *session, int sanitize) {
     const char *source = "before {{ $.render(1) }} after\n---\n= Card\n";
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(session);
     char err[256];
     mdy_engine_set_sanitize(e, sanitize);
     char *text = NULL;
@@ -1237,15 +1246,76 @@ static char *composed_text(int sanitize) {
     return text;
 }
 
+static char *composed_text(int sanitize) { return composed_text_in(S, sanitize); }
+
+/* ---- sessions ---------------------------------------------------------------
+ *
+ * What is NOT asserted here, and why: a memo HIT is invisible by design. A
+ * memo that changed an answer would be a bug, so "did this come from the
+ * memo" cannot be read off the output — `memo_key_checks` above gets at its
+ * shadow through a composition token, and that token is the same whether the
+ * render was remembered or made again. MDY_MEMO_DEBUG and the allocation
+ * sweep are what see hits; 4000 refusals against fixture-awkward is the
+ * measurement that the memo is doing anything at all.
+ *
+ * What IS a contract, and is here: who owns the memo, and how long it lasts.
+ * None of it could be written before — with the memo in process globals there
+ * was one, it lasted for the process, and no test could hold it or hand it
+ * over.
+ */
+static void session_checks(void) {
+    printf("\n--- engine: sessions ---\n");
+
+    ok_("an engine needs a session", mdy_engine_new(NULL) == NULL, NULL);
+
+    mdy_session *a = mdy_session_new();
+    ok_("a session is made", a != NULL, NULL);
+    if (!a) return;
+
+    mdy_engine *e = mdy_engine_new(a);
+    ok_("an engine hands back the session it was made in", mdy_engine_session(e) == a, NULL);
+    ok_("...and NULL has none", mdy_engine_session(NULL) == NULL, NULL);
+    mdy_engine_free(e);
+
+    /* The B6 property, stated as a lifetime: the engine is gone and the
+     * session is not, so the next engine in it renders against what the last
+     * one left. That is what makes a rebuild cheaper than a build. */
+    char *first = composed_text_in(a, 0);
+    char *second = composed_text_in(a, 0);
+    ok_("a session outlives its engines: the next one names the same render",
+        first && second && strcmp(first, second) == 0, second);
+
+    /* Two sessions are two lifetimes. Freeing one — which frees both its memo
+     * generations and every tree in them — leaves the other untouched, and
+     * the same source still renders to the same thing in it. */
+    mdy_session *b = mdy_session_new();
+    char *elsewhere = composed_text_in(b, 0);
+    ok_("...and another session renders it the same", 
+        first && elsewhere && strcmp(first, elsewhere) == 0, elsewhere);
+    mdy_session_free(a);
+    char *after = composed_text_in(b, 0);
+    ok_("...and freeing the first leaves the second working",
+        elsewhere && after && strcmp(elsewhere, after) == 0, after);
+    mdy_session_free(b);
+
+    free(first); free(second); free(elsewhere); free(after);
+
+    /* Rotation on nothing, and freeing nothing: both are no-ops rather than
+     * a crash, because the CLI rotates before it has built anything. */
+    mdy_session_rotate_memo(NULL);
+    mdy_session_free(NULL);
+    ok_("rotating and freeing nothing are no-ops", 1, NULL);
+}
+
 static void memo_key_checks(void) {
     printf("\n--- engine: what a document is, across builds ---\n");
 
     /* Three builds, each rotating the memo first, as the CLI does per save. */
-    mdy_engine_rotate_memo();
+    mdy_session_rotate_memo(S);
     char *once = composed_text(0);
-    mdy_engine_rotate_memo();
+    mdy_session_rotate_memo(S);
     char *again = composed_text(0);
-    mdy_engine_rotate_memo();
+    mdy_session_rotate_memo(S);
     char *stricter = composed_text(1);
 
     ok_("a composed document hands its token back in the text",
@@ -1278,7 +1348,7 @@ static void memo_key_checks(void) {
  * two builds below disagree on purpose. test/mdy.test.js has this test's twin.
  */
 static char *count_of(const char *source, int *docs) {
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[256];
     char *text = NULL;
     if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0) {
@@ -1310,9 +1380,9 @@ static void count_checks(void) {
      * key of the render it stands for, base 36, so equal tokens are one key.
      */
     const char *nested = "{{ $.render(1) }}\n---\n= {{ $.count }}\n";
-    mdy_engine_rotate_memo();
+    mdy_session_rotate_memo(S);
     char *before = count_of(nested, NULL);
-    mdy_engine_rotate_memo();
+    mdy_session_rotate_memo(S);
     char *unchanged = count_of(nested, NULL);
     ok_("a nested render's token is the key of the render it stands for",
         before && before[0] && strstr(before, "undefined") == NULL, before);
@@ -1331,17 +1401,17 @@ static void count_checks(void) {
     char *html_small = NULL, *html_big = NULL;
     const char *set2 = "= {{ $.count }}\n---\n= b\n";
     const char *set3 = "= {{ $.count }}\n---\n= b\n---\n= c\n";
-    mdy_engine_rotate_memo();
+    mdy_session_rotate_memo(S);
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char err[256];
         if (mdy_engine_open(e, set2, strlen(set2), err, sizeof err) == 0)
             html_small = mdy_engine_render(e, 0, err, sizeof err);
         mdy_engine_free(e);
     }
-    mdy_engine_rotate_memo();
+    mdy_session_rotate_memo(S);
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char err[256];
         if (mdy_engine_open(e, set3, strlen(set3), err, sizeof err) == 0)
             html_big = mdy_engine_render(e, 0, err, sizeof err);
@@ -1611,7 +1681,7 @@ static void record_key_checks(void) {
         /* A data file naming its own `path`: the walk's must still win. */
         write_file(root, "note.yaml", "path: i-said-this\ntitle: T\n");
 
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char err[512];
         emit_count = 0;
         mdy_engine_on_emit(e, collect_all, NULL);
@@ -1659,7 +1729,7 @@ static size_t occurrences(const char *haystack, const char *needle) {
 }
 
 static char *render_source(const char *source) {
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[256];
     char *html = NULL;
     if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0)
@@ -1958,7 +2028,7 @@ static void unreadable_dir_checks(void) {
         return;
     }
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     err[0] = '\0';
     int rc = mdy_engine_open_dir(e, root, err, sizeof err);
@@ -2014,7 +2084,7 @@ static void import_checks(void) {
         "% $.emit(\"who.txt\", style.findOne({ path: \"layouts/card.mdy\" }).path)\n");
     write_file(pkg, "layouts/card.mdy", "= {{ req.t }}\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -2066,7 +2136,7 @@ static void import_checks(void) {
     snprintf(site2, sizeof site2, "%s/long", root);
     write_file(site2, "main.mdy", line);
 
-    mdy_engine *e2 = mdy_engine_new();
+    mdy_engine *e2 = mdy_engine_new(S);
     int opened = mdy_engine_open_dir(e2, site2, err, sizeof err);
     ok_("an import specifier of a thousand characters does not overflow the line",
         opened != 0 || mdy_engine_count(e2) > 0, err);
@@ -2103,7 +2173,7 @@ static void deep_value_checks(void) {
         "---\n= Card\n";
 
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char err[256];
         char *html = NULL;
         if (mdy_engine_open(e, built, strlen(built), err, sizeof err) == 0)
@@ -2119,7 +2189,7 @@ static void deep_value_checks(void) {
         mdy_engine_free(e);
     }
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char err[256];
         char *html = NULL;
         if (mdy_engine_open(e, requested, strlen(requested), err, sizeof err) == 0)
@@ -2171,7 +2241,7 @@ static void odd_name_checks(void) {
         "% $.emit('roll.txt', $.find({ k: { $exists: true } })"
         ".map((x) => x.k + '=' + x.name + '|' + x.path).join(','))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -2258,7 +2328,7 @@ static void bad_image_checks(void) {
         "%   .filter((x) => x.ext === '.tif' || x.ext === '.png')\n"
         "%   .map((x) => x.name + '=' + (x.width ?? '-') + 'x' + (x.height ?? '-')).join(','))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -2324,7 +2394,7 @@ static void tag_checks(void) {
         "% $.emit('tags.txt', $.find({}).filter((d) => d.tags)"
         ".map((d) => d.path + '=' + JSON.stringify(d.tags)).join('|'))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -2407,7 +2477,7 @@ static void gc_checks(void) {
         at += (size_t)sprintf(source + at, "  k%d: v%d\n", i, i);
     at += (size_t)sprintf(source + at, "+++\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[256];
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
@@ -2526,7 +2596,7 @@ static void natives_checks(void) {
         const char *source =
             "% $.publish('handlers.invoice', { total: 3 })\n"
             "---\n+++\npath: handlers/invoice.mdy\next: .mdy\n+++\n= Invoice\n";
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char err[256];
         message_count = 0;
         last_message[0] = '\0';
@@ -2698,7 +2768,7 @@ static void resize_checks(void) {
         "% const again = $.resize(logo, { width: 20 })\n"
         "% $.emit('memo.txt', String(again.path === a.path))\n");
 
-    mdy_engine *e = mdy_engine_new();
+    mdy_engine *e = mdy_engine_new(S);
     char err[512];
     emit_count = 0;
     image_count = 0;
@@ -2897,7 +2967,7 @@ static void api_checks(void) {
 
     /* --- render_text and render_json ------------------------------------- */
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         const char *src = "% $.emit(\"a.txt\", \"x\")\n= Title\n\nbody\n";
         if (mdy_engine_open(e, src, strlen(src), err, sizeof err) != 0) {
             ok_("open for render_text", 0, err);
@@ -2913,7 +2983,7 @@ static void api_checks(void) {
     {
         /* "mdy_engine_set_context_* are NOT added; the JSON is the whole
          * request" — so `req` is exactly what was handed in. */
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         const char *src = "= Hello {{ req.who }}\n";
         if (mdy_engine_open(e, src, strlen(src), err, sizeof err) != 0) {
             ok_("open for render_json", 0, err);
@@ -2933,7 +3003,7 @@ static void api_checks(void) {
 
     /* --- encode_json ------------------------------------------------------ */
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         const char *src = "= x\n";
         mdy_engine_open(e, src, strlen(src), err, sizeof err);
         uint8_t *out = NULL;
@@ -2952,7 +3022,7 @@ static void api_checks(void) {
 
     /* --- set_response / last_response ------------------------------------- */
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         const char *src = "% res.answer = 42\n= x\n";
         mdy_engine_set_response(e, 1);
         if (mdy_engine_open(e, src, strlen(src), err, sizeof err) != 0) {
@@ -2970,7 +3040,7 @@ static void api_checks(void) {
         mdy_engine_free(e);
     }
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         const char *src = "% res.answer = 42\n= x\n";
         mdy_engine_open(e, src, strlen(src), err, sizeof err);
         char *html = mdy_engine_render(e, 0, err, sizeof err);
@@ -2982,7 +3052,7 @@ static void api_checks(void) {
 
     /* --- set_scope_json ---------------------------------------------------- */
     {
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         const char *src = "= {{ site.name }}\n";
         int ok = mdy_engine_set_scope_json(e, "site", "{\"name\":\"Uruk\"}");
         mdy_engine_open(e, src, strlen(src), err, sizeof err);
@@ -3004,12 +3074,12 @@ static void api_checks(void) {
         /* tasks: "1: a task's box is a form carrying the line and column of
          * its `[x]`; 0: a disabled checkbox." */
         const char *src = "- [ ] a task\n";
-        mdy_engine *a = mdy_engine_new();
+        mdy_engine *a = mdy_engine_new(S);
         mdy_engine_set_tasks(a, 0);
         mdy_engine_open(a, src, strlen(src), err, sizeof err);
         char *off = mdy_engine_render(a, 0, err, sizeof err);
 
-        mdy_engine *b = mdy_engine_new();
+        mdy_engine *b = mdy_engine_new(S);
         mdy_engine_set_tasks(b, 1);
         mdy_engine_open(b, src, strlen(src), err, sizeof err);
         char *on = mdy_engine_render(b, 0, err, sizeof err);
@@ -3026,11 +3096,11 @@ static void api_checks(void) {
          * is one document and `---` is a thematic break". Before OPEN, which
          * is what makes it visible in the COUNT rather than in the HTML. */
         const char *src = "= one\n---\n= two\n";
-        mdy_engine *a = mdy_engine_new();
+        mdy_engine *a = mdy_engine_new(S);
         mdy_engine_set_split(a, 1);
         mdy_engine_open(a, src, strlen(src), err, sizeof err);
 
-        mdy_engine *b = mdy_engine_new();
+        mdy_engine *b = mdy_engine_new(S);
         mdy_engine_set_split(b, 0);
         mdy_engine_open(b, src, strlen(src), err, sizeof err);
         char *one = mdy_engine_render(b, 0, err, sizeof err);
@@ -3046,7 +3116,7 @@ static void api_checks(void) {
     {
         /* sanitize: what a document may write as raw HTML. */
         const char *src = "<script>x()</script>\n";
-        mdy_engine *a = mdy_engine_new();
+        mdy_engine *a = mdy_engine_new(S);
         mdy_engine_set_sanitize(a, 1);
         mdy_engine_open(a, src, strlen(src), err, sizeof err);
         char *on = mdy_engine_render(a, 0, err, sizeof err);
@@ -3069,7 +3139,7 @@ static void api_checks(void) {
         write_file(root, "handlers/one.mdy", "+++\nmessageName: handlers.one\n+++\n= one\n");
         write_file(root, "handlers/two.mdy", "= two\n");
 
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
             ok_("open_dir for the directory checks", 0, err);
             mdy_engine_free(e);
@@ -3111,6 +3181,8 @@ static void api_checks(void) {
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    S = mdy_session_new();
+    if (!S) { printf("cannot make a session\n"); return 1; }
     printf("[main]\n");
     printf("--- engine: a document, end to end ---\n");
 
@@ -3153,7 +3225,7 @@ int main(void) {
     printf("--- engine: several documents in one source ---\n");
     {
         const char *source = "= One\n---\n= Two";
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char open_err[256];
         mdy_engine_open(e, source, strlen(source), open_err, sizeof open_err);
         int ok = mdy_engine_count(e) == 2;
@@ -3357,7 +3429,7 @@ int main(void) {
      */
     {
         last_emit_path[0] = last_emit_content[0] = '\0';
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         mdy_engine_on_emit(e, collect_emit, NULL);
         char err[256];
         const char *source =
@@ -3388,7 +3460,7 @@ int main(void) {
          * has no opinion on what producing an output means. */
         last_emit_path[0] = last_emit_content[0] = '\0';
 
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         mdy_engine_on_emit(e, collect_emit, NULL);
         char err[256];
         const char *source =
@@ -3481,7 +3553,7 @@ int main(void) {
     {
         /* `refuses` always asks for document 0, and `= One` has one — so this
          * one asks for an index that genuinely is not there. */
-        mdy_engine *e = mdy_engine_new();
+        mdy_engine *e = mdy_engine_new(S);
         char err[256];
         mdy_engine_open(e, "= One", 5, err, sizeof err);
         char *html = mdy_engine_render(e, 5, err, sizeof err);
@@ -3514,6 +3586,7 @@ int main(void) {
     caret_bracket_checks();
     query_order_checks();
     reopen_checks();
+    session_checks();
     memo_key_checks();
     count_checks();
     import_checks();
@@ -3539,6 +3612,8 @@ int main(void) {
     tag_checks();
     gc_checks();
     broker_checks();
+
+    mdy_session_free(S);
 
     if (failures) { printf("\n%d failed\n", failures); return 1; }
     printf("\nall checks passed\n");

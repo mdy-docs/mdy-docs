@@ -2470,10 +2470,12 @@ static void register_natives(mdy_engine *e) {
 
 /* ---- the pieces ------------------------------------------------------------- */
 
-mdy_engine *mdy_engine_new(void) {
+mdy_engine *mdy_engine_new(mdy_session *session) {
+    if (!session) return NULL;
     mdy_engine *e = calloc(1, sizeof *e);
-    if (e) e->split = 1;            /* a bare `---` starts a document, as the site engine reads it */
     if (!e) return NULL;
+    e->session = session;
+    e->split = 1;                   /* a bare `---` starts a document, as the site engine reads it */
     JsVmConfig cfg = {0};
     /*
      * Two knobs for testing, and they earn their place: this engine hands the
@@ -2599,6 +2601,8 @@ static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
     js_gc_unprotect(e->vm, &result);
     return highlighted;
 }
+
+mdy_session *mdy_engine_session(const mdy_engine *e) { return e ? e->session : NULL; }
 
 void mdy_engine_free(mdy_engine *e) {
     if (!e) return;
@@ -2933,7 +2937,16 @@ static mdy_doc *render_tree(mdy_engine *e, size_t index, JsValue request,
 #define MEMO_SLOTS 8192
 typedef struct { uint64_t key; mdy_doc *doc; char *text; } MemoEntry;
 typedef struct { MemoEntry slots[MEMO_SLOTS]; size_t count; } MemoTable;
-static MemoTable *memo_now, *memo_prev;
+
+/*
+ * The session, which is only ever this: the two memo generations, and the
+ * lifetime that says when they end. It is a struct rather than two file
+ * statics so that the answer to "how long is this remembered" belongs to
+ * something a caller holds — see engine.h.
+ */
+struct mdy_session {
+    MemoTable *now, *prev;
+};
 static uint64_t fnv64(uint64_t h, const void *p, size_t n) {
     const unsigned char *b = p;
     for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211u;
@@ -2949,11 +2962,28 @@ static void memo_clear(MemoTable *t) {
     t->count = 0;
 }
 
-void mdy_engine_rotate_memo(void) {
-    memo_clear(memo_prev);
-    MemoTable *old = memo_prev;
-    memo_prev = memo_now;
-    memo_now = old ? old : calloc(1, sizeof *memo_now);
+mdy_session *mdy_session_new(void) {
+    return calloc(1, sizeof(mdy_session));
+}
+
+void mdy_session_free(mdy_session *s) {
+    if (!s) return;
+    /* Both generations, not just the live one: a session ending is the only
+     * point at which the older table is anybody's to free, and it holds a
+     * whole build's trees. */
+    memo_clear(s->now);
+    memo_clear(s->prev);
+    free(s->now);
+    free(s->prev);
+    free(s);
+}
+
+void mdy_session_rotate_memo(mdy_session *s) {
+    if (!s) return;
+    memo_clear(s->prev);
+    MemoTable *old = s->prev;
+    s->prev = s->now;
+    s->now = old ? old : calloc(1, sizeof *old);
 }
 
 static MemoEntry *memo_find(MemoTable *t, uint64_t key) {
@@ -3194,10 +3224,11 @@ static void roots_release(mdy_engine *e, RenderRoots *r) {
  * Returns the entry to answer from, or NULL to go and render.
  */
 static MemoEntry *memo_take(mdy_engine *e, size_t index, uint64_t mkey) {
-    MemoEntry *hit = memo_find(memo_now, mkey);
+    MemoTable *now = e->session->now, *prev = e->session->prev;
+    MemoEntry *hit = memo_find(now, mkey);
     if (!hit) {
-        hit = memo_find(memo_prev, mkey);
-        if (hit) { memo_put(memo_now, mkey, memo_copy(hit->doc), mdy_xstrdup(hit->text)); hit = memo_find(memo_now, mkey); }
+        hit = memo_find(prev, mkey);
+        if (hit) { memo_put(now, mkey, memo_copy(hit->doc), mdy_xstrdup(hit->text)); hit = memo_find(now, mkey); }
     }
     if (memo_debug()) {
         JsValue rec = document_record(e, index);
@@ -3232,7 +3263,7 @@ static mdy_doc *render_markdown_document(mdy_engine *e, size_t index, uint64_t m
         return NULL;
     }
     /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
-    if (mkey) memo_put(memo_now, mkey, memo_copy(out), mdy_xstrdup(text ? text : ""));
+    if (mkey) memo_put(e->session->now, mkey, memo_copy(out), mdy_xstrdup(text ? text : ""));
     if (memo_debug()) fprintf(stderr, "memo kept #%zu\n", index);
     if (wrote) *wrote = text; else free(text);
     return out;
@@ -3450,7 +3481,7 @@ static void memo_keep(mdy_engine *e, uint64_t mkey, mdy_doc *out,
         size_t n = 0;
         text = js_is_array(lo) && !js_is_object(transformed) ? flatten(lo, &n) : mdy_to_html(mdy_root(out), NULL);
     }
-    memo_put(memo_now, mkey, memo_copy(out), text ? text : strdup(""));
+    memo_put(e->session->now, mkey, memo_copy(out), text ? text : strdup(""));
 }
 
 static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
@@ -3459,7 +3490,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     if (wrote) *wrote = NULL;
 
     /* The memo, first: a hit is a render that does not happen. */
-    if (!memo_now) mdy_engine_rotate_memo();
+    if (!e->session->now) mdy_session_rotate_memo(e->session);
     uint64_t mkey = index < e->count ? memo_key(e, index, request) : 0;
     MemoEntry *hit = memo_take(e, index, mkey);
     if (hit) {
