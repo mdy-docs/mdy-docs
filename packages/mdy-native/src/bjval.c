@@ -75,8 +75,8 @@ bjv *bjv_decode(const uint8_t *data, size_t len) {
      * int, float, date and pointer — so a field reordered or inserted in
      * binjson's header would have kept compiling and quietly bound the wrong
      * callback to the wrong type. engine_value.c fills the same struct with
-     * designated initialisers; binjson is a separate repository and has been
-     * edited from here (B37), which is exactly the case this guards. (§4.)
+     * designated initialisers, and binjson is a separate repository whose
+     * header can change under this one — which is the case being guarded.
      */
     bj_visitor v = {
         .on_null = on_null, .on_bool = on_bool,
@@ -127,7 +127,7 @@ static void write_json(mdy_sbuf *o, const bjv *v) {
             /* `null` for a non-finite, which is what JSON.stringify writes and
              * what yaml.c's json_number already did; and the range test ahead
              * of the cast, since (long long) of an infinity is undefined
-             * behaviour (B21). */
+             * behaviour. */
             if (v->number != v->number || v->number > 1.7976931348623157e308 ||
                 v->number < -1.7976931348623157e308)
                 snprintf(buf, sizeof buf, "null");

@@ -160,7 +160,7 @@ static int core_int(const char *s, size_t len, double *out) {
      * strtod — answer 100000000000000000, which is the nearest double. Both
      * are integers a document can plausibly carry (an id, a timestamp in
      * nanoseconds), and the first seventeen significant digits are where it
-     * starts to show. That was B38.
+     * starts to show.
      *
      * Leading zeros are skipped before the copy so `0000…0001` stays short,
      * and a span too long for `tmp` keeps the accumulated value rather than a
@@ -1115,10 +1115,9 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
     /*
      * Directives and document markers: one document per stream here.
      *
-     * A `...` that CLOSES the one document is ordinary single-document YAML,
-     * and was refused along with the rest — `a: 1\n...\n` errored where node
-     * reads `{a: 1}`, in a data file and in `+++` front matter alike. That was
-     * B28. It closes the document when nothing of substance follows it, which
+     * A `...` that CLOSES the one document is ordinary single-document YAML:
+     * `a: 1\n...\n` is `{a: 1}`, in a data file and in `+++` front matter
+     * alike. It closes the document when nothing of substance follows it, which
      * is what `next_content` answers: blanks and comments after the marker are
      * fine, anything else is the second document this does not support. The
      * line below already made the symmetric allowance for a leading `---`.

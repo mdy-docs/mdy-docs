@@ -5,9 +5,9 @@
  * bytes, unparsed — because CommonMark says a raw `<div>` passes through and
  * says nothing about what it means. Somebody has to turn those bytes into
  * elements, and mdy-docs' somebody is `rehype-raw`, which puts the WHOLE tree
- * through an HTML5 parser. There was no such stage here, so a raw node stayed
- * one: no ill-formed tag was ever repaired and an unclosed one escaped its own
- * document onto the page. (B49.)
+ * through an HTML5 parser. Without that stage a raw node stays one: no
+ * ill-formed tag is repaired, and an unclosed one escapes its own document
+ * onto the page.
  *
  * NOT SERIALISE-AND-REPARSE, which is the obvious shape and the wrong one.
  * Measured over the corpus, serialising this tree to HTML and parsing it back
@@ -70,11 +70,11 @@ typedef struct {
  * a property upstream claims. Reading 163 files to add it to a pinned
  * dependency is the wrong shape of work, and a fork to maintain.
  *
- * `mdy_oom_exit` is the right answer and was already here: it says so on
- * stderr and exits non-zero, which is exactly what the sweep's invariant asks
- * a run that cannot produce the site to do. The 490 crashes are 490 clean
- * refusals now, and the HTML parse is inside check-alloc rather than the one
- * stage of a `.md` document's making that it could not reach. (B51.)
+ * `mdy_oom_exit` is the answer: it says so on stderr and exits non-zero,
+ * which is what the allocation sweep's invariant asks of a run that cannot
+ * produce the site. Without it the HTML parse is the one stage of a `.md`
+ * document's making that the sweep cannot reach, because a refused allocation
+ * there is a crash rather than a refusal.
  *
  * It is better in a real out-of-memory too: a build that cannot allocate says
  * so instead of dying in a parser's inner loop.
@@ -184,7 +184,7 @@ static void feed_text(Raw *r, const char *s, size_t len) {
 
     if (len == 0) {
         /* Nothing to tokenize, and an empty text node is still a node — the
-         * one thing that has to be pushed. See B53 in in_body.c. */
+         * one thing that has to be pushed. See the local patch in in_body.c. */
         push_text(r, "", 0);
         return;
     }

@@ -121,9 +121,9 @@ char *mdy_yaml_to_json(const mdy_yaml_node *node);
  * this, a caller that HAS values — a file's identity, a computed list of tags
  * — can only get them in by printing YAML and parsing it back, and then every
  * one of those values has to be escaped on the way out and can be misread on
- * the way in. That is what B8 was: identity pasted in with `%s`, so a path
- * with a quote in it made the block unparseable and the document lost its
- * name, its size and its date on a build that reported success.
+ * the way in — a path with a quote in it makes the block unparseable, and the
+ * document loses its name, its size and its date on a build that reports
+ * success.
  *
  * The document that comes back is an ordinary `mdy_yaml`: `mdy_yaml_root`
  * reads it, `mdy_yaml_free` frees it, and nothing downstream can tell it from

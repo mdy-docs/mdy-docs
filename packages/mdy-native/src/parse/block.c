@@ -298,8 +298,7 @@ static void separate(mdy_doc *doc, mdy_node *parent) {
  * a stream's documents on purpose — two articles on one page must not both own
  * `#introduction`.
  */
-/** Every text descendant, concatenated — a node's rendered content. */
-/* How much node_text would write, so a caller can hold all of it. (B20.) */
+/* How much node_text would write, so a caller can hold all of it. */
 static size_t node_text_len(const mdy_node *n) {
     if (n->type == MDY_TEXT) return n->text ? strlen(n->text) : 0;
     size_t total = 0;
@@ -1032,13 +1031,11 @@ static size_t parse_element(mdy_doc *doc, mdy_node *parent,
 enum { ALIGN_NONE = 0, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT };
 
 /*
- * One row's cells, however many there are.
+ * One row's cells, HOWEVER MANY THERE ARE. node has no column limit, so a
+ * fixed array here is a table's columns silently leaving the document.
  *
- * Every site below used `[64]`, so a table's 65th column and everything after
- * it silently left the document — the widest thing a data table plausibly is,
- * and node has no limit at all. A row cannot hold more cells than it has
- * bytes, so one allocation sized from the line always fits; an ordinary table
- * never leaves the stack. (B20.)
+ * A row cannot hold more cells than it has bytes, so one allocation sized
+ * from the line always fits; an ordinary table never leaves the stack.
  */
 enum { CELLS_INLINE = 64 };
 
@@ -1216,7 +1213,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
      * One buffer for the whole table: the header row is the widest thing in
      * it, a body row is padded out to that width, and the caption's split
      * borrows it too. Wide enough for the header is wide enough for all of
-     * them. (B20.)
+     * them.
      */
     Cells cells;
     cells_init(&cells, &lines[i]);
@@ -1772,11 +1769,9 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
              * the source leaves the slashes in an id nothing can link to.
              */
             {
-                /*
-                 * All of the heading's text, not the first kilobyte: the slug
-                 * comes from this, so `char rendered[1024]` gave a long
-                 * heading an id that stopped mid-word. (B20.)
-                 */
+                /* ALL of the heading's text, not the first kilobyte: the
+                 * slug comes from this, and a fixed buffer gives a long
+                 * heading an id that stops mid-word. */
                 char stack_text[1024];
                 size_t need = node_text_len(h) + 1;
                 size_t text_cap = need > sizeof stack_text ? need : sizeof stack_text;

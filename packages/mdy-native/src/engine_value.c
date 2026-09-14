@@ -68,9 +68,9 @@ JsValue key(JsVm *vm, const char *s) {
      * set_val builds its key INSIDE, after the value is rooted. But js_atom of
      * an atom that is ALREADY interned allocates nothing, so the VM's own
      * gc_stress never collects here, and every "_id"/"path" after the first
-     * one in a process is already interned. That is the exact hole B13 lived
-     * in: four reads of an unrooted object were correct only because the atom
-     * they asked for happened to be old.
+     * one in a process is already interned. So a read of an UNROOTED object
+     * is correct only for as long as the atom it asks for happens to be old,
+     * which is a hole that does not show until the day it does.
      *
      * So under MDY_GC_STRESS a key costs a collection whether it interns or
      * not, and the rule is enforced rather than assumed. It found twelve
@@ -126,8 +126,8 @@ void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v) {
  * only from the C stack: C does not say which argument is evaluated first, and
  * building the key is a safe point, so the object can be collected before the
  * get it was an argument to. It survives when the atom is already interned,
- * which is nearly always, which is why it survived at all (B13). All
- * forty-three say `get_val` now.
+ * which is nearly always — which is why such a bug hides. All forty-three say
+ * `get_val` now.
  *
  * Rooting the object here — and building the key after, as set_val does —
  * makes the whole shape safe by construction, including for an object that is
@@ -144,8 +144,8 @@ void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v) {
  * needs js_gc_protect of its own.
  *
  * js_object_get allocates nothing (a hash lookup, and js_object_key_lookup
- * only FINDS an atom), so the get is not itself a safe point. The whole of
- * B13 was the key.
+ * only FINDS an atom), so the get is not itself a safe point. The key is the
+ * whole of the hazard.
  */
 JsValue get_val(mdy_engine *e, JsValue obj, const char *name) {
     js_gc_protect(e->vm, &obj);
@@ -374,8 +374,8 @@ int js_to_binjson(mdy_engine *e, bj_builder *b, JsValue v) {
          * `$.find({ big: 1/0 })` is stringified to `{"big":null}`, so it asks
          * the store for null and matches nothing, where this used to ask for
          * infinity and match a record that held one. And `(int64_t)d` of an
-         * infinity or a NaN is undefined behaviour, which is B21: the cast ran
-         * before anything had checked the range it was being checked against.
+         * infinity or a NaN is undefined behaviour, so the range test has to
+         * come before the cast rather than after it.
          */
         if (d != d || d > 1.7976931348623157e308 || d < -1.7976931348623157e308)
             return bj_put_null(b);

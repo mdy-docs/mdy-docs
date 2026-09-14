@@ -160,7 +160,6 @@ static size_t match_port(const Text *t, size_t i) {
      * there made a valid port look too large, and on a buffer that is not
      * NUL-terminated it was a read past the end. Exactly five digits are known
      * to be here — the loop above counted them — so five is what this reads.
-     * (B22.)
      */
     if (digits == 5) {
         unsigned v = 0;

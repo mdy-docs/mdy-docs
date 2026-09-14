@@ -341,7 +341,7 @@ JsValue key(JsVm *vm, const char *s);                   /* ...interned, for a pr
 char *js_string_utf8(JsValue v);                        /* back again; caller frees, NULL if not a string */
 void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v);
 /* ...and the read. Roots `obj` before interning the name, which is a safe
- * point; use it instead of js_object_get(vm, x, key(vm, "n")) — see B13. */
+ * point; use it instead of js_object_get(vm, x, key(vm, "n")). */
 JsValue get_val(mdy_engine *e, JsValue obj, const char *name);
 void push_item(mdy_engine *e, JsValue array, JsValue v);
 

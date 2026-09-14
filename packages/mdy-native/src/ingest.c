@@ -21,9 +21,9 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
              */
             double v = mdy_yaml_number(node);
             /*
-             * The range test comes BEFORE the cast, which is the whole of B21
-             * here: `.inf` and `.nan` are legal YAML, they reach this line,
-             * and `(int64_t)v` of either is undefined behaviour. It happened
+             * The range test comes BEFORE the cast, and that ordering is the
+             * whole of it: `.inf` and `.nan` are legal YAML, they reach this
+             * line, and `(int64_t)v` of either is undefined behaviour. It happened
              * to answer with a sentinel that failed the equality and fell
              * through to the float, which is why nothing had noticed.
              *
@@ -44,8 +44,6 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
              * range and abort the whole DECODE, so one such integer made the
              * document it was in disappear from every query — every other key
              * of that record with it, insert reporting success, nothing said.
-             * That was B37, and for one commit this function worked around it
-             * by storing the digits as a string.
              *
              * binjson falls back to FLOAT there now, which is what its JS
              * reference always did, so the workaround is gone and the value
@@ -99,7 +97,7 @@ int mdy_bj_document(bj_builder *b, const uint8_t oid[12],
             const char *k = mdy_yaml_key(map, i, &klen);
 
             /* The store's id is the store's: a document cannot declare one,
-             * and this writes it below, last, where mdy-docs has it. (B31.) */
+             * and this writes it below, last, where mdy-docs has it. */
             if (klen == 3 && memcmp(k, "_id", 3) == 0) continue;
 
             /* Already written, because an earlier mapping had it. */
@@ -134,10 +132,9 @@ int mdy_bj_document(bj_builder *b, const uint8_t oid[12],
 
     /*
      * `_id` LAST, which is where mdy-docs has it: nisaba's JS insert adds it
-     * after spreading the document, so `Object.keys` gives
-     * `[…, "_id"]` there and gave `["_id", …]` here. Key order is not
-     * cosmetic — a document that serialises its own record, or walks its keys,
-     * produced different bytes on the two engines. (B31.)
+     * after spreading the document, so `Object.keys` gives `[…, "_id"]`.
+     * Key order is not cosmetic: a document that serialises its own record, or
+     * walks its keys, produces different bytes if this differs.
      */
     if (bj_put_key(b, (const uint8_t *)"_id", 3) != 0) return -1;
     if (bj_put_oid(b, oid) != 0) return -1;

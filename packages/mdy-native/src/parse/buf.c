@@ -12,10 +12,9 @@
  * that knows it is about to write a page does not want to double from 256 to
  * get there. Zero means 256.
  *
- * `ok` is the error channel, and it is the reason this is not just
- * `mdy_xmalloc` (the engine's answer to the same problem): a parse has a
- * caller to report to, and B24 turned every one of those reports into a real
- * one. A buffer that could not grow stops taking bytes and says so; nothing
+ * `ok` is the error channel, and it is why this is not just `mdy_xmalloc`
+ * (the engine's answer to the same problem): a parse has a caller to report
+ * to. A buffer that could not grow stops taking bytes and says so, so nothing
  * downstream reads a truncated result believing it whole.
  */
 #include <stdlib.h>

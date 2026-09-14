@@ -81,11 +81,11 @@ static int acc_span(Acc *a, size_t start, size_t len) {
  * so a chunk's own line endings are `\n` whatever the file used, and the
  * boundaries land where the separators were.
  *
- * A CRLF file gets an EXTRA EMPTY LINE per line, which is not a tidy rule and
- * is not ours: it is what mdy-docs does, and B30 is the decision to match it.
+ * A CRLF file gets an EXTRA EMPTY LINE per line. That is not a tidy rule and
+ * it is not ours — it is what mdy-docs does, and matching it is deliberate.
  *
- * The path there, because it is worth writing down rather than rediscovering.
- * `splitDocuments` splits on `\n` alone, so every line keeps its `\r`. The
+ * Why it happens, because it is not guessable from here. `splitDocuments`
+ * splits on `\n` alone, so every line keeps its `\r`. The
  * script compiler then puts each line inside a BACKTICK TEMPLATE LITERAL
  * (src/parse/script.js), and ECMAScript normalises a `<CR>` inside one to
  * `<LF>` — so `"crlf line\r"` is the string `"crlf line\n"` before anything

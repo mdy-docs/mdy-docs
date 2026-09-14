@@ -602,9 +602,8 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
          * so all four are declared before the first of those jumps. */
         mdy_yaml *tag_map = NULL;
         int oom = 0;
-        /* Identity is VALUES, built by the walk — there is no text in between
-         * to parse, so there is nothing here that can fail and nothing that
-         * needed escaping to get here. (B8.) */
+        /* Identity is VALUES, built by the walk — no text in between to
+         * parse, so nothing here can fail and nothing needed escaping. */
         if (e->identity.pre && i < e->identity.count && e->identity.pre[i])
             maps[used++] = mdy_yaml_root(e->identity.pre[i]);
         if (matter) maps[used++] = mdy_yaml_root(matter);
@@ -1088,10 +1087,10 @@ static JsValue document_record(mdy_engine *e, size_t at) {
 /*
  * The record without its store id.
  *
- * `$.data(i)` carries no `_id` under mdy-docs, and did here — the same rule
- * wrap()'s `__answer` already applies to `res.data`, written once more for the
- * native. A store id says when a set was opened, not what a document is; a
- * document that serialises its own data was putting one in. (B31.)
+ * `$.data(i)` carries no `_id` under mdy-docs — the same rule wrap()'s
+ * `__answer` already applies to `res.data`, written once more for the native.
+ * A store id says when a set was opened, not what a document is, so a document
+ * that serialises its own data must not carry one.
  */
 static JsValue record_without_id(mdy_engine *e, JsValue rec) {
     if (!js_is_object(rec)) return rec;
@@ -1099,9 +1098,9 @@ static JsValue record_without_id(mdy_engine *e, JsValue rec) {
      * `rec` rooted BEFORE the object that will hold the copy, because
      * js_object_new allocates and the record arrives here reachable only from
      * the C stack — `record_without_id(e, document_record(e, index))` hands
-     * over a value nothing else holds. Rooting it second cost sixteen checks
-     * under MDY_GC_STRESS, which is the same mistake B13 was and the reason
-     * that stress mode exists.
+     * over a value nothing else holds. Rooting it second loses the record,
+     * which is what MDY_GC_STRESS is for — sixteen checks fail under it and
+     * none without.
      */
     js_gc_protect(e->vm, &rec);
     JsValue out = js_object_new(e->ctx);
@@ -2768,9 +2767,9 @@ static char *wrap(mdy_engine *e, const char *statements) {
     /*
      * memcpy and not snprintf for the big pieces: snprintf returns `int`, and
      * a document over two gigabytes overflows it — the cast to size_t then
-     * makes `out + o` an address nowhere near the buffer. AddressSanitizer
-     * reported `negative-size-param` on a 3.6 GB input, which is where B27
-     * came from. Pathological, and memcpy is also the simpler thing to read.
+     * makes `out + o` an address nowhere near the buffer — AddressSanitizer
+     * calls it `negative-size-param`. Pathological, and memcpy is also the
+     * simpler thing to read.
      *
      * The scope lines keep snprintf: each is one short identifier twice, the
      * reservation above gives it 2*len + 32, and its return cannot overflow an
@@ -3123,9 +3122,10 @@ static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
      * a directory and every OTHER document keeps its fingerprint, so a second
      * build in the same process serves each of them the render made when the
      * set was one document smaller — `$.count` frozen at the old number, in a
-     * page that is otherwise correct. mdy-docs had this bug (B33) for the same
-     * reason in reverse: it embeds the count in the program text and keyed the
-     * memo on the text it had BEFORE the count was substituted in. Its
+     * page that is otherwise correct. mdy-docs can get this wrong the same
+     * way in reverse: it embeds the count in the program text, so keying the
+     * memo on the text BEFORE the count is substituted in has the same fault.
+     * Its
      * fingerprint carries the set's size now, so the two agree here.
      */
     char knobs[32];

@@ -42,7 +42,7 @@
 #include "props_table.h"
 
 /* Attribute names are ASCII by construction: parse_element only admits
- * [A-Za-z_:][A-Za-z0-9._:-]* as a name. mdytext.h's, since B43's sweep of §2. */
+ * [A-Za-z_:][A-Za-z0-9._:-]* as a name. */
 #define lower_ascii mdy_lower_ascii
 
 /** The schema's property name for a normalized attribute name, or NULL. */

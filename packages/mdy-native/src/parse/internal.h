@@ -197,7 +197,6 @@ void mdy_html_write_attribute(mdy_buf *b, const mdy_prop *p);
  * elements and what a document got wrong is repaired. Rebuilds `root` in
  * place. 0, or -1 when the parse could not be made — which is a document that
  * could not be read, NOT a reason to keep the tree that went in. See raw.c.
- * (B49.)
  */
 int mdy_raw_reparse(mdy_doc *doc, mdy_node *root);
 int mdy_tag_allowed(const char *tag);
@@ -226,7 +225,7 @@ int mdy_is_letter_or_number_cp(uint32_t cp);
 const char *mdy_resolve_slug(mdy_doc *doc, const char *s, size_t len, size_t *out_len);
 
 /* A heading's id: the slug above, made unique against this document's other
- * headings and recorded. Both front ends call it; see inline.c. (B52.) */
+ * headings and recorded. Both front ends call it; see inline.c. */
 const char *mdy_heading_id(mdy_doc *doc, const char *text, size_t len, size_t *out_len);
 
 /* ---- links (src/linkify.c) ----------------------------------------------- */

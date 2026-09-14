@@ -47,10 +47,10 @@ static int sockets_ready(void) { return 1; }
 #endif
 
 /*
- * Every wait here is bounded, which none of them were. A broker that accepts
- * and then says nothing hung `mdy build --publish`, `mdy dead` and the dev
- * server's registration for as long as it cared to hold the socket — measured
- * at "still running after 25s", and it would have been forever. (B16.)
+ * EVERY wait here is bounded. A broker that accepts and then says nothing
+ * would otherwise hang `mdy build --publish`, `mdy dead` and the dev server's
+ * registration for as long as it cared to hold the socket — forever, in
+ * practice.
  *
  * Two numbers. CONNECT is short because the broker is local by default and a
  * refused connection already answers instantly; this is for the host that
@@ -168,9 +168,9 @@ static int parse_url(const char *url, char *host, size_t host_cap, char *port, s
     /*
      * An IPv6 literal is bracketed, and the brackets are what tell its colons
      * apart from the port's. Without this the first colon inside the address
-     * was read as the port separator, so `http://[::1]:8080` asked the
-     * resolver for a host called "[". getaddrinfo wants the address WITHOUT
-     * the brackets, so they are stripped here rather than passed on. (B16.)
+     * reads as the port separator and `http://[::1]:8080` asks the resolver
+     * for a host called "[". getaddrinfo wants the address WITHOUT the
+     * brackets, so they are stripped here rather than passed on.
      */
     const char *colon;
     size_t hn;
@@ -196,8 +196,8 @@ static int parse_url(const char *url, char *host, size_t host_cap, char *port, s
 /*
  * The deadline is on the whole write, not on each send. SO_SNDTIMEO restarts
  * every time a send manages one byte, so a peer reading a trickle holds this
- * for as many multiples of the timeout as it likes — the same thing that
- * measured 13.7s against a 5s timeout in httpd.c. (B16, B17.)
+ * for as many multiples of the timeout as it likes — 13.7s against a 5s
+ * timeout, measured in httpd.c.
  */
 static int send_all(sock_t s, const void *data, size_t len, long long deadline) {
     const char *p = data;
@@ -286,9 +286,9 @@ int http_request(const char *method, const char *url, const char *content_type,
      * send_all. */
     set_io_timeouts(s, budget);
 
-    /* Measured, then allocated: `hn` is what snprintf WOULD have written, so
-     * a request line past the buffer used to be sent from beyond the end of
-     * it. Same mistake as httpd_respond's and engine_walk's (§3, B27). */
+    /* Measured, then allocated. `hn` is what snprintf WOULD have written,
+     * so sending `hn` bytes out of a fixed buffer sends from beyond the end of
+     * it — the same shape httpd_respond and engine_walk guard against. */
     static const char REQUEST[] =
         "%s %s HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\nAccept: */*\r\n%s%s%s"
         "Content-Length: %zu\r\n\r\n";
@@ -312,11 +312,10 @@ int http_request(const char *method, const char *url, const char *content_type,
 
     /*
      * Until the peer closes, was the whole of it: a broker that accepted and
-     * said nothing held this forever, and one that said too much grew the
-     * buffer until the allocation failed — `realloc`'s answer went straight
-     * back into `buf`, so that arrived as a write through NULL rather than as
-     * an error. The deadline, the cap and the check are one loop's worth of
-     * change between them. (B16; the unchecked realloc is one line of B24.)
+     * says nothing holds this forever, and one that says too much grows the
+     * buffer until the allocation fails — and `realloc`'s answer going
+     * straight back into `buf` turns that into a write through NULL rather
+     * than an error. The deadline, the cap and the check are all three.
      */
     size_t cap = 65536, len = 0;
     uint8_t *buf = malloc(cap + 1);

@@ -287,7 +287,7 @@ static const char *extension_of(const char *path) {
     return dot ? dot : "";
 }
 
-/* mdytext.h's, since B43's sweep of §2 gave it a home both sides can see. */
+/* mdytext.h's, which is the home both sides can see. */
 #define ieq mdy_ieq
 
 /* ---- what a render produced besides its own text ------------------------------
@@ -312,9 +312,9 @@ static void outputs_put(Outputs *o, const char *path, const uint8_t *bytes, size
             return;
         }
     }
-    /* B24 named this one and parked it, and the sweep could not reach it:
-     * `mdy build` writes each page as it is produced, and only the dev server
-     * holds them. A dropped page here is a site served with a file missing,
+    /* The allocation sweep cannot reach this: `mdy build` writes each page
+     * as it is produced, and only the dev server holds them. A dropped page
+     * here is a site served with a file missing,
      * which is the failure that finding is about. See xalloc.h. */
     if (o->count == o->cap) {
         o->cap = o->cap ? o->cap * 2 : 16;
@@ -427,9 +427,9 @@ static int publish_messages(mdy_engine *e, const Messages *m, const char *broker
  * --draft` looked for a site called `--draft` and blamed the entry script for
  * not being in it; `mdy build site --out` built a directory called `--out`.
  * The command failed, which is something, but it failed saying the wrong
- * thing — and document mode in this same binary had rejected unknown options
- * properly all along, with a message that even names the way out. These are
- * that message, so the four commands answer alike. (B19.)
+ * thing. Document mode in this same binary rejects unknown options with a
+ * message that names the way out; these are that message, so the four
+ * commands answer alike.
  */
 static void fail_unknown_option(const char *a) {
     char m[256];
@@ -713,9 +713,9 @@ static int copy_static(const char *root, BuildSink *s) {
     snprintf(dir, sizeof dir, "%s/static", root);
     /*
      * NULL means the directory cannot be READ -- one that is not there comes
-     * back as an empty listing (fsx.h's contract, B25). Returning 0 for both
-     * meant an unreadable or unallocatable static/ produced a site missing
-     * every asset, reported as a successful build.
+     * back as an empty listing (fsx.h's contract). Returning 0 for both would
+     * make an unreadable or unallocatable static/ a site missing every asset,
+     * reported as a successful build.
      */
     char *listing = fsx_list(dir, ".", NULL);
     if (!listing) {
@@ -784,13 +784,11 @@ static int cmd_build(int argc, char **argv) {
     BuildSink sink = { .out = out_abs, .quiet = quiet, .progress = &progress };
     Messages messages = { 0 };
     /*
-     * One exit, for the reason render_tree_out has one: this had five, and no
-     * two of them freed the same things. The engine survived two, `out_abs`
-     * survived four, and the messages a build collected survived ALL of them —
-     * so every `$.publish` leaked its name and its data, on the success path
-     * as much as on the failures (B34). `mdy dev` and document mode each
-     * already wrote this cleanup out; this is the third copy, and the first
-     * one that runs.
+     * ONE exit, for the reason render_tree_out has one. Several exits here
+     * means several cleanups, and no two of them free the same things — the
+     * messages a build collects are the easiest to miss, so every `$.publish`
+     * leaks its name and its data on the success path as much as the
+     * failures.
      */
     int rc = 1;
     char *html = NULL;
@@ -1453,10 +1451,10 @@ typedef struct {
     /*
      * Which interfaces to answer on. Loopback unless --host, which is the
      * opposite of what this used to do: it bound 0.0.0.0 always, so every
-     * machine on the network could reach a server that rebuilds a directory
-     * on disk and, with a broker, renders whatever a POST tells it to. node's
-     * `server.listen(port)` binds everything too, and this is the one place
-     * worth diverging — node has no delivery endpoint to reach. (B17.)
+     * machine on the network can reach a server that rebuilds a directory on
+     * disk and, with a broker, renders whatever a POST tells it to. node's
+     * `server.listen(port)` binds everything, and this is the one place worth
+     * diverging from it — node has no delivery endpoint to reach.
      */
     int expose;
 } DevOptions;
@@ -1552,16 +1550,14 @@ static void dev_send(Dev *d, int dedupe, int announce) {
         snprintf(fp, n, "%s%c%s", name, 1, d->messages.json[i]);
 
         /*
-         * ONE ENTRY PER NAME, holding that name's LAST value. (B35.)
+         * ONE ENTRY PER NAME, holding that name's LAST value.
          *
-         * This kept every (name, value) it had ever sent, which did two
-         * things nobody chose. It grew by an entry per distinct value for as
-         * long as the server was up -- and the lookup is this loop, so a
-         * session paid for its own history on every rebuild. And a value that
-         * changed BACK was silently dropped: publishing n:1, then n:2, then
-         * n:1 again sent twice, and a consumer never learned it had returned.
-         * Measured, before this: `1 -> 2 -> 1 -> 3` produced three sends, not
-         * four.
+         * Keeping every (name, value) ever sent does two things nobody wants.
+         * It grows by an entry per distinct value for as long as the server is
+         * up -- and the lookup is this loop, so a session pays for its own
+         * history on every rebuild. And a value that changes BACK is then
+         * silently dropped: `1 -> 2 -> 1 -> 3` sends three times, not four,
+         * and a consumer never learns the value returned.
          *
          * What the list is for is not sending the SAME thing twice, and that
          * is a question about the value a name has NOW. So a name is found,
@@ -1622,9 +1618,9 @@ static void dev_send(Dev *d, int dedupe, int announce) {
          * answered a publish with anything but a 2xx kept its response body
          * for the life of the process. That is not one leak: it is one per
          * refused message per rebuild, in a server meant to run all day —
-         * measured at 57 leaks and 89,984 bytes after twenty rebuilds against
-         * a broker returning 500, with the leaked blocks being the refusal
-         * bodies themselves. (B15.)
+         * measured at 57 leaks and 89,984 bytes after twenty rebuilds
+         * against a broker returning 500, the leaked blocks being the refusal
+         * bodies themselves.
          *
          * The zeroing is what lets the free be unconditional: `encoded` can
          * fail before http_request has touched `r` at all. The old expression
@@ -1769,11 +1765,10 @@ static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_
         /*
          * No page of that name, and this is not the dead-letter channel: the
          * messages are RETURNED, so the broker's retry and dead-letter policy
-         * has them. `is_dead` was already a parameter and this branch ignored
-         * it — which only showed on the local bus, because dev_deliver guards
-         * before it calls and dev_drain does not. So the same situation was
-         * finished-and-forgotten in-process and dead-lettered over HTTP.
-         * (B26.)
+         * has them. `is_dead` has to be honoured HERE as well: dev_deliver
+         * guards before it calls and dev_drain does not, so ignoring it makes
+         * the same situation finished-and-forgotten in-process and
+         * dead-lettered over HTTP.
          *
          * It is reachable without anything exotic: publish to a page, delete
          * the page, rebuild. The name was valid when the message was made.
@@ -2221,7 +2216,7 @@ static int cmd_dev(int argc, char **argv) {
          * secret. Anyone who could reach the port could work it out and POST
          * a message for this server to render. If the OS will not give us
          * randomness we say so and drop to offline rather than register with
-         * a token we cannot vouch for. (B17.)
+         * a token we cannot vouch for.
          */
         if (httpd_secret(d.token, sizeof d.token) != 0) {
             fprintf(stderr, "%smdy: no source of randomness for the delivery token; "

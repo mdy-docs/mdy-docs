@@ -158,7 +158,7 @@ static void newline(Build *b) {
      * adjacent text nodes — nothing produces them and the serialiser would
      * not tell them apart — so `- hi\n  > q` has to give t("hi\n") and not
      * t("hi") t("\n"). It only arises where inline content is followed by a
-     * block, which is a tight list item and nowhere else. (B44.)
+     * block, which is a tight list item and nowhere else.
      */
     if (parent->last && parent->last->type == MDY_TEXT && parent->last->text) {
         size_t n = strlen(parent->last->text);
@@ -303,11 +303,10 @@ static void entity(Build *b, const char *s, size_t len) {
 
 /*
  * md4c hands an attribute as a run of SUBSTRINGS so entities can be resolved
- * in it, and this took `a->text` whole — so `[x](http://a?b=1&amp;c=2)` kept
- * the literal `&amp;` and the HTML writer escaped it again, giving
- * `href="http://a?b=1&#x26;amp;c=2"` where node has `&#x26;`. The comment here
- * said "for the common case there is exactly one"; a query string is the
- * common case where there is not. (B23.)
+ * in it, and every one of them has to be walked. Taking `a->text` whole keeps
+ * a literal `&amp;` for the HTML writer to escape again: `[x](http://a?b=1&amp;c=2)`
+ * comes out `href="http://a?b=1&#x26;amp;c=2"` where node has `&#x26;`. A query
+ * string is the common case with more than one substring.
  *
  * The substrings are `substr_offsets[i]`..`[i+1]`, ending when the offset
  * reaches `size` (md4c.h states both invariants). An entity the table does not
@@ -442,9 +441,9 @@ static void set_attribute(Build *b, mdy_node *el, const char *name,
         /*
          * An empty DESTINATION is still a destination: `[t](<>)` is a link to
          * the current document, `normalizeUri('')` is `''`, and
-         * mdast-util-to-hast sets it — so node writes `href=""` where this
-         * wrote no attribute at all. An empty TITLE is not set, on either
-         * side, which is why this depends on `uri` and not on the name. (B42.)
+         * mdast-util-to-hast sets it, so node writes `href=""`. An empty
+         * TITLE is not set, on either side, which is why this depends on
+         * `uri` and not on the name.
          */
         if (uri) mdy_set_string(b->doc, el, name, "", 0);
         return;
@@ -498,10 +497,11 @@ static void set_attribute(Build *b, mdy_node *el, const char *name,
  * and the definition are keyed on. md4c has already collapsed and trimmed the
  * label's whitespace, which is the rest of micromark's normalizeIdentifier.
  *
- * ASCII lowercase, where JavaScript's toLowerCase is Unicode-aware. See the
- * review's B45: md4c pairs a reference with its definition by its own rules,
- * and for a label needing more than ASCII folding the two parsers stop
- * agreeing about that well before they get here.
+ * ASCII lowercase, where JavaScript's toLowerCase is Unicode-aware. That is
+ * not the divergence it looks like: md4c pairs a reference with its
+ * definition by its own rules, and for a label needing more than ASCII
+ * folding the two parsers stop agreeing about the pairing well before they
+ * get here.
  */
 static const char *note_slug(Build *b, const MD_ATTRIBUTE *label) {
     size_t len = (label && label->text) ? label->size : 0;
@@ -778,7 +778,7 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             }
             append(b, li);
             /*
-             * ALWAYS wrapped, tight or loose. (B44.)
+             * ALWAYS wrapped, tight or loose.
              *
              * The other block parents take `wrap(nodes, loose)`, and a list
              * item does not: mdast-util-to-hast's listItem walks its children
@@ -1008,9 +1008,9 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
         }
 
         case MD_BLOCK_TABLE:
-            /* The newlines wrap() puts inside a table are foster-parented out
-             * of it by the HTML parse, which is raw.c's job now and used to be
-             * a pass written out here. See B49. */
+            /* The newlines wrap() puts inside a table are foster-parented
+             * out of it by the HTML parse — raw.c's job, not one written
+             * out here. */
             close_block(b);
             return 0;
 
@@ -1124,9 +1124,10 @@ static int enter_span(MD_SPANTYPE type, void *detail, void *ud) {
              * `alt` reserved HERE, between src and title, and filled on the
              * way out once the children have been gathered. mdy-docs emits
              * `src, alt, title` and this emitted `src, title, alt`, because
-             * alt is not known until the span closes — but new_prop replaces a
-             * repeated name in place, so claiming the slot early is enough.
-             * Every <img> with a title differed before. (B39.)
+             * alt is not known until the span closes — but new_prop replaces
+             * a repeated name in place, so claiming the slot early is enough.
+             * Without it every <img> with a title has its attributes in the
+             * wrong order.
              */
             mdy_set_string(b->doc, img, "alt", "", 0);
             set_attribute(b, img, "title", &d->title, 0);
@@ -1203,7 +1204,7 @@ static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
             return 0;
         case MD_TEXT_HTML:
             /*
-             * A RAW node, the way MD_BLOCK_HTML already makes one. (B46.)
+             * A RAW node, the way MD_BLOCK_HTML already makes one.
              *
              * This had no case at all and fell through to `default:`, so an
              * inline tag became ordinary text and the writer escaped it:
@@ -1348,10 +1349,9 @@ mdy_doc *mdy_markdown_parse(const char *text, size_t len) {
     if (rc != 0 || b.failed) { mdy_free(doc); return NULL; }
 
     /*
-     * rehype-raw, which is the stage after this one in mdy-docs' `.md`
-     * pipeline and had no counterpart here: the tree through an HTML5 parser,
-     * so a raw node becomes elements and what the document got wrong is
-     * repaired. See raw.c. (B49.)
+     * rehype-raw, the stage after this one in mdy-docs' `.md` pipeline: the
+     * tree through an HTML5 parser, so a raw node becomes elements and what
+     * the document got wrong is repaired. See raw.c.
      *
      * BEFORE the heading ids, because the parse can move a heading — one
      * written as raw HTML inside a table is foster-parented out of it — and an

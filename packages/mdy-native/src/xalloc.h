@@ -41,12 +41,11 @@ char *mdy_xstrdup(const char *s);
 /*
  * A growable byte buffer, for this side of the boundary.
  *
- * The parser has one too (mdy_buf, internal.h) and they are deliberately not
- * the same type, which is the answer §2 was looking for rather than a failure
- * to find one. The parser's carries an `ok` flag because a parse has a caller
- * to report to and B24 made every one of those reports real. This one cannot
- * fail, because the engine allocates through the four functions above — so an
- * `ok` here would be a field nothing could ever set.
+ * The parser has one too (mdy_buf, internal.h) and they are deliberately NOT
+ * the same type. The parser's carries an `ok` flag because a parse has a
+ * caller to report to; this one cannot fail, because the engine allocates
+ * through the four functions above — so an `ok` here would be a field nothing
+ * could ever set.
  *
  * Two buffers, one per library, each matching its own error policy. Before
  * this there were four in the parser and three here, all the same thirteen

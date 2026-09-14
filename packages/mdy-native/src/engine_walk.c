@@ -125,28 +125,18 @@ int ends_with_ci(const char *s, const char *suffix) {
  * clips to one, `+` keeps them all.
  */
 /*
- * What is left of the YAML WRITER, and what it is still for.
+ * THE YAML WRITER, and the one thing it is still for.
  *
- * Identity used to come through here: an `snprintf("%s")` into a fixed array,
- * which had two ways to go wrong and took both. A file called `it"s.mdy`
- * produced `name: "it"s.mdy"`, which the reader took as `it` — the document's
- * name, ext and path all truncated at the quote, and nothing said so — while
- * a backslash in a name began an escape and a newline in one ended the line.
- * That was B8; escaping it (put_scalar, below) fixed it.
- *
- * Identity does not come through here at all now. It is built as VALUES with
- * mdy_yaml_builder and handed to mdy_bj_document, so there is no text in
- * between: nothing to escape, nothing to mis-read, and a refused allocation
- * is answered rather than written as a block that is silently short a key.
- * The same is true of `tags` (document_tags). The comment that used to sit
- * here said this wanted "a way to make an mdy_yaml mapping from C, which
- * there is not" — there is one now, in mdyyaml.h.
+ * Records do not come through here. Identity and `tags` are built as VALUES
+ * (mdy_yaml_builder, mdyyaml.h) and handed to mdy_bj_document, so there is no
+ * text in between: nothing to escape, nothing to mis-read, and a refused
+ * allocation is answered rather than written as a block silently short a key.
  *
  * What still writes text is the SOURCE of a `.md` document: the synthetic
  * `+++` block the splitter reads, holding the file's prose as `body`. That is
- * not a record being handed to the store — it is document text going to the
- * same reader a `.mdy` file's own front matter goes to — so it has to be text,
- * and it has to be escaped. put_scalar is why it is.
+ * not a record going to the store — it is document text going to the same
+ * reader a `.mdy` file's own front matter goes to — so it has to be text, and
+ * it has to be escaped. put_scalar is why it is.
  */
 /* Room for `more` bytes, growing from nothing. 0 when there is none. */
 /*
@@ -173,10 +163,10 @@ static void put_room(char **buf, size_t *len, size_t *cap, size_t more) {
  * including UTF-8 through as bytes, since only what the reader would take for
  * something else has to be named.
  *
- * Everything this file writes as YAML goes through here. It did not: identity
- * was pasted in with `%s` (which is B8) and so was every tag, where the
- * consequence was quieter and worse — one tag with a quote in it made the
- * whole generated `tags:` block unparseable, so the document's tags fell back
+ * EVERYTHING this file writes as YAML goes through here. A value pasted in
+ * with `%s` is a value that can close its own quote: one tag with a quote in
+ * it makes the whole generated `tags:` block unparseable, and the document's
+ * tags then fall back
  * to whatever its front matter said and were silently never lowercased or
  * deduplicated at all.
  */
@@ -559,7 +549,7 @@ static char *rewrite_imports(mdy_engine *e, const char *source_path,
              * characters makes a line longer than the buffer and the memcpy
              * below reads off the end of it. ASan calls it a
              * stack-buffer-overflow, READ of size 4277; `import_line` admits
-             * a spec of 1023. (§3's fixed-size scratch, and B27's mistake.)
+             * a spec of 1023.
              */
             static const char REWRITE[] =
                 "%% const %s = { "
@@ -622,8 +612,8 @@ static void cache_put(ImportCache *c, const char *dir, mdy_engine *set) {
          * moved the block it had already freed the old pointer, and if it did
          * not then `free(d)` freed the block `c->dirs` still pointed at. The
          * function returned without adding, the caller carried on, and the
-         * next cache_get read freed memory — a use-after-free reached from an
-         * allocation failure rather than at it. (B24.)
+         * next cache_get read freed memory — a use-after-free reached FROM an
+         * allocation failure rather than at it.
          *
          * Each grow is still taken as it succeeds, for that reason. What has
          * gone is the failure itself: returning without adding left the
@@ -708,10 +698,8 @@ static void staging_free(Staging *st) {
  * ONE FILE: read it, decide what kind it is, build its identity, and append
  * its text to the staging buffer.
  *
- * This was the body of a loop inside `open_dir_inner`, which made that
- * function 423 lines and is where B1, B2 and B8 all lived -- three
- * ownership-or-ordering mistakes that the length is what hid. The seam is the
- * staging buffer: everything here is per FILE, and everything the caller does
+ * The seam is the staging buffer: everything here is per FILE, and
+ * everything the caller does
  * after the loop is per DOCUMENT, because only the splitter knows how many
  * documents a file became.
  *
@@ -759,9 +747,8 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
         bytes = fsx_read(root, rel, &body_len);
         /*
          * A file the listing named and the read could not deliver. Letting
-         * it through as no bytes drops a page from the site and still
-         * reports success -- B25 settled what an unreadable DIRECTORY
-         * means, and a file is the same answer.
+         * it through as no bytes drops a page from the site and still reports
+         * success — the same answer an unreadable directory gets.
          */
         if (!bytes) {
             if (error && error_len) snprintf(error, error_len, "cannot read %s/%s", root, rel);
@@ -776,9 +763,9 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
      * own data unreachable — but `path` is structurally required to be
      * real, because everything resolves documents by it.
      */
-    /* Identity, kept OUT of the text — see `identity` on the engine.
-     * Built as VALUES: there is no YAML source in between, so there is
-     * nothing to escape and nothing that can be misread. (B8.) */
+    /* Identity, kept OUT of the text — see `identity` on the engine. Built
+     * as VALUES: no YAML source in between, so nothing to escape and nothing
+     * that can be misread. */
     char when[40];
     iso8601_utc(mtime, when, sizeof when);
     mdy_yaml_builder *ib = mdy_yaml_builder_new();
@@ -788,9 +775,9 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
      * `path` FIRST, because mdy-docs has it first: it builds the record as
      * `{ ...meta, ...parsed, path }`, and re-assigning a key in JS leaves
      * it where it was first written. Position and value are separate here
-     * — mdy_bj_document takes a key's place from the FIRST mapping that
-     * has it and its value from the LAST — so moving it does not change
-     * which `path` wins over a data file's own. (B31.)
+     * — mdy_bj_document takes a key's place from the FIRST mapping that has
+     * it and its value from the LAST — so moving it does not change which
+     * `path` wins over a data file's own.
      */
     mdy_yaml_put_string(ib, "path", rel, 0);
     mdy_yaml_put_string(ib, "name", name, 0);

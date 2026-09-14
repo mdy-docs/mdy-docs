@@ -51,11 +51,11 @@ static int sockets_ready(void) { signal(SIGPIPE, SIG_IGN); return 1; }
 /*
  * The most a single request may grow to before the connection is dropped.
  *
- * There was no limit: `recv` appended and the buffer doubled, so any peer that
- * kept writing made this process allocate until it died — and the largest
+ * Without a limit, `recv` appends and the buffer doubles, so any peer that
+ * keeps writing makes this process allocate until it dies. The largest
  * legitimate request here is a delivered message batch, which is nothing like
- * this. Generous on purpose, since the cost of being wrong in one direction is
- * a refused message and in the other is the machine. (B17.)
+ * this — generous on purpose, since being wrong in one direction costs a
+ * refused message and in the other costs the machine.
  */
 #define MAX_REQUEST (16u * 1024u * 1024u)
 
@@ -64,7 +64,7 @@ static int sockets_ready(void) { signal(SIGPIPE, SIG_IGN); return 1; }
  *
  * One thread serves everything, so a `send` that blocks stops the watcher, the
  * rebuilds and every other client with it. A dev server owes a slow reader
- * nothing: five seconds, then the connection is dropped. (B17.)
+ * nothing: five seconds, then the connection is dropped.
  */
 #define SEND_TIMEOUT_MS 5000
 
@@ -187,9 +187,9 @@ static void set_write_timeout(sock_t fd) {
  * The deadline is on the WHOLE write and not on each send, which is the
  * difference between a bound and a hope: SO_SNDTIMEO restarts every time a
  * send manages even one byte, so a client reading a trickle — or a kernel
- * that grows the buffer under it — holds this thread for as many multiples of
- * the timeout as it likes. Measured before this loop had its own deadline: 5s
- * per send became 13.7s of stall for one paused client. (B17.)
+ * that grows the buffer under it — holds this thread for as many multiples
+ * of the timeout as it likes. Measured: 5s per send is 13.7s of stall for one
+ * paused client, which is why the loop keeps a deadline of its own.
  *
  * time(NULL) rather than a millisecond clock because seconds are the units
  * this is specified in and httpd.c has no clock of its own. The comparison is
@@ -260,9 +260,9 @@ void httpd_respond(Httpd *s, HttpdRequest *req, int status, const char *content_
      * return used as the length to send — which is what snprintf WOULD have
      * written, not what it did. A caller with headers past 4096 bytes
      * therefore sent `n` bytes out of a 4096-byte buffer, reading off the end
-     * of it, and what reached the client was a truncated header with no
+     * of it, and what reaches the client is a truncated header with no
      * terminating blank line. Reachable from `X-Sukkal-Done`, which names
-     * every settled job of a partial batch (§3, and B27's mistake again).
+     * every settled job of a partial batch.
      */
     char fixed[512];
     int n = snprintf(fixed, sizeof fixed,
@@ -358,10 +358,10 @@ void httpd_poll(Httpd *s, int timeout_ms) {
             continue;
         }
         /*
-         * The cap, before the growth and not after: a peer that keeps writing
-         * used to double this buffer until the allocation failed, and `in` was
-         * assigned from realloc without checking, so the next recv wrote
-         * through NULL. Both halves are the same line. (B17.)
+         * The cap BEFORE the growth, not after. A peer that keeps writing
+         * doubles this buffer until the allocation fails, and assigning `in`
+         * from an unchecked realloc means the next recv writes through NULL.
+         * Both halves are this one line.
          */
         if (c->in_len >= MAX_REQUEST) {
             static const char too_big[] =

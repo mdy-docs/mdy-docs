@@ -267,7 +267,7 @@ static int out_number(Out *o, double v) {
     char buf[40];
     /* JSON cannot write an infinity or a NaN, so `null` — JSON.stringify's
      * answer, and yaml.c's json_number's. The test is also what keeps
-     * (long long)v away from a non-finite, which is undefined (B21). */
+     * (long long)v away from a non-finite, which is undefined. */
     if (v != v || v > 1.7976931348623157e308 || v < -1.7976931348623157e308)
         snprintf(buf, sizeof buf, "null");
     else if (v >= -9.2e18 && v <= 9.2e18 && v == (double)(long long)v)

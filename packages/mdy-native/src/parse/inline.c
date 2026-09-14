@@ -519,16 +519,15 @@ void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t l
     if (len == 0) return;
 
     /*
-     * As many URLs as the paragraph has. MDY_MAX_URLS used to be the ceiling
-     * as well as the starting size, and a paragraph with more than 512 lost
-     * the rest — not merely unlinked, but re-read as ordinary text, where the
-     * `//` in `http://` opens the emphasis this list exists to prevent. Past
-     * the 512th link the output grew `<em>` node never wrote. (B20.)
+     * As many URLs as the paragraph has, with MDY_MAX_URLS only the STARTING
+     * size. A URL left off this list is not merely unlinked — it is re-read as
+     * ordinary text, where the `//` in `http://` opens the emphasis the list
+     * exists to prevent.
      *
      * Grown by retry rather than by counting twice: a full array is the only
      * sign mdy_find_links gives that it had more to say, so `n == cap` means
-     * ask again with room. It doubles from the old fixed size, so the common
-     * paragraph still does one pass over one allocation.
+     * ask again with room. The common paragraph still does one pass over one
+     * allocation.
      */
     Span stack_urls[MDY_MAX_URLS];
     Span *urls = stack_urls;
@@ -638,19 +637,16 @@ const char *mdy_resolve_slug(mdy_doc *doc, const char *s, size_t len, size_t *ou
  * The id a heading gets: its slug, made UNIQUE against the ids this document
  * has already handed out, and recorded so that the next heading sees it.
  *
- * Both front ends want this and only one had it. `.mdy` headings went through
- * the whole of it in block.c; `.md` headings called mdy_resolve_slug and used
- * what came back, so three headings called "foo" were all `id="foo"` where
- * mdy-docs gives `foo`, `foo-1`, `foo-2`. Duplicate ids are invalid HTML and
- * every `#anchor` past the first points at the wrong one. (B52.)
+ * BOTH front ends call this. Three headings called "foo" must come out
+ * `foo`, `foo-1`, `foo-2`, as mdy-docs gives them: duplicate ids are invalid
+ * HTML and every `#anchor` past the first points at the wrong one.
  *
  * The suffix counts the BASE id, so it is the base that is recorded rather
  * than the unique form — otherwise a document containing `foo`, `foo` and a
  * literal heading called `foo-1` would number them wrongly.
  *
- * The id is arena-allocated at whatever length it needs. A `char unique[256]`
- * cut it at 255 bytes and said nothing, which gave a long heading an id this
- * engine had invented and node did not. (B20.)
+ * Arena-allocated at whatever length it needs, never into a fixed buffer: an
+ * id cut short is one this engine invented and node did not.
  */
 const char *mdy_heading_id(mdy_doc *doc, const char *text, size_t len, size_t *out_len) {
     if (out_len) *out_len = 0;

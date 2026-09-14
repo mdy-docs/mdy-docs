@@ -164,7 +164,7 @@ static int walk(const char *base, const char *rel, const char *exts, mdy_sbuf *o
     if (h == INVALID_HANDLE_VALUE) {
         /* The same distinction as the POSIX half: not-there is empty, and
          * anything else — a denied directory above all — is an error rather
-         * than a site quietly missing a subtree. (B25.) */
+         * than a site quietly missing a subtree. */
         DWORD e = GetLastError();
         if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ||
             e == ERROR_NO_MORE_FILES || e == ERROR_DIRECTORY)
@@ -207,11 +207,10 @@ static int walk(const char *base, const char *rel, const char *exts, mdy_sbuf *o
     DIR *d = opendir(dir);
     free(dir);
     /*
-     * Missing is empty, not an error — see fsx.h. Anything ELSE is an error,
-     * which this used to swallow with `errno == ENOENT ? 0 : 0`: a subtree
-     * whose permissions kept us out simply left the site, with no warning and
-     * a zero exit. node reports `EACCES: permission denied, scandir …` and
-     * exits 1; this built a page and said nothing. (B25.)
+     * Missing is empty, not an error — see fsx.h. Anything ELSE is an error
+     * and must not be swallowed: a subtree whose permissions keep us out would
+     * simply leave the site, with no warning and a zero exit. node reports
+     * `EACCES: permission denied, scandir …` and exits 1.
      */
     if (!d) return errno == ENOENT || errno == ENOTDIR ? 0 : -1;
 
@@ -281,8 +280,8 @@ char *fsx_list(const char *root, const char *subdir, const char *exts) {
      * that the listing is sorted, and readdir order is the filesystem's: an
      * unsorted listing builds the site's documents in a different order, which
      * changes every `find` result and every index the site writes. It is a
-     * different build reported as a successful one. NULL is the channel this
-     * function already has, and B25 gave it a meaning the caller acts on.
+     * different build reported as a successful one. NULL is this function's
+     * error channel and the caller acts on it.
      */
     char **v = malloc(entries * sizeof *v);
     if (!v) { free(out.s); return NULL; }

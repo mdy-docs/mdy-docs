@@ -1,9 +1,9 @@
 /*
  * An allocator that fails on demand, for the tests.
  *
- * B24 is a list of allocations whose result is used without being checked.
- * Editing them is easy; knowing whether the edit is right is not, because
- * none of those paths runs unless an allocation actually fails. This makes
+ * An allocation whose result is used unchecked is easy to fix and hard to
+ * KNOW you have fixed, because none of those paths runs unless an allocation
+ * actually fails. This makes
  * them run. Set MDY_ALLOC_FAIL_NTH=n and the nth allocation of the run --
  * and only that one -- returns NULL. Set MDY_ALLOC_COUNT=1 and it fails
  * nothing but reports, at exit, how many were asked for; that is where the

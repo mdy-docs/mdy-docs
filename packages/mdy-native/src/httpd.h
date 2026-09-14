@@ -60,8 +60,7 @@ void httpd_broadcast(Httpd *s, const void *data, size_t len);
  *
  * Returns -1 if the OS will not supply randomness, and then `out` is empty.
  * There is deliberately NO fallback to rand(): a token that looks random and
- * is not is worse than a refusal, because the refusal is visible. That was
- * B17 — four rand() calls seeded from the clock, dressed as 128 bits.
+ * is not is worse than a refusal, because the refusal is visible.
  */
 int httpd_secret(char *out, size_t cap);
 

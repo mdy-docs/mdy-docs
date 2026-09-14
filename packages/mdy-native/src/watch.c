@@ -26,8 +26,8 @@ static int ignored(const char *rel) {
 }
 
 /* A file missing from the snapshot is a file the watcher never notices
- * changing, so `mdy dev` stops rebuilding for it and says nothing. B24 named
- * this and parked it; nothing swept `dev` until B43. See xalloc.h. */
+ * changing, so `mdy dev` stops rebuilding for it and says nothing. See
+ * xalloc.h. */
 static void add(Snapshot *s, const char *path, double size, double mtime) {
     if (s->count == s->cap) {
         s->cap = s->cap ? s->cap * 2 : 64;
@@ -69,9 +69,8 @@ void snapshot_free(Snapshot *s) {
  *
  * Both snapshots come from fsx_list in the order it sorts them — strcmp, and
  * `add` appends — so walking the two together finds every difference in one
- * pass. This used to look each file up with a linear search, twice: O(n²)
- * every 120 ms, which on a site of a few thousand files is the watcher's whole
- * budget spent on strcmp. (B18.)
+ * pass. Looking each file up instead is O(n²) every 120 ms, which on a site
+ * of a few thousand files is the watcher's whole budget spent on strcmp.
  *
  * The three cases are the three a merge has. A path on both sides changed if
  * its size or mtime did; one only in `after` is new; one only in `before` is

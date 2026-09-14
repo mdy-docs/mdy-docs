@@ -195,7 +195,7 @@ static void put_number(mdy_buf *b, double v) {
      * property are a list's `start` and the guest, and the guest's is filtered
      * where it crosses (engine_value.c). The test stays because `(long long)`
      * of an infinity is undefined behaviour whether or not anything reaches
-     * it, and because %g says "inf" rather than invoking it (B21).
+     * it, and because %g says "inf" rather than invoking it.
      */
     if (v == v && v >= -9.2e18 && v <= 9.2e18 && v == (double)(long long)v)
         snprintf(tmp, sizeof tmp, "%lld", (long long)v);
