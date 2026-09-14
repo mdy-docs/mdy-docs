@@ -225,14 +225,14 @@ struct mdy_engine {
     } highlight;
     /*
      * THE KNOBS: everything the EMBEDDER sets before a render, and nothing a
-     * render sets itself. `split`, `sanitize` and `tasks` are
+     * render sets itself. `sanitize` and `tasks` are
      * mdy-docs/parse's — see engine.h; `ctx_*` are the extra fields the
      * entry's `req` gets; `scope_*` are the host values the wrapper declares
      * as `const`s. They are one group because they are one question: what was
      * this engine ASKED for, as against what it has done.
      */
     struct {
-        int split, sanitize, tasks;
+        int sanitize, tasks;
         int want_response;
         char **ctx_names;
         char **ctx_json;            /* each a JSON text, parsed at render */

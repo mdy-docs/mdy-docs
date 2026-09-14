@@ -463,8 +463,7 @@ static void close_set(mdy_engine *e) {
 int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
                     char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
-    mdy_documents *docs = e->knobs.split ? mdy_split_documents(source, len)
-                                   : mdy_one_document(source, len);
+    mdy_documents *docs = mdy_split_documents(source, len);
     if (!docs) { close_set(e); return -1; }
     return open_documents(e, docs, error, error_len);
 }
@@ -738,7 +737,6 @@ void mdy_engine_set_context_bool(mdy_engine *e, const char *name, int value) {
     mdy_engine_set_context_json(e, name, value ? "true" : "false", 1);
 }
 
-void mdy_engine_set_split(mdy_engine *e, int split) { e->knobs.split = split ? 1 : 0; }
 void mdy_engine_set_sanitize(mdy_engine *e, int sanitize) { e->knobs.sanitize = sanitize ? 1 : 0; }
 void mdy_engine_set_tasks(mdy_engine *e, int tasks) { e->knobs.tasks = tasks ? 1 : 0; }
 
@@ -2468,7 +2466,6 @@ mdy_engine *mdy_engine_new(mdy_session *session) {
     mdy_engine *e = calloc(1, sizeof *e);
     if (!e) return NULL;
     e->session = session;
-    e->knobs.split = 1;                   /* a bare `---` starts a document, as the site engine reads it */
     JsVmConfig cfg = {0};
     /*
      * Two knobs for testing, and they earn their place: this engine hands the

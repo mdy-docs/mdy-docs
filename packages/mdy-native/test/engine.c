@@ -3139,7 +3139,7 @@ static void api_checks(void) {
         mdy_engine_free(e);
     }
 
-    /* --- the knobs: split, sanitize, tasks ---------------------------------- */
+    /* --- the knobs: sanitize and tasks -------------------------------------- */
     {
         /* tasks: "1: a task's box is a form carrying the line and column of
          * its `[x]`; 0: a disabled checkbox." */
@@ -3162,26 +3162,14 @@ static void api_checks(void) {
         mdy_engine_free(a); mdy_engine_free(b);
     }
     {
-        /* split: "1: a bare `---` starts a new document; 0: the whole source
-         * is one document and `---` is a thematic break". Before OPEN, which
-         * is what makes it visible in the COUNT rather than in the HTML. */
+        /* A bare `---` starts a document. That is the format, not a knob:
+         * nothing can ask this engine to read a source any other way. */
         const char *src = "= one\n---\n= two\n";
         mdy_engine *a = mdy_engine_new(S);
-        mdy_engine_set_split(a, 1);
         mdy_engine_open(a, src, strlen(src), err, sizeof err);
-
-        mdy_engine *b = mdy_engine_new(S);
-        mdy_engine_set_split(b, 0);
-        mdy_engine_open(b, src, strlen(src), err, sizeof err);
-        char *one = mdy_engine_render(b, 0, err, sizeof err);
-
-        ok_("set_split(1) makes a bare `---` start a second document",
+        ok_("a bare `---` always starts a second document",
             mdy_engine_count(a) == 2, mdy_engine_count(a) == 2 ? "(2)" : "(not 2)");
-        ok_("set_split(0) keeps one document, and `---` is a thematic break",
-            mdy_engine_count(b) == 1 && one && strstr(one, "<hr") != NULL,
-            one ? one : err);
-        free(one);
-        mdy_engine_free(a); mdy_engine_free(b);
+        mdy_engine_free(a);
     }
     {
         /* sanitize: what a document may write as raw HTML. */

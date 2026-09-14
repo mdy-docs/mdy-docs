@@ -102,7 +102,7 @@ static int acc_span(Acc *a, size_t start, size_t len) {
  * (script.c) but coalesces `\r\n` into one, which is the correct reading of a
  * line ending and the reason it could not produce mdy-docs' answer by itself.
  */
-static int acc_source(Acc *a, const char *text, size_t len, int split) {
+static int acc_source(Acc *a, const char *text, size_t len) {
     /* Never more than `len` bytes of content: a separator line gives up at
      * least its three characters and writes one terminator back. Plus this
      * source's own terminator. */
@@ -120,7 +120,7 @@ static int acc_source(Acc *a, const char *text, size_t len, int split) {
         int had_cr = line_end > line_start && text[line_end - 1] == '\r';
         if (had_cr) line_end--;
 
-        if (split && is_separator(text + line_start, line_end - line_start)) {
+        if (is_separator(text + line_start, line_end - line_start)) {
             if (acc_span(a, chunk_start, a->written - chunk_start) != 0) return -1;
             a->joined[a->written++] = '\0';
             chunk_start = a->written;
@@ -182,21 +182,13 @@ static mdy_documents *acc_finish(Acc *a) {
     return out;
 }
 
-static mdy_documents *build(const char *text, size_t len, int split) {
+mdy_documents *mdy_split_documents(const char *text, size_t len) {
     if (!text) return NULL;
     if (len == 0) len = strlen(text);
 
     Acc a = { 0 };
-    if (acc_source(&a, text, len, split) != 0) { acc_free(&a); return NULL; }
+    if (acc_source(&a, text, len) != 0) { acc_free(&a); return NULL; }
     return acc_finish(&a);
-}
-
-mdy_documents *mdy_split_documents(const char *text, size_t len) {
-    return build(text, len, 1);
-}
-
-mdy_documents *mdy_one_document(const char *text, size_t len) {
-    return build(text, len, 0);
 }
 
 mdy_documents *mdy_split_sources(const mdy_chunk *sources, size_t count,
@@ -206,7 +198,7 @@ mdy_documents *mdy_split_sources(const mdy_chunk *sources, size_t count,
     for (size_t i = 0; i < count; i++) {
         if (!sources[i].text) { acc_free(&a); return NULL; }
         size_t before = a.count;
-        if (acc_source(&a, sources[i].text, sources[i].len, 1) != 0) {
+        if (acc_source(&a, sources[i].text, sources[i].len) != 0) {
             acc_free(&a);
             return NULL;
         }

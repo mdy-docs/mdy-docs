@@ -33,10 +33,6 @@ typedef struct mdy_documents mdy_documents;
  * nothing instead of failing on "no document at index 0".
  */
 mdy_documents *mdy_split_documents(const char *text, size_t len);
-/* The same, without the splitting: the whole text is the one document, and
- * a `---` in it is the parser's to read — mdy-docs/parse's default, where
- * `documents` is off and the line is a thematic break. */
-mdy_documents *mdy_one_document(const char *text, size_t len);
 
 /*
  * Several sources as ONE list: each is split on its own and the documents are

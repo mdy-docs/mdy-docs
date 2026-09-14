@@ -97,10 +97,6 @@ int mdy_engine_open(mdy_engine *engine, const char *source, size_t len,
  * knobs, set BEFORE open or render as each says. All default to what the
  * document engine does for a site.
  *
- *   split     1: a bare `---` starts a new document (the site engine, and the
- *             command line); 0: the whole source is one document and `---`
- *             is a thematic break, which is mdy-docs/parse's default and
- *             what a playground rendering one document wants. Before open.
  *   sanitize  0: the element allowlist is off, since the template already
  *             ran in a sandbox (the site engine); 1: on, with what it drops
  *             reported through on_message. Before render.
@@ -108,7 +104,6 @@ int mdy_engine_open(mdy_engine *engine, const char *source, size_t len,
  *             `[x]` (mdy-docs' `tasks: true`); 0: a disabled checkbox.
  *             Before render.
  */
-void mdy_engine_set_split(mdy_engine *engine, int split);
 void mdy_engine_set_sanitize(mdy_engine *engine, int sanitize);
 void mdy_engine_set_tasks(mdy_engine *engine, int tasks);
 
