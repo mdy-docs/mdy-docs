@@ -473,7 +473,7 @@ check-highlight: $(HL_OUT) $(LAMASSU)/build/lamassu
 # What the node CLI produces for three deterministic sites, committed so CI can
 # check the native backend byte-for-byte on a platform where node cannot run
 # the build at all (it needs the WASM engines, which are emscripten build
-# products and are not in git). See golden/README.md.
+# products and are not in git). See test/golden/README.md.
 # DETERMINISTIC SITES ONLY, and that is checked rather than assumed — build,
 # touch every source, build again, diff. examples/docs-site is NOT here for
 # exactly that reason: it renders a source file's mtime, and a git checkout
@@ -490,15 +490,16 @@ check-highlight: $(HL_OUT) $(LAMASSU)/build/lamassu
 # would otherwise build it — cannot run in CI at all. Committing its output
 # puts an empty .mdy, a `---`-leading .yaml, a `.md` through $.render and a
 # corrupt .tif in front of every platform this builds on.
-GOLDEN_SITES := fixture fixture-pkg ../../examples/messaging fixture-awkward
+GOLDEN_SITES := test/fixture test/fixture-pkg ../../examples/messaging \
+                test/fixture-awkward
 
 .PHONY: golden check-golden check-determinism
 golden:
-	@for d in $(GOLDEN_SITES); do rm -rf golden/`basename $$d`; done
+	@for d in $(GOLDEN_SITES); do rm -rf test/golden/`basename $$d`; done
 	@for d in $(GOLDEN_SITES); do \
-	  node ../../bin/mdy.js build $$d --out golden/`basename $$d` > /dev/null || exit 1; \
+	  node ../../bin/mdy.js build $$d --out test/golden/`basename $$d` > /dev/null || exit 1; \
 	done
-	@echo "regenerated golden/ — read the diff before committing it"
+	@echo "regenerated test/golden/ — read the diff before committing it"
 
 # A golden site whose output moves is worse than no golden site: it goes red
 # for a reason that is not a regression. This proves each one is stable across
@@ -525,10 +526,10 @@ check-golden: build/mdy$(EXE)
 	  n=`basename $$d`; \
 	  rm -rf build/check-$$n; \
 	  $$bin build $$d --out build/check-$$n --quiet || exit 1; \
-	  if diff -r golden/$$n build/check-$$n > /dev/null; then \
+	  if diff -r test/golden/$$n build/check-$$n > /dev/null; then \
 	    echo "  $$n: identical to golden"; \
 	  else \
-	    echo "  $$n: DIFFERS from golden"; diff -r golden/$$n build/check-$$n | head -20; fail=1; \
+	    echo "  $$n: DIFFERS from golden"; diff -r test/golden/$$n build/check-$$n | head -20; fail=1; \
 	  fi; \
 	done; \
 	exit $$fail
@@ -714,8 +715,8 @@ check-site: build/mdy$(EXE)
 # which no unit test could see because both sides had the same bytes in a
 # different order.
 CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
-               ../../examples/messaging:0 fixture:0 fixture-pkg:0 \
-               fixture-awkward:0
+               ../../examples/messaging:0 test/fixture:0 \
+               test/fixture-pkg:0 test/fixture-awkward:0
 #
 # Every allocation in a build, refused one at a time.
 #
@@ -764,7 +765,7 @@ CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \
 # file and walks no directory, so `$.render({ path: "page.md" })` from it
 # answers "found no such document": there is no single-document shape that
 # reaches the markdown front end at all.
-ALLOC_SITE ?= fixture-awkward
+ALLOC_SITE ?= test/fixture-awkward
 
 check-alloc: build/mdy$(EXE) build/mdy-af$(EXE)
 	@node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
@@ -799,7 +800,8 @@ check-alloc-dev: build/mdy$(EXE) build/mdy-af$(EXE)
 # nine minutes. fixture-awkward is FIRST because it is the fastest and the one
 # most likely to fail -- the .md front end is the newest thing under the shim.
 check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
-	@fail=0; for s in fixture-awkward fixture ../../examples/blog ../../examples/docs-site; do \
+	@fail=0; for s in test/fixture-awkward test/fixture ../../examples/blog \
+	          ../../examples/docs-site; do \
 	  node scripts-alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	    --site "$$s" $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
 	done; \
@@ -854,8 +856,8 @@ check-sites: build/mdy$(EXE)
 # filesystem here (emscripten's MEMFS), and nisaba's storage is memory
 # already. So a build in the browser is: write the site's files into MEMFS,
 # run main() as the CLI would be run, read dist/ back out. wasm/index.mjs is
-# that wrapper, wasm/check-golden.mjs runs it under node against golden/, and
-# wasm/index.html is the same thing with a directory picker.
+# that wrapper, wasm/check-golden.mjs runs it under node against test/golden/,
+# and wasm/index.html is the same thing with a directory picker.
 #
 # lamassu compiles to its own archive first, and it has to: NIS_RENAME must
 # reach nisaba's regex engine and NOT baru-re, or both engines' copies of the
@@ -981,7 +983,7 @@ serve-wasm: $(WASM_OUT)
 	@node wasm/serve.mjs
 
 # The golden sites, built through the wasm engine under node, diffed against
-# golden/ — the same bar the native binary is held to.
+# test/golden/ — the same bar the native binary is held to.
 check-wasm: $(WASM_OUT)
 	@node wasm/check-golden.mjs
 

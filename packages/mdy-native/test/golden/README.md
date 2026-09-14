@@ -1,6 +1,6 @@
 # golden
 
-What the node CLI produces for three sites, committed so CI can check the
+What the node CLI produces for four sites, committed so CI can check the
 native backend against it on a platform where node cannot run the build at all.
 
 **Why not just run both in CI.** The node path needs `lamassu.wasm` and
@@ -12,7 +12,7 @@ A committed reference is also the stronger check. It is fixed rather than
 recomputed, so a change in output shows up as a diff in a pull request instead
 of two sides moving together and agreeing.
 
-These three are here because all of them are **deterministic**, and
+These four are here because all of them are **deterministic**, and
 `make check-determinism` is what proves it: build, `touch` every source, build
 again, diff. A git checkout sets every file's mtime to checkout time, so a site
 that renders one can never match a committed reference.
@@ -28,6 +28,16 @@ is the case Windows is most likely to get wrong, because `src/imports.js`
 decides "inside the package" by string prefix on an absolute path — and a
 drive letter or a backslash anywhere in that chain surfaces here as a wrong
 answer rather than an error.
+
+`fixture-awkward` earns its place for the opposite reason: it is made of the
+inputs that *were* bugs, and `make check-sites` — the only other thing that
+builds it — cannot run in CI at all, because it needs the node CLI. Committing
+its output puts an empty `.mdy`, a `---`-leading `.yaml`, a `.md` through
+`$.render` and a corrupt `.tif` in front of every platform this builds on.
+
+The sites themselves are `test/fixture`, `test/fixture-pkg` and
+`test/fixture-awkward`, beside this directory; the fourth is
+`examples/messaging`.
 
 Regenerate with `make golden` after a deliberate change to what mdy-docs
 emits, and read the diff: that is the point of them.

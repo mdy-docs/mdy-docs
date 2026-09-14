@@ -74,8 +74,8 @@ thing.
 
 ## What it is held to
 
-`make check-wasm` builds the three golden sites through the wasm engine and
-diffs them against `golden/`, which is what the native binary is checked
+`make check-wasm` builds the four golden sites through the wasm engine and
+diffs them against `test/golden/`, which is what the native binary is checked
 against on every platform. It is the same bar and the same files, so a
 difference there belongs to the wasm build alone. CI runs it as a job of its
 own, next to the three native platforms.

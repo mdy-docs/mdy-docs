@@ -33,7 +33,7 @@
  *             worst of the three and the other modes have no analogue.
  *
  *   node scripts-alloc-sweep.mjs --bin build/mdy-af --ref build/mdy \
- *        --site fixture [--mode build|document|dev] [--jobs N] [--from N] [--to N]
+ *        --site test/fixture [--mode build|document|dev] [--jobs N] [--from N] [--to N]
  */
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -49,7 +49,7 @@ const flag = (name, fallback) => {
 
 const bin = flag('bin', 'build/mdy-af');
 const ref = flag('ref', 'build/mdy');
-const site = flag('site', 'fixture');
+const site = flag('site', 'test/fixture');
 const mode = flag('mode', 'build');
 /*
  * --trace turns the shim's backtrace on for every run and keeps the one from

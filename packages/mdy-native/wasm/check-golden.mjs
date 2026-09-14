@@ -1,11 +1,11 @@
 /*
  * The golden sites, built through the wasm engine under node, diffed against
- * golden/ byte for byte — the same bar build/mdy is held to by
+ * test/golden/ byte for byte — the same bar build/mdy is held to by
  * `make check-golden`, so a difference here is the wasm build's alone.
  *
  *   make check-wasm
  *
- * The three sites are the Makefile's GOLDEN_SITES. fixture-pkg imports
+ * The four sites are the Makefile's GOLDEN_SITES. fixture-pkg imports
  * "../fixture-style", so that directory is mounted beside it; the other two
  * stand alone.
  */
@@ -20,12 +20,12 @@ const pkg = join(here, '..');
 
 /* name -> { mounts: [dir, ...] mounted under their basenames; site: basename } */
 const SITES = [
-  { name: 'fixture',     mounts: [join(pkg, 'fixture')],                                  site: 'fixture' },
-  { name: 'fixture-pkg', mounts: [join(pkg, 'fixture-pkg'), join(pkg, 'fixture-style')],  site: 'fixture-pkg' },
+  { name: 'fixture',     mounts: [join(pkg, 'test', 'fixture')],                                  site: 'fixture' },
+  { name: 'fixture-pkg', mounts: [join(pkg, 'test', 'fixture-pkg'), join(pkg, 'test', 'fixture-style')],  site: 'fixture-pkg' },
   { name: 'messaging',   mounts: [join(pkg, '..', '..', 'examples', 'messaging')],        site: 'messaging' },
   /* The inputs that were bugs (§4). Its golden output is committed like the
    * others', so the wasm build is held to it too. */
-  { name: 'fixture-awkward', mounts: [join(pkg, 'fixture-awkward')],                    site: 'fixture-awkward' },
+  { name: 'fixture-awkward', mounts: [join(pkg, 'test', 'fixture-awkward')],                    site: 'fixture-awkward' },
 ];
 
 function* filesUnder(dir, base = dir) {
@@ -52,7 +52,7 @@ for (const { name, mounts, site } of SITES) {
   }
 
   const golden = new Map();
-  for (const [rel, path] of filesUnder(join(pkg, 'golden', name))) golden.set(rel, readFileSync(path));
+  for (const [rel, path] of filesUnder(join(pkg, 'test', 'golden', name))) golden.set(rel, readFileSync(path));
 
   const diffs = [];
   for (const [rel, want] of golden) {

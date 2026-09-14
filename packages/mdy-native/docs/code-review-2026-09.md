@@ -1054,7 +1054,7 @@ before and after. Three hand-built differentials over 45 more shapes go
 holding BLOCK content, which is the limit below.
 
 `fixture-awkward` carries a `.md` with all of it
-([main.mdy:49](../fixture-awkward/main.mdy#L49)) — numbering by first
+([main.mdy:49](../test/fixture-awkward/main.mdy#L49)) — numbering by first
 reference, a repeat's `-2`, a reference in a table cell, a definition with
 nothing in it — so `check-sites`, `check-golden` and the wasm golden hold it on
 every platform CI builds for. `footnote_checks`
@@ -1150,7 +1150,7 @@ is **B49** and the stage after this one.
 `fixture-awkward` carries a `.md` with a tag in a paragraph, one with
 attributes, tags beside markdown emphasis, tags in list items, one in a TABLE
 cell (which goes through §4's foster-parenting), and the two that must stay
-escaped ([main.mdy:55](../fixture-awkward/main.mdy#L55)). `raw_html_checks`
+escaped ([main.mdy:55](../test/fixture-awkward/main.mdy#L55)). `raw_html_checks`
 ([test/engine.c:770](../test/engine.c#L770)) is five assertions, the last of
 which is a `.mdy` document escaping the same bytes — so a change that reached
 across the two front ends would fail rather than pass quietly.

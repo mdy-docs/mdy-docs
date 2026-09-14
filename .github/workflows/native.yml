@@ -39,7 +39,7 @@
 # — which needs lamassu.wasm and nisaba.wasm, emscripten build products that
 # are not in git. That is the same reason the golden output is committed.
 #
-# The reference is committed (packages/mdy-native/golden/) rather than produced
+# The reference is committed (packages/mdy-native/test/golden/) rather than produced
 # by running the node CLI alongside. The node path needs lamassu.wasm and
 # nisaba.wasm, which are emscripten build products and are not in git, so on a
 # Windows runner there would be nothing to compare against — and requiring an

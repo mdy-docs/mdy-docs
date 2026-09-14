@@ -39,16 +39,16 @@ const pkg = join(here, '..');
 /* Same shape as check-golden.mjs: a site is one or more directories mounted
  * under their basenames, and `site` names the one to build. */
 const SITES = {
-  fixture: { mounts: [join(pkg, 'fixture')], site: 'fixture' },
+  fixture: { mounts: [join(pkg, 'test', 'fixture')], site: 'fixture' },
   'fixture-pkg': {
-    mounts: [join(pkg, 'fixture-pkg'), join(pkg, 'fixture-style')],
+    mounts: [join(pkg, 'test', 'fixture-pkg'), join(pkg, 'test', 'fixture-style')],
     site: 'fixture-pkg',
   },
   messaging: { mounts: [join(pkg, '..', '..', 'examples', 'messaging')], site: 'messaging' },
   // The inputs that WERE bugs, and the only site here with a `.md` in it —
   // which is the whole markdown front end, and the three unchecked strdups in
   // render_tree_out that `fixture` could not reach (B47).
-  'fixture-awkward': { mounts: [join(pkg, 'fixture-awkward')], site: 'fixture-awkward' },
+  'fixture-awkward': { mounts: [join(pkg, 'test', 'fixture-awkward')], site: 'fixture-awkward' },
   // blog imports "../blog-style-x", so that directory is mounted beside it
   // the way check-golden.mjs mounts fixture-style beside fixture-pkg.
   blog: {

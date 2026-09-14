@@ -223,7 +223,7 @@ The same sources compile with emscripten unchanged, because the engine's only
 platform surface is POSIX file access and its store is memory already: put a
 site's files into the in-memory filesystem, run `main()` as the command line
 would, read `dist/` back out. `make wasm` builds it, `make check-wasm` holds
-it to `golden/` under node exactly as the native binary is held on three
+it to `test/golden/` under node exactly as the native binary is held on three
 platforms, and `wasm/index.html` builds a picked directory in a page with
 nothing uploaded. [wasm/README.md](wasm/README.md) has the API and where it
 stops.
