@@ -94,6 +94,31 @@ typedef struct {
     size_t root_count, root_cap;
 } ImportCache;
 
+/*
+ * THE ENGINE.
+ *
+ * This was fifty-seven fields in one flat list, grouped only by comment. It
+ * is seven named groups and four members now, and the grouping is the
+ * documentation: a field's group says what it belongs to and, more usefully,
+ * how long it lives.
+ *
+ *   set        the documents, the store, the id indexes — ONE lifetime, and
+ *              `close_set` frees exactly this and nothing else
+ *   compose    what a render sets and the next one reads
+ *   knobs      what the EMBEDDER set, as against what compose has done
+ *   cb         what the host hears; a child engine takes the whole struct
+ *   identity   a document's file identity, as values
+ *   graph      the import graph: this package's root, its imports, the cache
+ *   highlight  the fenced-code highlighter, loaded once
+ *
+ * `session`, `vm` and `ctx` stay at the top level. They are the three things
+ * every other group is expressed in terms of, and `e->js.vm` would be 194
+ * edits to say nothing `e->vm` does not.
+ *
+ * The grouping is a rename and nothing else: the allocation sweep over
+ * fixture-awkward reports the same 3933 refusals it did before, so not one
+ * allocation moved.
+ */
 struct mdy_engine {
     /* The session this was made in — not owned, and outliving this engine is
      * the whole point of it. See engine.h. */
@@ -101,36 +126,74 @@ struct mdy_engine {
     JsVm *vm;
     JsContext *ctx;
     /*
-     * The render in progress. `$.compose` is a host call made from the middle
-     * of one, and it needs the document being rendered; with one render at a
-     * time this is where it lives.
+     * COMPOSITION: everything one render sets and the next one reads.
+     *
+     * Grouped against `knobs`, which is what the EMBEDDER set — the line
+     * between the two is what an engine was asked for against what it has
+     * done, and several of these are saved and restored around each render
+     * precisely because they are the second kind.
      */
-    mdy_doc *tree_owner;
-
-    /* The open set. */
-    Document *docs;
-    size_t count;
-    int handle;                 /* nisaba's, from nis_open */
-    mdy_documents *source_docs;
+    struct {
+        /*
+         * The render in progress. `$.compose` is a host call made from the
+         * middle of one, and it needs the document being rendered; with one
+         * render at a time this is where it lives.
+         */
+        mdy_doc *tree_owner;
+        /*
+         * Trees a `$.render` parked, and the tokens standing for them.
+         *
+         * The table is shared by the WHOLE import graph — `tokens` points at
+         * the graph's root engine, or at this one for a standalone set. A
+         * token minted while rendering a site and written into the data an
+         * imported layout receives has to resolve THERE, and a per-package
+         * table cannot do that: the layout would find no such token and
+         * quietly drop the page's entire body. mdy-docs shares one
+         * module-level registry for the same reason.
+         */
+        struct mdy_engine *tokens;
+        Held *held;
+        size_t held_count, held_cap;
+        /* Trees kept alive but never named — see keep_alive. */
+        mdy_doc **kept;
+        size_t kept_count, kept_cap;
+        size_t next_token;
+        int depth;                  /* renders inside renders */
+        /* Resizes already made, on the graph's token table so a theme and the
+         * site that imported it do not each make their own copy. */
+        Resized *resized;
+        size_t resized_count;
+        /* Set by any native that reaches outside the document being rendered
+         * — see the render memo. Saved and restored around each render. */
+        int taint;
+        char last_render_key[24];   /* the memo key of the render just done, base 36 */
+        char *last_response;
+        JsValue render_res;         /* the `res` of the render in progress, for its references */
+    } compose;
 
     /*
-     * Trees a `$.render` parked, and the tokens standing for them.
-     *
-     * The table is shared by the WHOLE import graph — `tokens` points at the
-     * graph's root engine, or at this one for a standalone set. A token minted
-     * while rendering a site and written into the data an imported layout
-     * receives has to resolve THERE, and a per-package table cannot do that:
-     * the layout would find no such token and quietly drop the page's entire
-     * body. mdy-docs shares one module-level registry for the same reason.
+     * THE OPEN SET: the documents, the store they were inserted into, and the
+     * two indexes over their ids. One struct because it is one LIFETIME —
+     * `close_set` frees exactly these and nothing else, and an engine between
+     * a close and the next open is this group zeroed and nothing more.
      */
-    struct mdy_engine *tokens;
-    Held *held;
-    size_t held_count, held_cap;
-    /* Trees kept alive but never named — see keep_alive. */
-    mdy_doc **kept;
-    size_t kept_count, kept_cap;
-    size_t next_token;
-    int depth;                  /* renders inside renders */
+    struct {
+        Document *docs;
+        size_t count;
+        int handle;                 /* nisaba's, from nis_open */
+        mdy_documents *source_docs;
+        /* `_id` to index, in insertion order, so a hit maps back to its document. */
+        uint8_t (*ids)[12];
+        /*
+         * The same thing the other way round, so putting an answer back into
+         * document order is a lookup rather than a scan. Open addressing on
+         * the 24 hex characters; built the first time a query asks for it and
+         * thrown away with the set, since it is exactly as valid as `ids` is.
+         */
+        OidSlot *oid_slots;
+        size_t oid_cap;
+    } set;
+
     /*
      * WHAT THE HOST HEARS. One struct because they are one thing with one
      * rule: an imported package's `$.emit` contributes to the SAME outputs as
@@ -156,39 +219,29 @@ struct mdy_engine {
         void *on_message_ud;
     } cb;
     /* Fenced code's colouring: highlight.js, in lamassu — see load_highlighter(). */
-    JsValue highlight_fn;
-    int highlight_state;        /* 0 not yet asked for, 1 ready, -1 unavailable */
-    /* Resizes already made, on the graph's token table so a theme and the site
-     * that imported it do not each make their own copy. */
-    Resized *resized;
-    size_t resized_count;
-    /* Extra fields for the entry's `req`, set by the embedder. */
-    char **ctx_names;
-    char **ctx_json;            /* each a JSON text, parsed at render */
-    char *ctx_strict;           /* 0: text that is not JSON is a string */
-    size_t ctx_count;
-    /* Set by any native that reaches outside the document being rendered —
-     * see the render memo. Saved and restored around each render. */
-    int taint;
-    char last_render_key[24];   /* the memo key of the render just done, base 36 */
-    /* mdy-docs/parse's knobs — see engine.h */
-    int split, sanitize, tasks;
-    char **scope_names;
-    char **scope_json;
-    size_t scope_count;
-    int want_response;
-    char *last_response;
-    JsValue render_res;         /* the `res` of the render in progress, for its references */
-    /* `_id` to index, in insertion order, so a hit maps back to its document. */
-    uint8_t (*ids)[12];
+    struct {
+        JsValue fn;
+        int state;              /* 0 not yet asked for, 1 ready, -1 unavailable */
+    } highlight;
     /*
-     * The same thing the other way round, so putting an answer back into
-     * document order is a lookup rather than a scan. Open addressing on the
-     * 24 hex characters; built the first time a query asks for it and thrown
-     * away with the set, since it is exactly as valid as `ids` is.
+     * THE KNOBS: everything the EMBEDDER sets before a render, and nothing a
+     * render sets itself. `split`, `sanitize` and `tasks` are
+     * mdy-docs/parse's — see engine.h; `ctx_*` are the extra fields the
+     * entry's `req` gets; `scope_*` are the host values the wrapper declares
+     * as `const`s. They are one group because they are one question: what was
+     * this engine ASKED for, as against what it has done.
      */
-    OidSlot *oid_slots;
-    size_t oid_cap;
+    struct {
+        int split, sanitize, tasks;
+        int want_response;
+        char **ctx_names;
+        char **ctx_json;            /* each a JSON text, parsed at render */
+        char *ctx_strict;           /* 0: text that is not JSON is a string */
+        size_t ctx_count;
+        char **scope_names;
+        char **scope_json;
+        size_t scope_count;
+    } knobs;
 
     /*
      * The import graph. `root` is this package's own directory; `imports` is
@@ -239,21 +292,35 @@ struct mdy_engine {
      * fields and before `ident_post`, which is where mdy-docs puts a source's
      * `meta` (parseDocuments, src/mdy.js).
      */
-    mdy_yaml **ident_pre;
-    mdy_yaml **ident_data;
-    mdy_yaml **ident_post;
-    char *ident_is_md;
-    size_t identity_count;
+    struct {
+        mdy_yaml **pre;
+        mdy_yaml **data;
+        mdy_yaml **post;
+        char *is_md;
+        size_t count;
+    } identity;
 
-    char *root;
-    /* Scratch for the module canonicalizer: the engine copies the result
-     * before the call returns, so it need only outlive the call. */
-    uint16_t *module_spec;
-    Import *imports;
-    size_t import_count, import_cap;
-    ImportCache *cache;
-    int owns_cache;
-    size_t current;
+    /*
+     * THE IMPORT GRAPH. `root` is this package's own directory; `imports` is
+     * every `% import name from "spec"` any of its files declared, resolved.
+     *
+     * `cache` is shared by the WHOLE graph and owned by whoever built it —
+     * the same package imported twice is built once. `current` is the
+     * document being rendered, which is what tells an `$.__import*` native
+     * which file's import it is being asked about: the same spec written in
+     * two files can resolve to two different packages.
+     */
+    struct {
+        char *root;
+        /* Scratch for the module canonicalizer: the engine copies the result
+         * before the call returns, so it need only outlive the call. */
+        uint16_t *module_spec;
+        Import *imports;
+        size_t import_count, import_cap;
+        ImportCache *cache;
+        int owns_cache;
+        size_t current;
+    } graph;
 };
 
 /* ---- engine_value.c: the VM boundary ----------------------------------------

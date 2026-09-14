@@ -57,7 +57,7 @@ static int is_stopword(const char *w, size_t len) {
  */
 static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                             int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* an embedder native: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* an embedder native: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *text = argc > 0 ? js_string_utf8(args[0]) : NULL;
@@ -180,7 +180,7 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
  */
 static bool rfc822_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                           int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* an embedder native: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* an embedder native: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = js_undefined();
@@ -246,7 +246,7 @@ static mdy_doc *render_tree(mdy_engine *e, size_t index, JsValue req,
 static int resolve_target(mdy_engine *e, JsValue target, int *failed) {
     if (js_is_number(target)) {
         double at = js_get_number(target);
-        return (at >= 0 && at < (double)e->count) ? (int)at : -1;
+        return (at >= 0 && at < (double)e->set.count) ? (int)at : -1;
     }
     if (!js_is_object(target)) return -1;
 
@@ -269,7 +269,7 @@ static int resolve_target(mdy_engine *e, JsValue target, int *failed) {
 
 static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                           int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     int failed = 0;
@@ -302,7 +302,7 @@ static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     }
 
     char *token = hold_tree_as(e, doc, (mdy_node *)mdy_root(doc),
-                               e->last_render_key[0] ? e->last_render_key : NULL);
+                               e->compose.last_render_key[0] ? e->compose.last_render_key : NULL);
     if (!token) { *result = js_undefined(); return false; }
     *result = str(e->vm, token, strlen(token));
     free(token);
@@ -339,7 +339,7 @@ static void collect_text_into(const mdy_node *n, char **out, size_t *len, size_t
 
 static bool text_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     int failed = 0;
@@ -379,7 +379,7 @@ static bool text_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  */
 static bool emit_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     if (argc < 2) { *result = js_null(); return true; }
@@ -433,11 +433,11 @@ extern int nis_create_index(int handle, const char *name, const uint8_t *fields,
 extern void nis_close(int handle);
 
 static void close_set(mdy_engine *e) {
-    for (size_t i = 0; i < e->count; i++) mdy_data_free(e->docs[i].fences);
-    free(e->docs);
-    free(e->ids);
-    free(e->oid_slots);
-    mdy_documents_free(e->source_docs);
+    for (size_t i = 0; i < e->set.count; i++) mdy_data_free(e->set.docs[i].fences);
+    free(e->set.docs);
+    free(e->set.ids);
+    free(e->set.oid_slots);
+    mdy_documents_free(e->set.source_docs);
     /*
      * The collection goes with the documents that are in it. Nothing closed
      * it, so every engine left behind a primary store, an index store, two
@@ -451,20 +451,20 @@ static void close_set(mdy_engine *e) {
      * open used to insert into the collection the first one filled, so the
      * old documents were still there to be found.
      */
-    if (e->handle >= 0) nis_close(e->handle);
-    e->handle = -1;
-    e->docs = NULL;
-    e->ids = NULL;
-    e->oid_slots = NULL;
-    e->oid_cap = 0;
-    e->source_docs = NULL;
-    e->count = 0;
+    if (e->set.handle >= 0) nis_close(e->set.handle);
+    e->set.handle = -1;
+    e->set.docs = NULL;
+    e->set.ids = NULL;
+    e->set.oid_slots = NULL;
+    e->set.oid_cap = 0;
+    e->set.source_docs = NULL;
+    e->set.count = 0;
 }
 
 int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
                     char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
-    mdy_documents *docs = e->split ? mdy_split_documents(source, len)
+    mdy_documents *docs = e->knobs.split ? mdy_split_documents(source, len)
                                    : mdy_one_document(source, len);
     if (!docs) { close_set(e); return -1; }
     return open_documents(e, docs, error, error_len);
@@ -478,17 +478,17 @@ int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
 int open_documents(mdy_engine *e, mdy_documents *docs,
                           char *error, size_t error_len) {
     close_set(e);
-    e->source_docs = docs;
+    e->set.source_docs = docs;
 
-    size_t n = mdy_documents_count(e->source_docs);
-    e->docs = calloc(n ? n : 1, sizeof *e->docs);
-    e->ids = calloc(n ? n : 1, sizeof *e->ids);
-    if (!e->docs || !e->ids) { close_set(e); return -1; }
-    e->count = n;
+    size_t n = mdy_documents_count(e->set.source_docs);
+    e->set.docs = calloc(n ? n : 1, sizeof *e->set.docs);
+    e->set.ids = calloc(n ? n : 1, sizeof *e->set.ids);
+    if (!e->set.docs || !e->set.ids) { close_set(e); return -1; }
+    e->set.count = n;
 
-    if (e->handle < 0) {
-        e->handle = nis_open();
-        if (e->handle < 0) {
+    if (e->set.handle < 0) {
+        e->set.handle = nis_open();
+        if (e->set.handle < 0) {
             if (error && error_len) snprintf(error, error_len, "could not open a collection");
             close_set(e);
             return -1;
@@ -531,7 +531,7 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         size_t slen = 0;
         const uint8_t *bytes = bj_builder_data(spec, &slen);
         int rc = bj_builder_error(spec) ? -1
-               : nis_create_index(e->handle, "path", bytes, (uint32_t)slen, 0, 1);
+               : nis_create_index(e->set.handle, "path", bytes, (uint32_t)slen, 0, 1);
         bj_builder_free(spec);
         if (rc != 0) {
             if (error && error_len)
@@ -543,8 +543,8 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
     }
 
     for (size_t i = 0; i < n; i++) {
-        Document *d = &e->docs[i];
-        d->chunk = mdy_documents_at(e->source_docs, i);
+        Document *d = &e->set.docs[i];
+        d->chunk = mdy_documents_at(e->set.source_docs, i);
         mdy_chunk body;
         mdy_split_frontmatter(d->chunk.text, d->chunk.len, &d->matter, &body);
         /*
@@ -566,7 +566,7 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         if (body.text >= d->chunk.text && body.text <= d->chunk.text + d->chunk.len)
             for (const char *p = d->chunk.text; p < body.text; p++)
                 if (*p == '\n') d->matter_lines++;
-        d->is_markdown = e->ident_is_md && i < e->identity_count && e->ident_is_md[i];
+        d->is_markdown = e->identity.is_md && i < e->identity.count && e->identity.is_md[i];
 
         /*
          * The document's DATA: its front matter, with each ```data fence
@@ -604,8 +604,8 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         /* Identity is VALUES, built by the walk — there is no text in between
          * to parse, so there is nothing here that can fail and nothing that
          * needed escaping to get here. (B8.) */
-        if (e->ident_pre && i < e->identity_count && e->ident_pre[i])
-            maps[used++] = mdy_yaml_root(e->ident_pre[i]);
+        if (e->identity.pre && i < e->identity.count && e->identity.pre[i])
+            maps[used++] = mdy_yaml_root(e->identity.pre[i]);
         if (matter) maps[used++] = mdy_yaml_root(matter);
         for (size_t f = 0; f < fence_count; f++) {
             const mdy_data_fence *fence = mdy_data_at(d->fences, f);
@@ -644,23 +644,23 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
          * record's `tags` are its own value, not the normalized hashtag list
          * a document body earns — which is where mdy-docs' `meta` leaves
          * them too. */
-        if (e->ident_data && i < e->identity_count && e->ident_data[i])
-            maps[used++] = mdy_yaml_root(e->ident_data[i]);
+        if (e->identity.data && i < e->identity.count && e->identity.data[i])
+            maps[used++] = mdy_yaml_root(e->identity.data[i]);
 
         /* After them, where identity WINS — and, for a data file, the one
          * field that must be real whatever it declared. */
-        if (e->ident_post && i < e->identity_count && e->ident_post[i])
-            maps[used++] = mdy_yaml_root(e->ident_post[i]);
+        if (e->identity.post && i < e->identity.count && e->identity.post[i])
+            maps[used++] = mdy_yaml_root(e->identity.post[i]);
 
         mdy_oid_next(d->oid);
-        memcpy(e->ids[i], d->oid, 12);
+        memcpy(e->set.ids[i], d->oid, 12);
 
         bj_builder *b = bj_builder_new();
         int ok = b && mdy_bj_document(b, d->oid, maps, used) == 0 && !bj_builder_error(b);
         if (ok) {
             size_t dlen = 0;
             const uint8_t *bytes = bj_builder_data(b, &dlen);
-            ok = bytes && nis_insert(e->handle, bytes, (uint32_t)dlen) == 0;
+            ok = bytes && nis_insert(e->set.handle, bytes, (uint32_t)dlen) == 0;
         }
         bj_builder_free(b);
         if (0) {
@@ -695,7 +695,7 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
     return 0;
 }
 
-size_t mdy_engine_count(mdy_engine *e) { return e ? e->count : 0; }
+size_t mdy_engine_count(mdy_engine *e) { return e ? e->set.count : 0; }
 
 void mdy_engine_on_emit(mdy_engine *e,
                         void (*fn)(void *ud, const char *path, const char *content),
@@ -727,22 +727,22 @@ void mdy_engine_on_binary(mdy_engine *e,
  * that were what it said. See xalloc.h.
  */
 void mdy_engine_set_context_json(mdy_engine *e, const char *name, const char *json, int strict) {
-    e->ctx_names  = mdy_xrealloc(e->ctx_names, (e->ctx_count + 1) * sizeof *e->ctx_names);
-    e->ctx_json   = mdy_xrealloc(e->ctx_json, (e->ctx_count + 1) * sizeof *e->ctx_json);
-    e->ctx_strict = mdy_xrealloc(e->ctx_strict, e->ctx_count + 1);
-    e->ctx_names[e->ctx_count] = mdy_xstrdup(name);
-    e->ctx_json[e->ctx_count] = mdy_xstrdup(json);
-    e->ctx_strict[e->ctx_count] = (char)(strict ? 1 : 0);
-    e->ctx_count++;
+    e->knobs.ctx_names  = mdy_xrealloc(e->knobs.ctx_names, (e->knobs.ctx_count + 1) * sizeof *e->knobs.ctx_names);
+    e->knobs.ctx_json   = mdy_xrealloc(e->knobs.ctx_json, (e->knobs.ctx_count + 1) * sizeof *e->knobs.ctx_json);
+    e->knobs.ctx_strict = mdy_xrealloc(e->knobs.ctx_strict, e->knobs.ctx_count + 1);
+    e->knobs.ctx_names[e->knobs.ctx_count] = mdy_xstrdup(name);
+    e->knobs.ctx_json[e->knobs.ctx_count] = mdy_xstrdup(json);
+    e->knobs.ctx_strict[e->knobs.ctx_count] = (char)(strict ? 1 : 0);
+    e->knobs.ctx_count++;
 }
 
 void mdy_engine_set_context_bool(mdy_engine *e, const char *name, int value) {
     mdy_engine_set_context_json(e, name, value ? "true" : "false", 1);
 }
 
-void mdy_engine_set_split(mdy_engine *e, int split) { e->split = split ? 1 : 0; }
-void mdy_engine_set_sanitize(mdy_engine *e, int sanitize) { e->sanitize = sanitize ? 1 : 0; }
-void mdy_engine_set_tasks(mdy_engine *e, int tasks) { e->tasks = tasks ? 1 : 0; }
+void mdy_engine_set_split(mdy_engine *e, int split) { e->knobs.split = split ? 1 : 0; }
+void mdy_engine_set_sanitize(mdy_engine *e, int sanitize) { e->knobs.sanitize = sanitize ? 1 : 0; }
+void mdy_engine_set_tasks(mdy_engine *e, int tasks) { e->knobs.tasks = tasks ? 1 : 0; }
 
 int mdy_engine_set_scope_json(mdy_engine *e, const char *name, const char *json) {
     /* an identifier, and not one the toolkit or the wrapper already binds */
@@ -754,22 +754,22 @@ int mdy_engine_set_scope_json(mdy_engine *e, const char *name, const char *json)
     }
     static const char *const taken[] = { "transform", "visit", "h", "toText", "slug", "req", "res", "$", "$$", NULL };
     for (int i = 0; taken[i]; i++) if (strcmp(name, taken[i]) == 0) return -1;
-    char **names = realloc(e->scope_names, (e->scope_count + 1) * sizeof *names);
-    if (names) e->scope_names = names;
-    char **texts = realloc(e->scope_json, (e->scope_count + 1) * sizeof *texts);
-    if (texts) e->scope_json = texts;
+    char **names = realloc(e->knobs.scope_names, (e->knobs.scope_count + 1) * sizeof *names);
+    if (names) e->knobs.scope_names = names;
+    char **texts = realloc(e->knobs.scope_json, (e->knobs.scope_count + 1) * sizeof *texts);
+    if (texts) e->knobs.scope_json = texts;
     if (!names || !texts) return -1;
     /* the same name again replaces the value */
-    for (size_t i = 0; i < e->scope_count; i++) {
-        if (strcmp(e->scope_names[i], name) == 0) {
-            free(e->scope_json[i]);
-            e->scope_json[i] = strdup(json);
+    for (size_t i = 0; i < e->knobs.scope_count; i++) {
+        if (strcmp(e->knobs.scope_names[i], name) == 0) {
+            free(e->knobs.scope_json[i]);
+            e->knobs.scope_json[i] = strdup(json);
             return 0;
         }
     }
-    e->scope_names[e->scope_count] = strdup(name);
-    e->scope_json[e->scope_count] = strdup(json);
-    e->scope_count++;
+    e->knobs.scope_names[e->knobs.scope_count] = strdup(name);
+    e->knobs.scope_json[e->knobs.scope_count] = strdup(json);
+    e->knobs.scope_count++;
     return 0;
 }
 
@@ -781,8 +781,8 @@ void mdy_engine_on_message(mdy_engine *e,
     e->cb.on_message_ud = ud;
 }
 
-void mdy_engine_set_response(mdy_engine *e, int keep) { e->want_response = keep ? 1 : 0; }
-const char *mdy_engine_last_response(mdy_engine *e) { return e->last_response; }
+void mdy_engine_set_response(mdy_engine *e, int keep) { e->knobs.want_response = keep ? 1 : 0; }
+const char *mdy_engine_last_response(mdy_engine *e) { return e->compose.last_response; }
 
 static JsValue context_value(mdy_engine *e, const char *json, int strict);
 
@@ -807,8 +807,8 @@ int mdy_engine_encode_json(mdy_engine *e, const char *json, uint8_t **out, size_
 }
 
 void mdy_engine_clear_context(mdy_engine *e) {
-    for (size_t i = 0; i < e->ctx_count; i++) { free(e->ctx_names[i]); free(e->ctx_json[i]); }
-    e->ctx_count = 0;
+    for (size_t i = 0; i < e->knobs.ctx_count; i++) { free(e->knobs.ctx_names[i]); free(e->knobs.ctx_json[i]); }
+    e->knobs.ctx_count = 0;
 }
 
 void mdy_engine_on_source(mdy_engine *e, void (*fn)(void *ud, const char *path), void *ud) {
@@ -874,30 +874,30 @@ static uint32_t oid_hash(const char *hex) {
  */
 static void oid_map_build(mdy_engine *e) {
     size_t cap = 16;
-    while (cap < e->count * 2) cap *= 2;
+    while (cap < e->set.count * 2) cap *= 2;
     OidSlot *slots = mdy_xcalloc(cap, sizeof *slots);
-    for (size_t i = 0; i < e->count; i++) {
+    for (size_t i = 0; i < e->set.count; i++) {
         char hex[25];
-        id_hex(e->ids[i], hex);
+        id_hex(e->set.ids[i], hex);
         size_t at = oid_hash(hex) & (cap - 1);
         while (slots[at].hex[0]) at = (at + 1) & (cap - 1);
         memcpy(slots[at].hex, hex, sizeof hex);
         slots[at].index = (int)i;
     }
-    e->oid_slots = slots;
-    e->oid_cap = cap;
+    e->set.oid_slots = slots;
+    e->set.oid_cap = cap;
 }
 
 /* `hex` is the 24 characters of an ObjectId; anything else belongs to no
  * document in this set. */
 int index_of_id(mdy_engine *e, const char *hex, size_t len) {
     if (len != 24) return -1;
-    if (!e->oid_slots) oid_map_build(e);
-    size_t at = oid_hash(hex) & (e->oid_cap - 1);
-    for (size_t probe = 0; probe < e->oid_cap; probe++) {
-        if (!e->oid_slots[at].hex[0]) return -1;      /* a hole ends the run */
-        if (memcmp(e->oid_slots[at].hex, hex, 24) == 0) return e->oid_slots[at].index;
-        at = (at + 1) & (e->oid_cap - 1);
+    if (!e->set.oid_slots) oid_map_build(e);
+    size_t at = oid_hash(hex) & (e->set.oid_cap - 1);
+    for (size_t probe = 0; probe < e->set.oid_cap; probe++) {
+        if (!e->set.oid_slots[at].hex[0]) return -1;      /* a hole ends the run */
+        if (memcmp(e->set.oid_slots[at].hex, hex, 24) == 0) return e->set.oid_slots[at].index;
+        at = (at + 1) & (e->set.oid_cap - 1);
     }
     return -1;
 }
@@ -937,7 +937,7 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query,
 
     uint8_t *out = NULL;
     size_t out_len = 0;
-    int rc = nis_find(store->handle, filter, (uint32_t)flen, &out, &out_len);
+    int rc = nis_find(store->set.handle, filter, (uint32_t)flen, &out, &out_len);
     bj_builder_free(b);
     /*
      * A query that could not RUN is not a query that matched nothing.
@@ -1013,7 +1013,7 @@ JsValue run_query(mdy_engine *e, JsValue query, int one, int *failed) {
 
 static bool find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     int failed = 0;
@@ -1028,7 +1028,7 @@ static bool find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
 
 static bool find_one_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                             int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     int failed = 0;
@@ -1052,18 +1052,18 @@ static bool find_one_native(JsContext *ctx, JsValue this_val, const JsValue *arg
  * failures that are allocations end the run. See xalloc.h.
  */
 static JsValue document_record(mdy_engine *e, size_t at) {
-    if (at >= e->count) return js_object_new(e->ctx);
+    if (at >= e->set.count) return js_object_new(e->ctx);
     bj_builder *b = bj_builder_new();
     if (!b) mdy_fatal("out of memory looking a document up");
     bj_begin_object(b);
     bj_put_key(b, (const uint8_t *)"_id", 3);
-    bj_put_oid(b, e->ids[at]);
+    bj_put_oid(b, e->set.ids[at]);
     bj_end_object(b);
     size_t flen = 0;
     const uint8_t *filter = bj_builder_data(b, &flen);
     uint8_t *out = NULL;
     size_t out_len = 0;
-    int rc = nis_find(e->handle, filter, (uint32_t)flen, &out, &out_len);
+    int rc = nis_find(e->set.handle, filter, (uint32_t)flen, &out, &out_len);
     bj_builder_free(b);
     if (rc != 0 || !out) mdy_fatal("the document store could not return a document");
     JsValue hits = binjson_to_js(e, out, out_len, NULL);
@@ -1109,24 +1109,24 @@ static JsValue record_without_id(mdy_engine *e, JsValue rec) {
 
 static bool data_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                         int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     if (argc < 1 || !js_is_number(args[0])) { *result = js_null(); return true; }
     double at = js_get_number(args[0]);
-    if (at < 0 || at >= (double)e->count) { *result = js_null(); return true; }
+    if (at < 0 || at >= (double)e->set.count) { *result = js_null(); return true; }
 
     bj_builder *b = bj_builder_new();
     if (!b) { *result = js_null(); return true; }
     bj_begin_object(b);
     bj_put_key(b, (const uint8_t *)"_id", 3);
-    bj_put_oid(b, e->ids[(size_t)at]);
+    bj_put_oid(b, e->set.ids[(size_t)at]);
     bj_end_object(b);
     size_t flen = 0;
     const uint8_t *filter = bj_builder_data(b, &flen);
     uint8_t *out = NULL;
     size_t out_len = 0;
-    int rc = nis_find(e->handle, filter, (uint32_t)flen, &out, &out_len);
+    int rc = nis_find(e->set.handle, filter, (uint32_t)flen, &out, &out_len);
     bj_builder_free(b);
     if (rc != 0 || !out) { *result = js_null(); return true; }
     JsValue hits = binjson_to_js(e, out, out_len, NULL);
@@ -1170,8 +1170,8 @@ static bool compose_native(JsContext *ctx, JsValue this_val, const JsValue *args
     splice_tree(e, tree, (mdy_node *)mdy_root(tree));
     note_references(e, tree);
     /* The document owns the tree until the render finishes with it. */
-    mdy_free(e->tree_owner);
-    e->tree_owner = tree;
+    mdy_free(e->compose.tree_owner);
+    e->compose.tree_owner = tree;
     *result = tree_to_js(e, mdy_root(tree));
     return true;
 }
@@ -1193,19 +1193,19 @@ static void register_one(mdy_engine *e, const char *name, JsNativeFn fn) {
 static mdy_engine *lookup_import(mdy_engine *e, const char *spec, const char **why) {
     static char path[1024];
     path[0] = '\0';
-    if (e->current < e->count) {
+    if (e->graph.current < e->set.count) {
         /* The record for THIS document, by its own id. */
         bj_builder *b = bj_builder_new();
         if (b) {
             bj_begin_object(b);
             bj_put_key(b, (const uint8_t *)"_id", 3);
-            bj_put_oid(b, e->ids[e->current]);
+            bj_put_oid(b, e->set.ids[e->graph.current]);
             bj_end_object(b);
             size_t flen = 0;
             const uint8_t *filter = bj_builder_data(b, &flen);
             uint8_t *out = NULL;
             size_t out_len = 0;
-            if (nis_find(e->handle, filter, (uint32_t)flen, &out, &out_len) == 0 && out) {
+            if (nis_find(e->set.handle, filter, (uint32_t)flen, &out, &out_len) == 0 && out) {
                 JsValue hits = binjson_to_js(e, out, out_len, NULL);
                 free(out);
                 if (js_is_array(hits) && js_array_length(hits) > 0) {
@@ -1217,10 +1217,10 @@ static mdy_engine *lookup_import(mdy_engine *e, const char *spec, const char **w
         }
     }
     if (!path[0]) { *why = "a document with no path"; return NULL; }
-    for (size_t i = 0; i < e->import_count; i++) {
-        if (strcmp(e->imports[i].spec, spec) == 0 &&
-            strcmp(e->imports[i].source_path, path) == 0)
-            return e->imports[i].set;
+    for (size_t i = 0; i < e->graph.import_count; i++) {
+        if (strcmp(e->graph.imports[i].spec, spec) == 0 &&
+            strcmp(e->graph.imports[i].source_path, path) == 0)
+            return e->graph.imports[i].set;
     }
     *why = path;
     return NULL;
@@ -1252,7 +1252,7 @@ static JsValue cross_vm(mdy_engine *from, mdy_engine *to, JsValue v) {
 
 static bool import_render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                  int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = js_undefined();
@@ -1340,13 +1340,13 @@ static bool import_query_native(JsContext *ctx, JsValue this_val, const JsValue 
 
 static bool import_find_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     return import_query_native(ctx, this_val, args, argc, result, 0);
 }
 
 static bool import_find_one_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                    int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     return import_query_native(ctx, this_val, args, argc, result, 1);
 }
 
@@ -1375,8 +1375,8 @@ static void parse_options(mdy_engine *e, mdy_options *options) {
     mdy_options_default(options);
     options->frontmatter = 0;
     options->documents = 0;
-    options->sanitize = e->sanitize;
-    options->tasks = e->tasks;
+    options->sanitize = e->knobs.sanitize;
+    options->tasks = e->knobs.tasks;
     options->highlight = engine_highlight;
     options->highlight_ud = e;
 }
@@ -1390,8 +1390,8 @@ static void parse_options(mdy_engine *e, mdy_options *options) {
  * document with a transform, and from the host's parse for one without.
  */
 static void note_references(mdy_engine *e, const mdy_doc *tree) {
-    if (!js_is_object(e->render_res)) return;
-    JsValue data = get_val(e, e->render_res, "data");
+    if (!js_is_object(e->compose.render_res)) return;
+    JsValue data = get_val(e, e->compose.render_res, "data");
     if (!js_is_object(data)) return;
     static const char *const lists[] = { "tags", "users", "links" };
     /* Every value made here is a GC root until it is stored: interning a key
@@ -1461,7 +1461,7 @@ static bool parse_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  * markdown a document holds and wants as nodes. */
 static bool markdown_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                             int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* an embedder native: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* an embedder native: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *text = argc > 0 ? js_string_utf8(args[0]) : NULL;
@@ -1678,7 +1678,7 @@ static char *hold_toc(mdy_engine *e) {
     char *token = hold_tree(e, NULL, NULL);
     if (token) {
         mdy_engine *t = token_table(e);
-        t->held[t->held_count - 1].is_toc = 1;
+        t->compose.held[t->compose.held_count - 1].is_toc = 1;
     }
     return token;
 }
@@ -1810,7 +1810,7 @@ static void fill_toc(mdy_engine *e, mdy_doc *doc) {
     /* Nothing to do unless a token asked for one — the walk is not free. */
     mdy_engine *t = token_table(e);
     int wanted = 0;
-    for (size_t i = 0; i < t->held_count && !wanted; i++) wanted = t->held[i].is_toc;
+    for (size_t i = 0; i < t->compose.held_count && !wanted; i++) wanted = t->compose.held[i].is_toc;
     if (!wanted) return;
 
     Heading *entries = NULL;
@@ -1973,7 +1973,7 @@ static char *message_name(mdy_engine *e, size_t at) {
 
 static bool publish_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                            int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     *result = js_null();
@@ -1995,7 +1995,7 @@ static bool publish_native(JsContext *ctx, JsValue this_val, const JsValue *args
     char others[512];
     size_t used = 0;
     others[0] = '\0';
-    for (size_t i = 0; i < e->count; i++) {
+    for (size_t i = 0; i < e->set.count; i++) {
         char *have = message_name(e, i);
         if (have && strcmp(have, name) == 0) {
             if (found == 0) first = i;
@@ -2093,7 +2093,7 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
 
 static bool resize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                           int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     return resize_in(e, e, args, argc, result);
@@ -2103,7 +2103,7 @@ static bool resize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  * imported package. */
 static bool import_resize_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                                  int argc, JsValue *result) {
-    ((mdy_engine *)js_context_userdata(ctx))->taint = 1; /* reached outside: see the render memo */
+    ((mdy_engine *)js_context_userdata(ctx))->compose.taint = 1; /* reached outside: see the render memo */
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *spec = argc > 0 ? js_string_utf8(args[0]) : NULL;
@@ -2207,8 +2207,8 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
 
     /* Already done? The same request must not decode the file twice. */
     mdy_engine *t = token_table(e);
-    for (size_t i = 0; i < t->resized_count; i++) {
-        if (strcmp(t->resized[i].path, out_path) == 0) {
+    for (size_t i = 0; i < t->compose.resized_count; i++) {
+        if (strcmp(t->compose.resized[i].path, out_path) == 0) {
             free(path); free(ext); free(shown);
             JsValue r = js_object_new(e->ctx);
             js_gc_protect(e->vm, &r);
@@ -2216,22 +2216,22 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
             char url[1100];
             int n = snprintf(url, sizeof url, "/%s", out_path);
             set_val(e, r, "url", str(e->vm, url, (size_t)n));
-            set_val(e, r, "width", js_number(t->resized[i].width));
-            set_val(e, r, "height", js_number(t->resized[i].height));
+            set_val(e, r, "width", js_number(t->compose.resized[i].width));
+            set_val(e, r, "height", js_number(t->compose.resized[i].height));
             js_gc_unprotect(e->vm, &r);
             *result = r;
             return true;
         }
     }
 
-    if (!from->root) {
+    if (!from->graph.root) {
         free(path); free(ext); free(shown);
         RESIZE_FAIL("resize: this document set was not opened from a directory, "
                     "so there is no file to read");
     }
 
     size_t len = 0;
-    uint8_t *bytes = fsx_read(from->root, path, &len);
+    uint8_t *bytes = fsx_read(from->graph.root, path, &len);
     if (!bytes) {
         snprintf(msg, sizeof msg, "resize: cannot read %s", path);
         free(path); free(ext); free(shown);
@@ -2260,11 +2260,11 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
      * at all, so the table could hold a NULL that every later comparison
      * dereferenced. See xalloc.h.
      */
-    t->resized = mdy_xrealloc(t->resized, (t->resized_count + 1) * sizeof *t->resized);
-    t->resized[t->resized_count].path = mdy_xstrdup(out_path);
-    t->resized[t->resized_count].width = width;
-    t->resized[t->resized_count].height = height;
-    t->resized_count++;
+    t->compose.resized = mdy_xrealloc(t->compose.resized, (t->compose.resized_count + 1) * sizeof *t->compose.resized);
+    t->compose.resized[t->compose.resized_count].path = mdy_xstrdup(out_path);
+    t->compose.resized[t->compose.resized_count].width = width;
+    t->compose.resized[t->compose.resized_count].height = height;
+    t->compose.resized_count++;
     free(path); free(ext); free(shown);
 
     JsValue r = js_object_new(e->ctx);
@@ -2329,13 +2329,13 @@ static bool module_canonicalize(void *ud, const uint16_t *spec, size_t spec_len,
          * file. `e->current` is the document being rendered. */
         char joined[4096];
         char *path = NULL;
-        if (e->current < e->count) {
-            JsValue record = document_record(e, e->current);
+        if (e->graph.current < e->set.count) {
+            JsValue record = document_record(e, e->graph.current);
             js_gc_protect(e->vm, &record);
             path = js_string_utf8(get_val(e, record, "path"));
             js_gc_unprotect(e->vm, &record);
         }
-        snprintf(joined, sizeof joined, "%s/%s", e->root ? e->root : "",
+        snprintf(joined, sizeof joined, "%s/%s", e->graph.root ? e->graph.root : "",
                  path ? path : "");
         free(path);
         dirname_of(joined, base, sizeof base);
@@ -2348,11 +2348,11 @@ static bool module_canonicalize(void *ud, const uint16_t *spec, size_t spec_len,
 
     /* The engine copies before this returns, so a per-engine buffer is enough
      * and it need only outlive the call. */
-    free(e->module_spec);
+    free(e->graph.module_spec);
     size_t n = 0;
-    e->module_spec = to_utf16(resolved, strlen(resolved), &n);
-    if (!e->module_spec) return false;
-    *out = e->module_spec;
+    e->graph.module_spec = to_utf16(resolved, strlen(resolved), &n);
+    if (!e->graph.module_spec) return false;
+    *out = e->graph.module_spec;
     *out_len = n;
     return true;
 }
@@ -2378,7 +2378,7 @@ static JsValue module_load(void *ud, JsContext *ctx,
                            const uint16_t *referrer, size_t ref_len) {
     (void)referrer; (void)ref_len;
     mdy_engine *e = ud;
-    e->taint = 1; /* an import reaches outside: see the render memo */
+    e->compose.taint = 1; /* an import reaches outside: see the render memo */
     char *specifier = from_utf16(spec, spec_len);
     char msg[1024];
 
@@ -2404,13 +2404,13 @@ static JsValue module_load(void *ud, JsContext *ctx,
     }
 
     /* Inside this package, and nowhere else. */
-    size_t root_len = e->root ? strlen(e->root) : 0;
-    int inside = e->root && n > root_len + 1 &&
-                 strncmp(specifier, e->root, root_len) == 0 &&
+    size_t root_len = e->graph.root ? strlen(e->graph.root) : 0;
+    int inside = e->graph.root && n > root_len + 1 &&
+                 strncmp(specifier, e->graph.root, root_len) == 0 &&
                  specifier[root_len] == '/';
     if (!inside) {
         snprintf(msg, sizeof msg, "module \"%s\" is outside this package (%s)",
-                 specifier, e->root ? e->root : "no directory");
+                 specifier, e->graph.root ? e->graph.root : "no directory");
         free(specifier);
         return settled(ctx, str(e->vm, msg, strlen(msg)), 0);
     }
@@ -2475,7 +2475,7 @@ mdy_engine *mdy_engine_new(mdy_session *session) {
     mdy_engine *e = calloc(1, sizeof *e);
     if (!e) return NULL;
     e->session = session;
-    e->split = 1;                   /* a bare `---` starts a document, as the site engine reads it */
+    e->knobs.split = 1;                   /* a bare `---` starts a document, as the site engine reads it */
     JsVmConfig cfg = {0};
     /*
      * Two knobs for testing, and they earn their place: this engine hands the
@@ -2494,7 +2494,7 @@ mdy_engine *mdy_engine_new(mdy_session *session) {
     if (getenv("MDY_GC_STRESS")) cfg.gc_stress = true;
     e->vm = js_vm_new(&cfg);
     if (!e->vm) { free(e); return NULL; }
-    e->handle = -1;
+    e->set.handle = -1;
     e->ctx = js_context_new(e->vm);
     if (!e->ctx) { js_vm_free(e->vm); free(e); return NULL; }
     /* So a native can find the engine it belongs to. */
@@ -2512,8 +2512,8 @@ mdy_engine *mdy_engine_new(mdy_session *session) {
     js_set_module_loader(e->ctx, module_load, module_canonicalize, e);
     js_enable_source_modules(e->ctx);
     register_natives(e);
-    e->highlight_fn = js_undefined();
-    e->highlight_state = 0;
+    e->highlight.fn = js_undefined();
+    e->highlight.state = 0;
     return e;
 }
 
@@ -2535,7 +2535,7 @@ mdy_engine *mdy_engine_new(mdy_session *session) {
  */
 
 static void load_highlighter(mdy_engine *e) {
-    e->highlight_state = -1;
+    e->highlight.state = -1;
 
     size_t slen = 0;
     uint16_t *spec = to_utf16(MDY_HIGHLIGHT_SPEC, strlen(MDY_HIGHLIGHT_SPEC), &slen);
@@ -2561,25 +2561,25 @@ static void load_highlighter(mdy_engine *e) {
     size_t nlen = 0;
     uint16_t *name = to_utf16("highlightCode", 13, &nlen);
     /* Rooted in its final home before the promise that reaches it lets go. */
-    e->highlight_fn = name ? js_module_get_export(e->ctx, js_promise_result(promise), name, nlen) : js_undefined();
-    js_gc_protect(e->vm, &e->highlight_fn);
+    e->highlight.fn = name ? js_module_get_export(e->ctx, js_promise_result(promise), name, nlen) : js_undefined();
+    js_gc_protect(e->vm, &e->highlight.fn);
     free(name);
     js_gc_unprotect(e->vm, &promise);
-    if (!js_is_function(e->highlight_fn)) {
+    if (!js_is_function(e->highlight.fn)) {
         fprintf(stderr, "fenced code will not be highlighted: the highlighter exports no highlightCode\n");
-        js_gc_unprotect(e->vm, &e->highlight_fn);
-        e->highlight_fn = js_undefined();
+        js_gc_unprotect(e->vm, &e->highlight.fn);
+        e->highlight.fn = js_undefined();
         return;
     }
-    e->highlight_state = 1;
+    e->highlight.state = 1;
 }
 
 static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
                             const char *value, size_t value_len,
                             const char *language, size_t language_len) {
     mdy_engine *e = ud;
-    if (e->highlight_state == 0) load_highlighter(e);
-    if (e->highlight_state != 1) return 0;
+    if (e->highlight.state == 0) load_highlighter(e);
+    if (e->highlight.state != 1) return 0;
 
     /* One at a time: making the second string can collect the first. */
     JsValue args[2] = { str(e->vm, value, value_len), js_undefined() };
@@ -2587,7 +2587,7 @@ static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
     args[1] = str(e->vm, language, language_len);
     js_gc_protect(e->vm, &args[1]);
     JsValue result = js_undefined();
-    int ok = js_call(e->ctx, e->highlight_fn, js_undefined(), args, 2, &result);
+    int ok = js_call(e->ctx, e->highlight.fn, js_undefined(), args, 2, &result);
     js_gc_unprotect(e->vm, &args[1]);
     js_gc_unprotect(e->vm, &args[0]);
     if (!ok || !js_is_object(result)) return 0;
@@ -2606,11 +2606,11 @@ mdy_session *mdy_engine_session(const mdy_engine *e) { return e ? e->session : N
 
 void mdy_engine_free(mdy_engine *e) {
     if (!e) return;
-    if (e->highlight_state == 1) js_gc_unprotect(e->vm, &e->highlight_fn);
-    for (size_t i = 0; i < e->scope_count; i++) { free(e->scope_names[i]); free(e->scope_json[i]); }
-    free(e->scope_names);
-    free(e->scope_json);
-    free(e->last_response);
+    if (e->highlight.state == 1) js_gc_unprotect(e->vm, &e->highlight.fn);
+    for (size_t i = 0; i < e->knobs.scope_count; i++) { free(e->knobs.scope_names[i]); free(e->knobs.scope_json[i]); }
+    free(e->knobs.scope_names);
+    free(e->knobs.scope_json);
+    free(e->compose.last_response);
 
     /*
      * The graph is freed by whoever owns the cache — every package in it,
@@ -2618,13 +2618,13 @@ void mdy_engine_free(mdy_engine *e) {
      * its imports directly: a package imported twice is one set with two
      * importers, and the second free would be of memory already gone.
      */
-    if (e->owns_cache && e->cache) {
-        ImportCache *c = e->cache;
-        e->cache = NULL;
+    if (e->graph.owns_cache && e->graph.cache) {
+        ImportCache *c = e->graph.cache;
+        e->graph.cache = NULL;
         for (size_t i = 0; i < c->count; i++) {
             free(c->dirs[i]);
             if (c->sets[i] != e) {
-                c->sets[i]->cache = NULL;      /* it does not own it */
+                c->sets[i]->graph.cache = NULL;      /* it does not own it */
                 mdy_engine_free(c->sets[i]);
             }
         }
@@ -2635,31 +2635,31 @@ void mdy_engine_free(mdy_engine *e) {
         free(c);
     }
 
-    for (size_t i = 0; i < e->import_count; i++) {
-        free(e->imports[i].source_path);
-        free(e->imports[i].spec);
+    for (size_t i = 0; i < e->graph.import_count; i++) {
+        free(e->graph.imports[i].source_path);
+        free(e->graph.imports[i].spec);
     }
-    free(e->imports);
-    for (size_t i = 0; i < e->identity_count; i++) {
-        if (e->ident_pre) mdy_yaml_free(e->ident_pre[i]);
-        if (e->ident_data) mdy_yaml_free(e->ident_data[i]);
-        if (e->ident_post) mdy_yaml_free(e->ident_post[i]);
+    free(e->graph.imports);
+    for (size_t i = 0; i < e->identity.count; i++) {
+        if (e->identity.pre) mdy_yaml_free(e->identity.pre[i]);
+        if (e->identity.data) mdy_yaml_free(e->identity.data[i]);
+        if (e->identity.post) mdy_yaml_free(e->identity.post[i]);
     }
-    free(e->ident_pre);
-    free(e->ident_data);
-    free(e->ident_post);
-    free(e->ident_is_md);
-    free(e->module_spec);
-    for (size_t i = 0; i < e->resized_count; i++) free(e->resized[i].path);
-    free(e->resized);
+    free(e->identity.pre);
+    free(e->identity.data);
+    free(e->identity.post);
+    free(e->identity.is_md);
+    free(e->graph.module_spec);
+    for (size_t i = 0; i < e->compose.resized_count; i++) free(e->compose.resized[i].path);
+    free(e->compose.resized);
     mdy_engine_clear_context(e);
-    free(e->ctx_names);
-    free(e->ctx_json);
-    free(e->ctx_strict);
-    free(e->root);
+    free(e->knobs.ctx_names);
+    free(e->knobs.ctx_json);
+    free(e->knobs.ctx_strict);
+    free(e->graph.root);
 
     close_set(e);
-    mdy_free(e->tree_owner);
+    mdy_free(e->compose.tree_owner);
     js_context_free(e->ctx);
     js_vm_free(e->vm);
     free(e);
@@ -2764,7 +2764,7 @@ static char *wrap(mdy_engine *e, const char *statements) {
      * toolkit, so the names are checked against it rather than shadowing
      * it (mdy_engine_set_scope_json refuses the toolkit's). */
     size_t scope_len = 0;
-    for (size_t i = 0; i < e->scope_count; i++) scope_len += 2 * strlen(e->scope_names[i]) + 32;
+    for (size_t i = 0; i < e->knobs.scope_count; i++) scope_len += 2 * strlen(e->knobs.scope_names[i]) + 32;
     /*
      * memcpy and not snprintf for the big pieces: snprintf returns `int`, and
      * a document over two gigabytes overflows it — the cast to size_t then
@@ -2785,9 +2785,9 @@ static char *wrap(mdy_engine *e, const char *statements) {
     size_t o = 0;
     memcpy(out + o, OPEN, open_len); o += open_len;
     memcpy(out + o, MDY_TOOLKIT, tool_len); o += tool_len;
-    for (size_t i = 0; i < e->scope_count; i++) {
+    for (size_t i = 0; i < e->knobs.scope_count; i++) {
         int w = snprintf(out + o, n - o, "const %s = $$.__scope[\"%s\"];\n",
-                         e->scope_names[i], e->scope_names[i]);
+                         e->knobs.scope_names[i], e->knobs.scope_names[i]);
         if (w < 0 || (size_t)w >= n - o) { free(out); return NULL; }
         o += (size_t)w;
     }
@@ -2857,8 +2857,8 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
      */
     uint32_t *map = NULL;
     size_t map_len = 0;
-    if (e->current < e->count) {
-        const Document *d = &e->docs[e->current];
+    if (e->graph.current < e->set.count) {
+        const Document *d = &e->set.docs[e->graph.current];
         size_t body_count = 0;
         const uint32_t *body_lines = mdy_data_body_lines(d->fences, &body_count);
         uint32_t n = js_array_length(out);
@@ -2883,7 +2883,7 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
             for (size_t k = 0; k < lines_in; k++) map[map_len++] = file_line;
             if (linemap_debug())
                 fprintf(stderr, "linemap doc %zu: pair %u body %zu chunk %zu file %u (matter %zu, body lines %zu)\n",
-                        e->current, i, body_line, chunk_line, file_line, d->matter_lines, body_count);
+                        e->graph.current, i, body_line, chunk_line, file_line, d->matter_lines, body_count);
         }
         if (map) { options.line_map = map; options.line_map_len = map_len; }
     }
@@ -2896,7 +2896,7 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
         size_t n = mdy_message_count(tree);
         for (size_t i = 0; i < n; i++) {
             const mdy_message *m = mdy_message_at(tree, i);
-            e->cb.on_message(e->cb.on_message_ud, e->current, m->line, m->column, m->rule, m->reason);
+            e->cb.on_message(e->cb.on_message_ud, e->graph.current, m->line, m->column, m->rule, m->reason);
         }
     }
     return tree;
@@ -3114,7 +3114,7 @@ static uint64_t canonical_hash_deep(mdy_engine *e, JsValue v, uint64_t h,
  * offers — and says the same thing about why.
  */
 static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
-    Document *d = &e->docs[index];
+    Document *d = &e->set.docs[index];
     if (d->fingerprint) return d->fingerprint;
     uint64_t h = 1469598103934665603u;
     /*
@@ -3129,12 +3129,12 @@ static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
      * fingerprint carries the set's size now, so the two agree here.
      */
     char knobs[32];
-    int klen = snprintf(knobs, sizeof knobs, "s%dt%dn%zu", e->sanitize ? 1 : 0, e->tasks ? 1 : 0, e->count);
+    int klen = snprintf(knobs, sizeof knobs, "s%dt%dn%zu", e->knobs.sanitize ? 1 : 0, e->knobs.tasks ? 1 : 0, e->set.count);
     h = fnv64(h, knobs, klen > 0 ? (size_t)klen : 0);
-    for (size_t i = 0; i < e->scope_count; i++) {
-        h = fnv64(h, e->scope_names[i], strlen(e->scope_names[i]));
+    for (size_t i = 0; i < e->knobs.scope_count; i++) {
+        h = fnv64(h, e->knobs.scope_names[i], strlen(e->knobs.scope_names[i]));
         h = fnv64(h, "=", 1);
-        h = fnv64(h, e->scope_json[i], strlen(e->scope_json[i]));
+        h = fnv64(h, e->knobs.scope_json[i], strlen(e->knobs.scope_json[i]));
         h = fnv64(h, "\0", 1);
     }
     h = fnv64(h, d->chunk.text, d->chunk.len);
@@ -3334,21 +3334,21 @@ static void make_call_arguments(mdy_engine *e, size_t index, JsValue request, Re
     r->dollar = js_object_new(e->ctx);
     js_gc_protect(e->vm, &r->dollar);
     /* the host's scope values, for the `const`s the wrapper declared */
-    if (e->scope_count) {
+    if (e->knobs.scope_count) {
         JsValue scope = js_object_new(e->ctx);
         set_val(e, r->dollar, "__scope", scope);
-        for (size_t i = 0; i < e->scope_count; i++) {
-            JsValue v = context_value(e, e->scope_json[i], 1);
-            set_val(e, scope, e->scope_names[i], js_is_undefined(v) ? js_null() : v);
+        for (size_t i = 0; i < e->knobs.scope_count; i++) {
+            JsValue v = context_value(e, e->knobs.scope_json[i], 1);
+            set_val(e, scope, e->knobs.scope_names[i], js_is_undefined(v) ? js_null() : v);
         }
     }
-    if (e->want_response) set_val(e, r->dollar, "__wantResponse", js_bool(true));
+    if (e->knobs.want_response) set_val(e, r->dollar, "__wantResponse", js_bool(true));
     /* `$.count`: the documents in THIS set. A render into an imported package
      * runs on that package's engine, so it counts the package's, which is
      * what mdy-docs does by giving each set its own program. */
-    set_val(e, r->dollar, "__count", js_number((double)e->count));
+    set_val(e, r->dollar, "__count", js_number((double)e->set.count));
     /* This render's `res`, for the references its parse will find. */
-    e->render_res = r->res;
+    e->compose.render_res = r->res;
 }
 
 /*
@@ -3464,7 +3464,7 @@ static void take_response(mdy_engine *e, RenderRoots *r) {
     JsValue ignored = js_undefined();
     if (js_is_function(answer) && js_call(e->ctx, answer, js_undefined(), NULL, 0, &ignored)) {
         char *text = js_string_utf8(get_val(e, r->dollar, "__response"));
-        if (text) { free(e->last_response); e->last_response = text; }
+        if (text) { free(e->compose.last_response); e->compose.last_response = text; }
     }
 }
 
@@ -3491,10 +3491,10 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
 
     /* The memo, first: a hit is a render that does not happen. */
     if (!e->session->now) mdy_session_rotate_memo(e->session);
-    uint64_t mkey = index < e->count ? memo_key(e, index, request) : 0;
+    uint64_t mkey = index < e->set.count ? memo_key(e, index, request) : 0;
     MemoEntry *hit = memo_take(e, index, mkey);
     if (hit) {
-        key_base36(mkey, e->last_render_key);
+        key_base36(mkey, e->compose.last_render_key);
         if (wrote) *wrote = mdy_xstrdup(hit->text);
         return memo_copy(hit->doc);
     }
@@ -3504,14 +3504,14 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
      * `done`: it is the one exit that does not go through the label, and it
      * can only be that if there is nothing yet to give back.
      */
-    if (e->depth > 32) {
+    if (e->compose.depth > 32) {
         if (error && error_len)
             snprintf(error, error_len, "mdy-engine: render depth exceeded (cyclic $.render?)");
         return NULL;
     }
 
-    int outer_taint = e->taint;
-    e->taint = 0;
+    int outer_taint = e->compose.taint;
+    e->compose.taint = 0;
     JsValue transformed = js_undefined();
     mdy_doc *out = NULL;
     mdy_script *script = NULL;
@@ -3521,19 +3521,19 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     r.rooted = 0;
     for (size_t i = 0; i < sizeof r.all / sizeof r.all[0]; i++) r.all[i] = js_undefined();
     /* the enclosing render's `res`, put back at `done` whatever happened */
-    JsValue outer_res = e->render_res;
+    JsValue outer_res = e->compose.render_res;
 
-    e->depth++;
+    e->compose.depth++;
     /* Which file is asking — an `$.__import*` native resolves its spec
      * against the document that wrote it, and the same spec in two files can
      * mean two packages. */
-    size_t outer_current = e->current;
-    e->current = index;
+    size_t outer_current = e->graph.current;
+    e->graph.current = index;
 
 #define FAIL(...) do { if (error && error_len) snprintf(error, error_len, __VA_ARGS__); goto done; } while (0)
 
-    if (index >= e->count) FAIL("no document at index %zu", index);
-    Document *d = &e->docs[index];
+    if (index >= e->set.count) FAIL("no document at index %zu", index);
+    Document *d = &e->set.docs[index];
 
     if (d->is_markdown) {
         /*
@@ -3570,14 +3570,14 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     /* Last of all, on the finished tree: a contents list names every heading
      * the document ended up with, including ones written below it. */
     fill_toc(e, out);
-    if (e->want_response) take_response(e, &r);
-    if (!e->taint && mkey) memo_keep(e, mkey, out, &r, transformed, wrote);
-    if (memo_debug()) fprintf(stderr, "memo %s #%zu\n", e->taint ? "impure" : "kept", index);
+    if (e->knobs.want_response) take_response(e, &r);
+    if (!e->compose.taint && mkey) memo_keep(e, mkey, out, &r, transformed, wrote);
+    if (memo_debug()) fprintf(stderr, "memo %s #%zu\n", e->compose.taint ? "impure" : "kept", index);
 
 done:
 #undef FAIL
-    e->taint = outer_taint;
-    e->render_res = outer_res;
+    e->compose.taint = outer_taint;
+    e->compose.render_res = outer_res;
     /* Recorded LAST, after any render inside this one recorded its own, so
      * what $.render holds its result under is this render's key.
      *
@@ -3585,11 +3585,11 @@ done:
      * see memo_key — leaves it empty, and $.render names that tree by count
      * instead. Naming two of them after the same absent key would park both
      * under one id, and the first would be spliced in for the second. */
-    if (mkey) key_base36(mkey, e->last_render_key);
-    else e->last_render_key[0] = '\0';
+    if (mkey) key_base36(mkey, e->compose.last_render_key);
+    else e->compose.last_render_key[0] = '\0';
     roots_release(e, &r);
-    e->current = outer_current;
-    e->depth--;
+    e->graph.current = outer_current;
+    e->compose.depth--;
     mdy_script_free(script);
     return out;
 }
@@ -3621,7 +3621,7 @@ static void wrap_failure(size_t index, char *error, size_t error_len) {
 int mdy_engine_page_index(mdy_engine *e, const char *name) {
     if (!e) return -1;
     int found = -1;
-    for (size_t i = 0; i < e->count; i++) {
+    for (size_t i = 0; i < e->set.count; i++) {
         char *have = message_name(e, i);
         int hit = have && strcmp(have, name) == 0;
         free(have);
@@ -3633,7 +3633,7 @@ int mdy_engine_page_index(mdy_engine *e, const char *name) {
 }
 
 char *mdy_engine_document_path(mdy_engine *e, size_t index) {
-    if (!e || index >= e->count) return NULL;
+    if (!e || index >= e->set.count) return NULL;
     JsValue record = document_record(e, index);
     js_gc_protect(e->vm, &record);
     char *path = js_string_utf8(get_val(e, record, "path"));
@@ -3683,9 +3683,9 @@ static char *render_public(mdy_engine *e, size_t index, int want_text, char *err
         today[10] = '\0';                    /* the date, without the time */
     }
     set_val(e, context, "today", str(e->vm, today, strlen(today)));
-    for (size_t i = 0; i < e->ctx_count; i++) {
-        JsValue v = context_value(e, e->ctx_json[i], e->ctx_strict[i]);
-        if (!js_is_undefined(v)) set_val(e, context, e->ctx_names[i], v);
+    for (size_t i = 0; i < e->knobs.ctx_count; i++) {
+        JsValue v = context_value(e, e->knobs.ctx_json[i], e->knobs.ctx_strict[i]);
+        if (!js_is_undefined(v)) set_val(e, context, e->knobs.ctx_names[i], v);
     }
 
     char *wrote = NULL;

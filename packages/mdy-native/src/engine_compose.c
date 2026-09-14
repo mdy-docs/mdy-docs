@@ -50,12 +50,12 @@ size_t token_at(const char *s, size_t len, char *id, size_t id_cap) {
 }
 
 /* Whoever owns the token table this engine writes into. */
-mdy_engine *token_table(mdy_engine *e) { return e->tokens ? e->tokens : e; }
+mdy_engine *token_table(mdy_engine *e) { return e->compose.tokens ? e->compose.tokens : e; }
 
 Held *held_find(mdy_engine *e, const char *id) {
     mdy_engine *t = token_table(e);
-    for (size_t i = 0; i < t->held_count; i++)
-        if (strcmp(t->held[i].id, id) == 0) return &t->held[i];
+    for (size_t i = 0; i < t->compose.held_count; i++)
+        if (strcmp(t->compose.held[i].id, id) == 0) return &t->compose.held[i];
     return NULL;
 }
 
@@ -90,14 +90,14 @@ char *hold_tree_as(mdy_engine *e, mdy_doc *doc, mdy_node *tree, const char *id) 
      * OBSERVABLE (see keep_alive below), so a hold that did not happen moves
      * every id after it and changes the site's own search index. See xalloc.h.
      */
-    if (t->held_count == t->held_cap) {
-        size_t want = t->held_cap ? t->held_cap * 2 : 8;
-        t->held = mdy_xrealloc(t->held, want * sizeof *t->held);
-        t->held_cap = want;
+    if (t->compose.held_count == t->compose.held_cap) {
+        size_t want = t->compose.held_cap ? t->compose.held_cap * 2 : 8;
+        t->compose.held = mdy_xrealloc(t->compose.held, want * sizeof *t->compose.held);
+        t->compose.held_cap = want;
     }
-    Held *h = &t->held[t->held_count++];
+    Held *h = &t->compose.held[t->compose.held_count++];
     if (id) snprintf(h->id, sizeof h->id, "%s", id);
-    else snprintf(h->id, sizeof h->id, "%zu", t->next_token++);
+    else snprintf(h->id, sizeof h->id, "%zu", t->compose.next_token++);
     h->doc = doc;
     h->tree = tree;
     h->is_toc = 0;
@@ -124,24 +124,24 @@ void keep_alive(mdy_engine *e, mdy_doc *doc) {
     /* Returning here freed nothing and kept nothing: the document the caller
      * is about to hand out went on being referenced after the render released
      * it. See xalloc.h. */
-    if (t->kept_count == t->kept_cap) {
-        size_t want = t->kept_cap ? t->kept_cap * 2 : 8;
-        t->kept = mdy_xrealloc(t->kept, want * sizeof *t->kept);
-        t->kept_cap = want;
+    if (t->compose.kept_count == t->compose.kept_cap) {
+        size_t want = t->compose.kept_cap ? t->compose.kept_cap * 2 : 8;
+        t->compose.kept = mdy_xrealloc(t->compose.kept, want * sizeof *t->compose.kept);
+        t->compose.kept_cap = want;
     }
-    t->kept[t->kept_count++] = doc;
+    t->compose.kept[t->compose.kept_count++] = doc;
 }
 
 void release_held(mdy_engine *e) {
     mdy_engine *t = token_table(e);
-    for (size_t i = 0; i < t->held_count; i++) mdy_free(t->held[i].doc);
-    free(t->held);
-    t->held = NULL;
-    t->held_count = t->held_cap = 0;
-    for (size_t i = 0; i < t->kept_count; i++) mdy_free(t->kept[i]);
-    free(t->kept);
-    t->kept = NULL;
-    t->kept_count = t->kept_cap = 0;
+    for (size_t i = 0; i < t->compose.held_count; i++) mdy_free(t->compose.held[i].doc);
+    free(t->compose.held);
+    t->compose.held = NULL;
+    t->compose.held_count = t->compose.held_cap = 0;
+    for (size_t i = 0; i < t->compose.kept_count; i++) mdy_free(t->compose.kept[i]);
+    free(t->compose.kept);
+    t->compose.kept = NULL;
+    t->compose.kept_count = t->compose.kept_cap = 0;
 }
 
 /* Whitespace, and nothing else. */

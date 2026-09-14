@@ -534,12 +534,12 @@ static char *rewrite_imports(mdy_engine *e, const char *source_path,
         size_t indent = 0;
         char name[128], spec[1024];
         if (import_line(line, line_len, &indent, name, sizeof name, spec, sizeof spec)) {
-            if (e->import_count == e->import_cap) {
-                size_t want = e->import_cap ? e->import_cap * 2 : 8;
-                Import *grown = realloc(e->imports, want * sizeof *grown);
+            if (e->graph.import_count == e->graph.import_cap) {
+                size_t want = e->graph.import_cap ? e->graph.import_cap * 2 : 8;
+                Import *grown = realloc(e->graph.imports, want * sizeof *grown);
                 if (!grown) { free(out); return NULL; }
-                e->imports = grown;
-                e->import_cap = want;
+                e->graph.imports = grown;
+                e->graph.import_cap = want;
             }
             /* Written before the count moves: an import whose fields could
              * not be copied is not an import with NULL for a spec, which is
@@ -547,7 +547,7 @@ static char *rewrite_imports(mdy_engine *e, const char *source_path,
             char *isrc = strdup(source_path);
             char *ispec = strdup(spec);
             if (!isrc || !ispec) { free(isrc); free(ispec); free(out); return NULL; }
-            Import *imp = &e->imports[e->import_count++];
+            Import *imp = &e->graph.imports[e->graph.import_count++];
             imp->source_path = isrc;
             imp->spec = ispec;
             imp->set = NULL;
@@ -686,12 +686,12 @@ static void walked_free(WalkedFile *files, size_t count) {
 static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
                           const Ancestors *ancestors, char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';
-    e->root = strdup(root);
-    if (!e->root) {
+    e->graph.root = strdup(root);
+    if (!e->graph.root) {
         if (error && error_len) snprintf(error, error_len, "out of memory");
         return -1;
     }
-    e->cache = cache;
+    e->graph.cache = cache;
 
     char *listing = fsx_list(root, ".", NULL);
     if (!listing) {
@@ -983,20 +983,20 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
      * because a file is what identity is derived from. */
     size_t total = 0;
     for (size_t i = 0; i < file_count; i++) total += per_file[i];
-    e->ident_pre = calloc(total ? total : 1, sizeof *e->ident_pre);
-    e->ident_data = calloc(total ? total : 1, sizeof *e->ident_data);
-    e->ident_post = calloc(total ? total : 1, sizeof *e->ident_post);
-    e->ident_is_md = calloc(total ? total : 1, 1);
-    if (!e->ident_pre || !e->ident_data || !e->ident_post || !e->ident_is_md) {
+    e->identity.pre = calloc(total ? total : 1, sizeof *e->identity.pre);
+    e->identity.data = calloc(total ? total : 1, sizeof *e->identity.data);
+    e->identity.post = calloc(total ? total : 1, sizeof *e->identity.post);
+    e->identity.is_md = calloc(total ? total : 1, 1);
+    if (!e->identity.pre || !e->identity.data || !e->identity.post || !e->identity.is_md) {
         free(per_file); walked_free(files, file_count); free(source);
         mdy_documents_free(docs);
         if (error && error_len) snprintf(error, error_len, "out of memory");
         return -1;
     }
-    e->identity_count = total;
+    e->identity.count = total;
     for (size_t i = 0, at = 0; i < file_count; i++) {
         for (size_t k = 0; k < per_file[i]; k++, at++) {
-            e->ident_is_md[at] = (char)(files[i].is_md ? 1 : 0);
+            e->identity.is_md[at] = (char)(files[i].is_md ? 1 : 0);
             /*
              * NULL here is a real value -- it is what a file with no identity
              * block has -- so a failed copy could not be told from one, and
@@ -1005,16 +1005,16 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
              * that reported success.
              */
             if (files[i].pre) {
-                e->ident_pre[at] = mdy_yaml_clone(files[i].pre);
-                if (!e->ident_pre[at]) goto ident_oom;
+                e->identity.pre[at] = mdy_yaml_clone(files[i].pre);
+                if (!e->identity.pre[at]) goto ident_oom;
             }
             if (files[i].post) {
-                e->ident_post[at] = mdy_yaml_clone(files[i].post);
-                if (!e->ident_post[at]) goto ident_oom;
+                e->identity.post[at] = mdy_yaml_clone(files[i].post);
+                if (!e->identity.post[at]) goto ident_oom;
             }
             /* The parsed mapping goes to the FIRST document of the file —
              * only a .mdy is ever more than one, and a .mdy has no mapping. */
-            e->ident_data[at] = k == 0 ? files[i].data : NULL;
+            e->identity.data[at] = k == 0 ? files[i].data : NULL;
         }
         if (per_file[i]) files[i].data = NULL;      /* the engine owns it now */
     }
@@ -1037,12 +1037,12 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
      * the same rule a real relative JS import follows, not relative to the
      * package root.
      */
-    Ancestors here = { e->root, ancestors };
-    for (size_t i = 0; i < e->import_count; i++) {
-        Import *imp = &e->imports[i];
+    Ancestors here = { e->graph.root, ancestors };
+    for (size_t i = 0; i < e->graph.import_count; i++) {
+        Import *imp = &e->graph.imports[i];
 
         char joined[4096];
-        snprintf(joined, sizeof joined, "%s/%s", e->root, imp->source_path);
+        snprintf(joined, sizeof joined, "%s/%s", e->graph.root, imp->source_path);
         char file_dir[4096];
         dirname_of(joined, file_dir, sizeof file_dir);
         char child_dir[4096];
@@ -1051,7 +1051,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         if (in_ancestors(&here, child_dir)) {
             if (error && error_len)
                 snprintf(error, error_len, "mdy: import cycle detected — %s -> %s",
-                         e->root, child_dir);
+                         e->graph.root, child_dir);
             return -1;
         }
 
@@ -1071,7 +1071,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
          * node prints one. Whole struct, so the next callback added cannot
          * be forgotten here. */
         child->cb = e->cb;
-        child->tokens = token_table(e);
+        child->compose.tokens = token_table(e);
         /* In the cache before it is built, so a package that imports itself
          * through a diamond finds the one in progress rather than starting a
          * second build of it. */
@@ -1098,7 +1098,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         }
         cache->roots = grown; cache->root_cap = want;
     }
-    char *root_copy = strdup(e->root);
+    char *root_copy = strdup(e->graph.root);
     if (!root_copy) {
         if (error && error_len) snprintf(error, error_len, "out of memory");
         return -1;
@@ -1108,13 +1108,13 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
 }
 
 size_t mdy_engine_root_count(mdy_engine *e) {
-    return (e->cache && e->owns_cache) ? e->cache->root_count : (e->root ? 1 : 0);
+    return (e->graph.cache && e->graph.owns_cache) ? e->graph.cache->root_count : (e->graph.root ? 1 : 0);
 }
 
 const char *mdy_engine_root_at(mdy_engine *e, size_t i) {
-    if (e->cache && e->owns_cache)
-        return i < e->cache->root_count ? e->cache->roots[i] : NULL;
-    return i == 0 ? e->root : NULL;
+    if (e->graph.cache && e->graph.owns_cache)
+        return i < e->graph.cache->root_count ? e->graph.cache->roots[i] : NULL;
+    return i == 0 ? e->graph.root : NULL;
 }
 
 
@@ -1186,7 +1186,7 @@ int mdy_engine_open_dir(mdy_engine *e, const char *root, char *error, size_t err
 
     ImportCache *cache = calloc(1, sizeof *cache);
     if (!cache) { if (error && error_len) snprintf(error, error_len, "out of memory"); return -1; }
-    e->owns_cache = 1;
+    e->graph.owns_cache = 1;
     cache_put(cache, abs, e);
     return open_dir_inner(e, abs, cache, NULL, error, error_len);
 }
