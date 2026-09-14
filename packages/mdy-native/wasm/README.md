@@ -56,8 +56,8 @@ A render that fails exits non-zero with the error in `errors` and an empty
 is this call behind an editor.
 
 The rest of its options are mdy-docs/parse's knobs, one flag each in the
-command: `oneDocument`, `tasks`, `sanitize`, `scope` (an object whose keys
-become variables in the document's code) and `response`, which brings back
+command: `tasks`, `sanitize`, `scope` (an object whose keys become variables
+in the document's code) and `response`, which brings back
 what the document answered with as `data`. Parser warnings come back as
 `warnings`, each with its line in the source. The language tour at
 [packages/mdy-site](../../mdy-site) is `document()` with all of them on.

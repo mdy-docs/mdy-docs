@@ -200,8 +200,7 @@ exists for the browser: the live-preview demo's messages pane
 log, parsed.
 
 Document mode also carries mdy-docs/parse's own knobs, for a host that
-renders one document the way that package's callers do: `--one-document`
-reads the whole file as one document with a bare `---` a thematic break;
+renders one document the way that package's callers do:
 `--tasks` makes a task's box a form carrying the line and column of its
 `[x]`, which is what `mdy-docs/tasks` posts back into a file; `--sanitize`
 applies the element allowlist and reports what it drops; `--scope <file>`

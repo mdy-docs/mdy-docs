@@ -105,8 +105,7 @@ export async function build(input, options = {}) {
  * into `messages`, so a page need not know the log's shape.
  *
  * The rest are mdy-docs/parse's own knobs, for a host rendering one document
- * as that package's callers do: `oneDocument` reads the whole source as one
- * document with `---` a thematic break; `tasks` makes each task's box a form
+ * as that package's callers do: `tasks` makes each task's box a form
  * carrying its line and column; `sanitize` applies the element allowlist and
  * reports what it drops; `scope` is an object whose keys become variables in
  * the document's code; `response` asks for what the document answered with —
@@ -115,7 +114,7 @@ export async function build(input, options = {}) {
  *
  * @param {string | Uint8Array} source
  * @param {{ html?: boolean, publish?: boolean, data?: Record<string, unknown>,
- *           oneDocument?: boolean, tasks?: boolean, sanitize?: boolean,
+ *           tasks?: boolean, sanitize?: boolean,
  *           scope?: Record<string, unknown>, response?: boolean,
  *           createModule?: Function }} [options]
  * @returns {Promise<{ output: string, messages: Array<object>, warnings: Array<object>,
@@ -124,7 +123,7 @@ export async function build(input, options = {}) {
 export async function document(source, options = {}) {
   const {
     html = true, publish = false, data = null,
-    oneDocument = false, tasks = false, sanitize = false, scope = null, response = false,
+    tasks = false, sanitize = false, scope = null, response = false,
     createModule,
   } = options;
 
@@ -144,7 +143,6 @@ export async function document(source, options = {}) {
   const args = [`${ROOT}/document.mdy`, '-o', `${OUT}/document.out`];
   if (html) args.push('--html');
   if (publish) args.push('--publish');
-  if (oneDocument) args.push('--one-document');
   if (tasks) args.push('--tasks');
   if (sanitize) args.push('--sanitize');
   if (data) {

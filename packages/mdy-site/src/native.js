@@ -6,8 +6,8 @@
  * highlighter, in one binary — and `make wasm` there compiles it with
  * emscripten. Its wrapper drives it as the command line is driven: the
  * source written into the module's filesystem, `main()` called with the
- * arguments `mdy document.mdy --html --one-document --tasks --sanitize
- * --scope … --response …` would have, the output read back.
+ * arguments `mdy document.mdy --html --tasks --sanitize --scope …
+ * --response …` would have, the output read back.
  *
  * The module is compiled once and instantiated per render — the engine
  * keeps a little static state a process never had to reset, and a fresh
@@ -76,7 +76,6 @@ async function factory(options) {
 export async function render(source, {scope, request} = {}) {
   const r = await renderDocument(source, {
     html: true,
-    oneDocument: true,
     tasks: true,
     sanitize: true,
     scope,

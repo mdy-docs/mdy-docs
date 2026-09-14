@@ -192,9 +192,6 @@ static const char USAGE[] =
 "                        the page it names renders with the message as `req`,\n"
 "                        its output printed under the [deliver] line. One\n"
 "                        attempt each; a refusal is dead-lettered at once.\n"
-"      --one-document    The whole file is one document, and a bare `---` is\n"
-"                        a thematic break — mdy-docs/parse's default, rather\n"
-"                        than the site engine's split. A file input only.\n"
 "      --tasks           A task's box is a form carrying the line and column\n"
 "                        of its `[x]`, for a handler to write the file (the\n"
 "                        parser's `tasks: true`); default: a disabled box.\n"
@@ -875,7 +872,7 @@ typedef struct {
     int html, emit_js, watch, publish;
     /* mdy-docs/parse's knobs, for a host rendering one document as that
      * package's callers do — the playground page, above all */
-    int one_document, tasks, sanitize;
+    int tasks, sanitize;
     const char *scope_file, *response_file;
     char **data; size_t data_count;
     const char *input; int is_stdin, is_dir;
@@ -1041,7 +1038,6 @@ static char *generate_output(const DocOptions *o, mdy_session *session,
     if (cerr) { mdy_engine_free(e); return cerr; }
     cerr = load_scope(e, o);
     if (cerr) { mdy_engine_free(e); return cerr; }
-    mdy_engine_set_split(e, !o->one_document);
     mdy_engine_set_sanitize(e, o->sanitize);
     mdy_engine_set_tasks(e, o->tasks);
     mdy_engine_set_response(e, o->response_file != NULL);
@@ -1324,7 +1320,6 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(name, "data-file") == 0) { canonical = "data-file"; takes_value = 1; }
         else if (strcmp(name, "watch") == 0 || strcmp(name, "w") == 0) canonical = "watch";
         else if (strcmp(name, "publish") == 0) canonical = "publish";
-        else if (strcmp(name, "one-document") == 0) canonical = "one-document";
         else if (strcmp(name, "tasks") == 0) canonical = "tasks";
         else if (strcmp(name, "sanitize") == 0) canonical = "sanitize";
         else if (strcmp(name, "scope") == 0) { canonical = "scope"; takes_value = 1; }
@@ -1347,7 +1342,6 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(canonical, "data-file") == 0) o.data_file = value;
         else if (strcmp(canonical, "watch") == 0) o.watch = 1;
         else if (strcmp(canonical, "publish") == 0) o.publish = 1;
-        else if (strcmp(canonical, "one-document") == 0) o.one_document = 1;
         else if (strcmp(canonical, "tasks") == 0) o.tasks = 1;
         else if (strcmp(canonical, "sanitize") == 0) o.sanitize = 1;
         else if (strcmp(canonical, "scope") == 0) o.scope_file = value;
@@ -1378,7 +1372,6 @@ static int cmd_document(int argc, char **argv) {
     if (o.emit_js && o.html) fail("--emit-js cannot be combined with --html");
     if (o.publish && o.emit_js) fail("--publish cannot be combined with --emit-js");
     if (o.publish && o.watch) fail("--publish cannot be combined with --watch: a re-render would send again");
-    if (o.one_document && o.is_dir) fail("--one-document is only valid with a file or stdin input");
     if (o.response_file && o.emit_js) fail("--response cannot be combined with --emit-js");
     if (o.out && !o.is_stdin) {
         char *out_abs = absolute(o.out);
