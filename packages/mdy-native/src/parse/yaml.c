@@ -1296,3 +1296,213 @@ char *mdy_yaml_to_json(const mdy_yaml_node *n) {
     if (!b.ok) { free(b.s); return NULL; }
     return b.s;
 }
+
+/* ---- building one from C ----------------------------------------------------
+ *
+ * See mdyyaml.h for why this exists. The arena cannot grow an allocation in
+ * place, so the pairs accumulate in a malloc'd array and are copied into the
+ * arena once, when the mapping is made — which is also the only point at
+ * which the count is known.
+ */
+struct mdy_yaml_builder {
+    mdy_yaml *doc;
+    Pair *pairs;
+    size_t count, cap;
+    int failed;        /* sticky: one refused allocation loses the document */
+};
+
+mdy_yaml_builder *mdy_yaml_builder_new(void) {
+    mdy_yaml_builder *b = calloc(1, sizeof *b);
+    if (!b) return NULL;
+    b->doc = calloc(1, sizeof *b->doc);
+    if (!b->doc) { free(b); return NULL; }
+    return b;
+}
+
+void mdy_yaml_builder_free(mdy_yaml_builder *b) {
+    if (!b) return;
+    mdy_yaml_free(b->doc);
+    free(b->pairs);
+    free(b);
+}
+
+/* A NUL-terminated copy of `n` bytes, in the document's arena. */
+static const char *build_bytes(mdy_yaml_builder *b, const char *s, size_t n) {
+    char *copy = arena_alloc(&b->doc->arena, n + 1);
+    if (!copy) { b->failed = 1; return NULL; }
+    if (n) memcpy(copy, s, n);
+    copy[n] = '\0';
+    return copy;
+}
+
+static mdy_yaml_node *build_node(mdy_yaml_builder *b, mdy_yaml_type type) {
+    mdy_yaml_node *n = arena_alloc(&b->doc->arena, sizeof *n);
+    if (!n) { b->failed = 1; return NULL; }
+    memset(n, 0, sizeof *n);
+    n->type = type;
+    return n;
+}
+
+/* One key/value onto the open mapping. `value` NULL means a put that already
+ * failed, and is passed through rather than checked at five call sites. */
+static int build_put(mdy_yaml_builder *b, const char *key, mdy_yaml_node *value) {
+    if (!b || b->failed || !value || !key) { if (b) b->failed = 1; return 0; }
+    if (b->count == b->cap) {
+        size_t want = b->cap ? b->cap * 2 : 8;
+        Pair *grown = realloc(b->pairs, want * sizeof *grown);
+        if (!grown) { b->failed = 1; return 0; }
+        b->pairs = grown;
+        b->cap = want;
+    }
+    size_t klen = strlen(key);
+    const char *kc = build_bytes(b, key, klen);
+    if (!kc) return 0;
+    b->pairs[b->count].key = kc;
+    b->pairs[b->count].key_len = klen;
+    b->pairs[b->count].value = value;
+    b->count++;
+    return 1;
+}
+
+int mdy_yaml_put_string(mdy_yaml_builder *b, const char *key, const char *value, size_t len) {
+    if (!b || b->failed) { if (b) b->failed = 1; return 0; }
+    if (!value) return mdy_yaml_put_null(b, key);
+    if (len == 0) len = strlen(value);
+    mdy_yaml_node *n = build_node(b, MDY_YAML_STRING);
+    if (!n) return 0;
+    const char *copy = build_bytes(b, value, len);
+    if (!copy) return 0;
+    n->as.string.s = copy;
+    n->as.string.len = len;
+    return build_put(b, key, n);
+}
+
+int mdy_yaml_put_number(mdy_yaml_builder *b, const char *key, double value) {
+    if (!b || b->failed) { if (b) b->failed = 1; return 0; }
+    mdy_yaml_node *n = build_node(b, MDY_YAML_NUMBER);
+    if (!n) return 0;
+    n->as.number = value;
+    return build_put(b, key, n);
+}
+
+int mdy_yaml_put_bool(mdy_yaml_builder *b, const char *key, int value) {
+    if (!b || b->failed) { if (b) b->failed = 1; return 0; }
+    mdy_yaml_node *n = build_node(b, MDY_YAML_BOOL);
+    if (!n) return 0;
+    n->as.boolean = value ? 1 : 0;
+    return build_put(b, key, n);
+}
+
+int mdy_yaml_put_null(mdy_yaml_builder *b, const char *key) {
+    if (!b || b->failed) { if (b) b->failed = 1; return 0; }
+    mdy_yaml_node *n = build_node(b, MDY_YAML_NULL);
+    if (!n) return 0;
+    return build_put(b, key, n);
+}
+
+int mdy_yaml_put_strings(mdy_yaml_builder *b, const char *key,
+                         const char *const *values, size_t count) {
+    if (!b || b->failed) { if (b) b->failed = 1; return 0; }
+    mdy_yaml_node *seq = build_node(b, MDY_YAML_SEQUENCE);
+    if (!seq) return 0;
+    mdy_yaml_node **items = arena_alloc(&b->doc->arena,
+                                        (count ? count : 1) * sizeof *items);
+    if (!items) { b->failed = 1; return 0; }
+    for (size_t i = 0; i < count; i++) {
+        mdy_yaml_node *s = build_node(b, MDY_YAML_STRING);
+        if (!s) return 0;
+        size_t len = values[i] ? strlen(values[i]) : 0;
+        const char *copy = build_bytes(b, values[i] ? values[i] : "", len);
+        if (!copy) return 0;
+        s->as.string.s = copy;
+        s->as.string.len = len;
+        items[i] = s;
+    }
+    seq->as.seq.items = items;
+    seq->as.seq.count = count;
+    return build_put(b, key, seq);
+}
+
+mdy_yaml *mdy_yaml_builder_done(mdy_yaml_builder *b) {
+    if (!b) return NULL;
+    if (b->failed) { mdy_yaml_builder_free(b); return NULL; }
+    mdy_yaml_node *root = build_node(b, MDY_YAML_MAPPING);
+    if (!root) { mdy_yaml_builder_free(b); return NULL; }
+    Pair *pairs = arena_alloc(&b->doc->arena, (b->count ? b->count : 1) * sizeof *pairs);
+    if (!pairs) { mdy_yaml_builder_free(b); return NULL; }
+    if (b->count) memcpy(pairs, b->pairs, b->count * sizeof *pairs);
+    root->as.map.pairs = pairs;
+    root->as.map.count = b->count;
+    b->doc->root = root;
+    mdy_yaml *doc = b->doc;
+    b->doc = NULL;              /* handed over, not freed with the builder */
+    mdy_yaml_builder_free(b);
+    return doc;
+}
+
+/* ---- copying one ------------------------------------------------------------ */
+
+static mdy_yaml_node *clone_node(Arena *a, const mdy_yaml_node *src, int depth) {
+    if (!src || depth > MDY_YAML_MAX_DEPTH) return NULL;
+    mdy_yaml_node *n = arena_alloc(a, sizeof *n);
+    if (!n) return NULL;
+    memset(n, 0, sizeof *n);
+    n->type = src->type;
+    switch (src->type) {
+        case MDY_YAML_STRING: {
+            char *copy = arena_alloc(a, src->as.string.len + 1);
+            if (!copy) return NULL;
+            if (src->as.string.len) memcpy(copy, src->as.string.s, src->as.string.len);
+            copy[src->as.string.len] = '\0';
+            n->as.string.s = copy;
+            n->as.string.len = src->as.string.len;
+            break;
+        }
+        case MDY_YAML_NUMBER: n->as.number = src->as.number; break;
+        case MDY_YAML_BOOL:   n->as.boolean = src->as.boolean; break;
+        case MDY_YAML_SEQUENCE: {
+            size_t count = src->as.seq.count;
+            mdy_yaml_node **items = arena_alloc(a, (count ? count : 1) * sizeof *items);
+            if (!items) return NULL;
+            for (size_t i = 0; i < count; i++) {
+                items[i] = clone_node(a, src->as.seq.items[i], depth + 1);
+                if (!items[i]) return NULL;
+            }
+            n->as.seq.items = items;
+            n->as.seq.count = count;
+            break;
+        }
+        case MDY_YAML_MAPPING: {
+            size_t count = src->as.map.count;
+            Pair *pairs = arena_alloc(a, (count ? count : 1) * sizeof *pairs);
+            if (!pairs) return NULL;
+            for (size_t i = 0; i < count; i++) {
+                size_t klen = src->as.map.pairs[i].key_len;
+                char *kc = arena_alloc(a, klen + 1);
+                if (!kc) return NULL;
+                if (klen) memcpy(kc, src->as.map.pairs[i].key, klen);
+                kc[klen] = '\0';
+                pairs[i].key = kc;
+                pairs[i].key_len = klen;
+                pairs[i].value = clone_node(a, src->as.map.pairs[i].value, depth + 1);
+                if (!pairs[i].value) return NULL;
+            }
+            n->as.map.pairs = pairs;
+            n->as.map.count = count;
+            break;
+        }
+        case MDY_YAML_NULL: break;
+    }
+    return n;
+}
+
+mdy_yaml *mdy_yaml_clone(const mdy_yaml *src) {
+    if (!src) return NULL;
+    mdy_yaml *doc = calloc(1, sizeof *doc);
+    if (!doc) return NULL;
+    if (src->root) {
+        doc->root = clone_node(&doc->arena, src->root, 0);
+        if (!doc->root) { mdy_yaml_free(doc); return NULL; }
+    }
+    return doc;
+}

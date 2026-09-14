@@ -223,9 +223,9 @@ struct mdy_engine {
      * fields and before `ident_post`, which is where mdy-docs puts a source's
      * `meta` (parseDocuments, src/mdy.js).
      */
-    char **ident_pre;
+    mdy_yaml **ident_pre;
     mdy_yaml **ident_data;
-    char **ident_post;
+    mdy_yaml **ident_post;
     char *ident_is_md;
     size_t identity_count;
 
@@ -305,11 +305,17 @@ void iso8601_utc(double epoch_ms, char *out, size_t out_len);
 int ends_with_ci(const char *s, const char *suffix);
 void dirname_of(const char *p, char *out, size_t out_len);
 void resolve_path(const char *base, const char *spec, char *out, size_t out_len);
-/* `tags`: what the parts DECLARE plus the `#hashtags` the prose mentions,
- * lowercased and deduplicated, written as YAML for the store to read back. */
-void put_document_tags(char **buf, size_t *len, size_t *cap,
-                       const mdy_yaml_node *const *parts, size_t part_count,
-                       const char *body, size_t body_len);
+/*
+ * `tags`: what the parts DECLARE plus the `#hashtags` the prose mentions,
+ * lowercased and deduplicated, as a mapping of its own for the merge.
+ *
+ * NULL when no part declared the key and the prose mentions nothing — which
+ * is a document with no `tags` at all, not one with an empty list. `*oom` is
+ * the other NULL, and the caller has to tell them apart: a document that
+ * loses its tags loses the indexes it appears in.
+ */
+mdy_yaml *document_tags(const mdy_yaml_node *const *parts, size_t part_count,
+                        const char *body, size_t body_len, int *oom);
 
 /* ---- engine.c: what the walk borrows back ------------------------------------
  *

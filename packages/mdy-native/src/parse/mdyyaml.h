@@ -115,6 +115,59 @@ const mdy_yaml_node *mdy_yaml_get(const mdy_yaml_node *node, const char *key);
  */
 char *mdy_yaml_to_json(const mdy_yaml_node *node);
 
+/* ---- building one from C, rather than from text ---------------------------
+ *
+ * A reader needs a writer. Everything above turns text into values; without
+ * this, a caller that HAS values — a file's identity, a computed list of tags
+ * — can only get them in by printing YAML and parsing it back, and then every
+ * one of those values has to be escaped on the way out and can be misread on
+ * the way in. That is what B8 was: identity pasted in with `%s`, so a path
+ * with a quote in it made the block unparseable and the document lost its
+ * name, its size and its date on a build that reported success.
+ *
+ * The document that comes back is an ordinary `mdy_yaml`: `mdy_yaml_root`
+ * reads it, `mdy_yaml_free` frees it, and nothing downstream can tell it from
+ * a parsed one. That is the point — the merge, the binjson encoder and the
+ * canonical hash all keep working on it unchanged.
+ *
+ * The root is always a MAPPING, and keys go in the order they are put, which
+ * is what the merge depends on: `mdy_bj_document` takes a key's place from
+ * the first mapping that has it and its value from the last.
+ *
+ * Every `put` returns 1 on success and 0 if it could not allocate. A failure
+ * is remembered, so a caller may put a whole block and check once at the end:
+ * `mdy_yaml_builder_done` answers NULL if any step failed, and never a
+ * mapping that is missing a key it was asked for. A block that is silently
+ * short is the failure mode this whole change exists to remove.
+ */
+typedef struct mdy_yaml_builder mdy_yaml_builder;
+
+mdy_yaml_builder *mdy_yaml_builder_new(void);
+/* Finishes and hands back the document — NULL if any put failed. The builder
+ * is freed either way, so it is never left to leak on the failing path. */
+mdy_yaml *mdy_yaml_builder_done(mdy_yaml_builder *b);
+/* Abandon one without finishing it. */
+void mdy_yaml_builder_free(mdy_yaml_builder *b);
+
+/* `len` may be 0 for a NUL-terminated string. Keys and values are copied. */
+int mdy_yaml_put_string(mdy_yaml_builder *b, const char *key, const char *value, size_t len);
+int mdy_yaml_put_number(mdy_yaml_builder *b, const char *key, double value);
+int mdy_yaml_put_bool(mdy_yaml_builder *b, const char *key, int value);
+int mdy_yaml_put_null(mdy_yaml_builder *b, const char *key);
+/* A sequence of strings, which is the shape `tags` has. `count` of 0 puts an
+ * empty sequence rather than nothing, because a document that declared the
+ * key and has nothing under it is a different record from one that did not. */
+int mdy_yaml_put_strings(mdy_yaml_builder *b, const char *key,
+                         const char *const *values, size_t count);
+
+/*
+ * A deep copy into an arena of its own. A document is one allocation block,
+ * so two owners cannot share one: this is what `strdup` was for the text.
+ * NULL if it could not allocate, or if the tree is nested deeper than
+ * MDY_YAML_MAX_DEPTH — which a parsed one cannot be.
+ */
+mdy_yaml *mdy_yaml_clone(const mdy_yaml *doc);
+
 #ifdef __cplusplus
 }
 #endif

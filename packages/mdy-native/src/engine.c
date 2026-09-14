@@ -599,14 +599,13 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         size_t used = 0;
         /* All four are freed by the cleanup below, which the OOM jumps reach,
          * so all four are declared before the first of those jumps. */
-        mdy_yaml *pre = NULL, *post = NULL, *tag_map = NULL;
+        mdy_yaml *tag_map = NULL;
         int oom = 0;
-        if (e->ident_pre && i < e->identity_count && e->ident_pre[i]) {
-            err[0] = '\0';
-            pre = mdy_yaml_parse(e->ident_pre[i], strlen(e->ident_pre[i]), err, sizeof err);
-            if (pre) maps[used++] = mdy_yaml_root(pre);
-            else if (strcmp(err, MDY_YAML_OOM) == 0) goto docs_oom;
-        }
+        /* Identity is VALUES, built by the walk — there is no text in between
+         * to parse, so there is nothing here that can fail and nothing that
+         * needed escaping to get here. (B8.) */
+        if (e->ident_pre && i < e->identity_count && e->ident_pre[i])
+            maps[used++] = mdy_yaml_root(e->ident_pre[i]);
         if (matter) maps[used++] = mdy_yaml_root(matter);
         for (size_t f = 0; f < fence_count; f++) {
             const mdy_data_fence *fence = mdy_data_at(d->fences, f);
@@ -633,17 +632,10 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
             const char *body = mdy_data_body(d->fences, &body_len);
             /* `if (text)` here meant a document silently kept none of its
              * tags -- and tags decide which indexes it appears in. */
-            char *text = mdy_xmalloc(256);
-            size_t tlen = 0, tcap = 256;
-            text[0] = '\0';
-            put_document_tags(&text, &tlen, &tcap, maps, used, body ? body : "", body_len);
-            if (tlen > 0) {
-                err[0] = '\0';
-                tag_map = mdy_yaml_parse(text, tlen, err, sizeof err);
-                if (tag_map) maps[used++] = mdy_yaml_root(tag_map);
-                else if (strcmp(err, MDY_YAML_OOM) == 0) { free(text); goto docs_oom; }
-            }
-            free(text);
+            int tags_oom = 0;
+            tag_map = document_tags(maps, used, body ? body : "", body_len, &tags_oom);
+            if (tags_oom) goto docs_oom;
+            if (tag_map) maps[used++] = mdy_yaml_root(tag_map);
         }
 
         /* A data file's own mapping, after everything the document itself
@@ -657,12 +649,8 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
 
         /* After them, where identity WINS — and, for a data file, the one
          * field that must be real whatever it declared. */
-        if (e->ident_post && i < e->identity_count && e->ident_post[i]) {
-            err[0] = '\0';
-            post = mdy_yaml_parse(e->ident_post[i], strlen(e->ident_post[i]), err, sizeof err);
-            if (post) maps[used++] = mdy_yaml_root(post);
-            else if (strcmp(err, MDY_YAML_OOM) == 0) goto docs_oom;
-        }
+        if (e->ident_post && i < e->identity_count && e->ident_post[i])
+            maps[used++] = mdy_yaml_root(e->ident_post[i]);
 
         mdy_oid_next(d->oid);
         memcpy(e->ids[i], d->oid, 12);
@@ -689,8 +677,6 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
             oom = 1;
         }
         mdy_yaml_free(matter);
-        mdy_yaml_free(pre);
-        mdy_yaml_free(post);
         mdy_yaml_free(tag_map);
         for (size_t f = 0; f < fence_count; f++) mdy_yaml_free(parsed[f]);
         free(maps);
@@ -2651,9 +2637,9 @@ void mdy_engine_free(mdy_engine *e) {
     }
     free(e->imports);
     for (size_t i = 0; i < e->identity_count; i++) {
-        if (e->ident_pre) free(e->ident_pre[i]);
+        if (e->ident_pre) mdy_yaml_free(e->ident_pre[i]);
         if (e->ident_data) mdy_yaml_free(e->ident_data[i]);
-        if (e->ident_post) free(e->ident_post[i]);
+        if (e->ident_post) mdy_yaml_free(e->ident_post[i]);
     }
     free(e->ident_pre);
     free(e->ident_data);

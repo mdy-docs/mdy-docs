@@ -50,6 +50,41 @@ static void refuses(const char *what, const char *source, const char *expected) 
     mdy_yaml_free(doc);
 }
 
+
+/* A document built from C rather than read from text. `expected` is the JSON,
+ * so a built document and a parsed one are held to the same statement of what
+ * is in them. */
+static void built(const char *what, mdy_yaml *doc, const char *expected) {
+    if (!doc) {
+        printf("  FAIL  %s\n      expected %s\n      actual   the builder gave nothing\n",
+               what, expected);
+        failures++;
+        return;
+    }
+    char *json = mdy_yaml_to_json(mdy_yaml_root(doc));
+    int ok = json && strcmp(json, expected) == 0;
+    printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
+    if (!ok) printf("      expected %s\n      actual   %s\n", expected, json ? json : "(null)");
+    if (!ok) failures++;
+    free(json);
+    mdy_yaml_free(doc);
+}
+
+/*
+ * The property the builder exists for: a value goes in as bytes and comes out
+ * as the same bytes, whatever is in it. Built and then CLONED before reading,
+ * so the copy is held to it too — a clone that dropped or truncated a value
+ * would otherwise only show up in a site.
+ */
+static void survives(const char *what, const char *value, const char *expected) {
+    mdy_yaml_builder *b = mdy_yaml_builder_new();
+    mdy_yaml_put_string(b, "v", value, 0);
+    mdy_yaml *doc = mdy_yaml_builder_done(b);
+    mdy_yaml *copy = mdy_yaml_clone(doc);
+    mdy_yaml_free(doc);
+    built(what, copy, expected);
+}
+
 int main(void) {
     printf("--- mdyyaml: the language ---\n");
     check("null forms", "a: ~\nb: null\nc: Null\nd: NULL\ne:",
@@ -302,6 +337,82 @@ int main(void) {
         }
         check("...and an ordinary flow collection still nests",
               "a: [[[1]]]", "{\"a\":[[[1]]]}");
+    }
+
+
+    printf("--- built from C, not read from text ---\n");
+    {
+        mdy_yaml_builder *b = mdy_yaml_builder_new();
+        mdy_yaml_put_string(b, "path", "pages/uruk.mdy", 0);
+        mdy_yaml_put_string(b, "name", "uruk", 0);
+        mdy_yaml_put_number(b, "size", 1234);
+        mdy_yaml_put_bool(b, "draft", 0);
+        mdy_yaml_put_null(b, "nothing");
+        built("scalars, in the order they were put", mdy_yaml_builder_done(b),
+              "{\"path\":\"pages/uruk.mdy\",\"name\":\"uruk\",\"size\":1234,"
+              "\"draft\":false,\"nothing\":null}");
+    }
+    {
+        const char *tags[] = { "alpha", "beta" };
+        mdy_yaml_builder *b = mdy_yaml_builder_new();
+        mdy_yaml_put_strings(b, "tags", tags, 2);
+        built("a sequence of strings", mdy_yaml_builder_done(b),
+              "{\"tags\":[\"alpha\",\"beta\"]}");
+    }
+    {
+        mdy_yaml_builder *b = mdy_yaml_builder_new();
+        mdy_yaml_put_strings(b, "tags", NULL, 0);
+        built("...and an empty one is a key with a list, not a missing key",
+              mdy_yaml_builder_done(b), "{\"tags\":[]}");
+    }
+    {
+        /* A whole number goes out as digits, the way the text path's `%.0f`
+         * did, so a record built either way encodes identically. */
+        mdy_yaml_builder *b = mdy_yaml_builder_new();
+        mdy_yaml_put_number(b, "size", 0);
+        mdy_yaml_put_number(b, "width", 1920);
+        built("whole numbers are whole", mdy_yaml_builder_done(b),
+              "{\"size\":0,\"width\":1920}");
+    }
+    {
+        /* The same key twice is two pairs, in order: the merge downstream is
+         * what decides which wins, and it cannot if this collapses them. */
+        mdy_yaml_builder *b = mdy_yaml_builder_new();
+        mdy_yaml_put_string(b, "a", "first", 0);
+        mdy_yaml_put_string(b, "a", "second", 0);
+        built("a repeated key is kept as written", mdy_yaml_builder_done(b),
+              "{\"a\":\"first\",\"a\":\"second\"}");
+    }
+
+    printf("--- what the text path could not carry (B8) ---\n");
+    survives("a double quote", "say \"hi\"", "{\"v\":\"say \\\"hi\\\"\"}");
+    survives("a backslash", "C:\\path\\to", "{\"v\":\"C:\\\\path\\\\to\"}");
+    survives("a newline", "one\ntwo", "{\"v\":\"one\\ntwo\"}");
+    survives("a tab and a return", "a\tb\rc", "{\"v\":\"a\\tb\\rc\"}");
+    survives("a control character", "a\001b", "{\"v\":\"a\\u0001b\"}");
+    survives("a line that looks like a document break", "---", "{\"v\":\"---\"}");
+    survives("a line that looks like front matter", "+++\ntitle: x\n+++",
+             "{\"v\":\"+++\\ntitle: x\\n+++\"}");
+    survives("a key-shaped value", "k: v", "{\"v\":\"k: v\"}");
+    survives("UTF-8 through as bytes", "Ur\xc3\xbck \xf0\x9f\x8f\xba",
+             "{\"v\":\"Ur\xc3\xbck \xf0\x9f\x8f\xba\"}");
+    survives("the empty string", "", "{\"v\":\"\"}");
+
+    printf("--- clone ---\n");
+    {
+        char err[256];
+        mdy_yaml *doc = mdy_yaml_parse("a: [1, {b: \"x\"}]\nc: true", 0, err, sizeof err);
+        mdy_yaml *copy = mdy_yaml_clone(doc);
+        mdy_yaml_free(doc);          /* freed FIRST: the copy owns nothing of it */
+        built("a parsed tree, copied, outlives its original", copy,
+              "{\"a\":[1,{\"b\":\"x\"}],\"c\":true}");
+    }
+    {
+        /* Not through `built`: nothing in, nothing out — and NULL is the
+         * answer, not a document holding null. */
+        int ok = mdy_yaml_clone(NULL) == NULL;
+        printf("  %s  cloning nothing gives nothing\n", ok ? "ok  " : "FAIL");
+        if (!ok) failures++;
     }
 
     if (failures) {

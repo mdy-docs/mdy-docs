@@ -125,20 +125,28 @@ int ends_with_ci(const char *s, const char *suffix) {
  * clips to one, `+` keeps them all.
  */
 /*
- * One identity field as YAML: `key: "value"`, escaped the way the reader
- * unescapes it (read_quoted, yaml.c).
+ * What is left of the YAML WRITER, and what it is still for.
  *
- * It was an `snprintf("%s")` into a fixed array, which had two ways to go
- * wrong and took both. A file called `it"s.mdy` produced `name: "it"s.mdy"`,
- * which the reader took as `it` — the document's name, ext and path all
- * truncated at the quote, and nothing said so — while a backslash in a name
- * began an escape and a newline in one ended the line. A long enough path ran
- * off the end of the array and left the whole mapping unreadable.
+ * Identity used to come through here: an `snprintf("%s")` into a fixed array,
+ * which had two ways to go wrong and took both. A file called `it"s.mdy`
+ * produced `name: "it"s.mdy"`, which the reader took as `it` — the document's
+ * name, ext and path all truncated at the quote, and nothing said so — while
+ * a backslash in a name began an escape and a newline in one ended the line.
+ * That was B8; escaping it (put_scalar, below) fixed it.
  *
- * None of this would need escaping if identity were built as VALUES and handed
- * to mdy_bj_document, rather than written out and read back; that wants a way
- * to make an mdy_yaml mapping from C, which there is not. Until there is, the
- * writer and the reader have to agree, and this is the half that can be sure.
+ * Identity does not come through here at all now. It is built as VALUES with
+ * mdy_yaml_builder and handed to mdy_bj_document, so there is no text in
+ * between: nothing to escape, nothing to mis-read, and a refused allocation
+ * is answered rather than written as a block that is silently short a key.
+ * The same is true of `tags` (document_tags). The comment that used to sit
+ * here said this wanted "a way to make an mdy_yaml mapping from C, which
+ * there is not" — there is one now, in mdyyaml.h.
+ *
+ * What still writes text is the SOURCE of a `.md` document: the synthetic
+ * `+++` block the splitter reads, holding the file's prose as `body`. That is
+ * not a record being handed to the store — it is document text going to the
+ * same reader a `.mdy` file's own front matter goes to — so it has to be text,
+ * and it has to be escaped. put_scalar is why it is.
  */
 /* Room for `more` bytes, growing from nothing. 0 when there is none. */
 /*
@@ -201,21 +209,6 @@ static void put_scalar(char **buf, size_t *len, size_t *cap, const char *value) 
     *len = (size_t)(out - *buf);
 }
 
-/* `key: "value"` on a line of its own. */
-static void put_quoted(char **buf, size_t *len, size_t *cap,
-                       const char *key, const char *value) {
-    size_t klen = strlen(key);
-    put_room(buf, len, cap, klen + 4);
-    memcpy(*buf + *len, key, klen);
-    *len += klen;
-    (*buf)[(*len)++] = ':';
-    (*buf)[(*len)++] = ' ';
-    put_scalar(buf, len, cap, value);
-    put_room(buf, len, cap, 2);
-    (*buf)[(*len)++] = '\n';
-    (*buf)[*len] = '\0';
-}
-
 /* `tags:` and its list, or `tags: []` for a document that declared the key
  * and has nothing to put under it. Written in one place because it was
  * written in two, character for character, and only one of them knew about
@@ -240,22 +233,6 @@ static void put_tag_list(char **buf, size_t *len, size_t *cap,
         (*buf)[(*len)++] = '\n';
         (*buf)[*len] = '\0';
     }
-}
-
-/* The identity fields that are numbers. Whole ones — a size in bytes, a
- * picture's width — so `%.0f` is the digits and nothing else. */
-static void put_number(char **buf, size_t *len, size_t *cap,
-                       const char *key, double value) {
-    size_t need = *len + strlen(key) + 48;
-    if (need > *cap) {
-        size_t want = *cap ? *cap : 256;
-        while (need > want) want *= 2;
-        char *grown = realloc(*buf, want);
-        if (!grown) return;
-        *buf = grown;
-        *cap = want;
-    }
-    *len += (size_t)snprintf(*buf + *len, *cap - *len, "%s: %.0f\n", key, value);
 }
 
 static void put_block_scalar(char **buf, size_t *len, size_t *cap,
@@ -687,17 +664,17 @@ static int in_ancestors(const Ancestors *a, const char *dir) {
  * there, which is how the two came to disagree.
  */
 typedef struct {
-    size_t start, len;   /* the file's text, inside the staging buffer */
-    char *pre;           /* identity as a DEFAULT: a data file's, else NULL */
-    mdy_yaml *data;      /* a data file's own mapping */
-    char *post;          /* identity where it WINS */
+    size_t start, len;      /* the file's text, inside the staging buffer */
+    mdy_yaml *pre;          /* identity as a DEFAULT: a data file's, else NULL */
+    mdy_yaml *data;         /* a data file's own mapping */
+    mdy_yaml *post;         /* identity where it WINS */
     int is_md;
 } WalkedFile;
 
 static void walked_free(WalkedFile *files, size_t count) {
     for (size_t i = 0; i < count; i++) {
-        free(files[i].pre);
-        free(files[i].post);
+        mdy_yaml_free(files[i].pre);
+        mdy_yaml_free(files[i].post);
         mdy_yaml_free(files[i].data);
     }
     free(files);
@@ -793,11 +770,16 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
          * own data unreachable — but `path` is structurally required to be
          * real, because everything resolves documents by it.
          */
-        /* Identity, kept OUT of the text — see `identity` on the engine. */
+        /* Identity, kept OUT of the text — see `identity` on the engine.
+         * Built as VALUES: there is no YAML source in between, so there is
+         * nothing to escape and nothing that can be misread. (B8.) */
         char when[40];
         iso8601_utc(mtime, when, sizeof when);
-        char *ident = NULL;
-        size_t ilen = 0, icap = 0;
+        mdy_yaml_builder *ib = mdy_yaml_builder_new();
+        if (!ib) { free(bytes); free(source); free(listing);
+                   walked_free(files, file_count);
+                   if (error && error_len) snprintf(error, error_len, "out of memory");
+                   return -1; }
         /*
          * `path` FIRST, because mdy-docs has it first: it builds the record as
          * `{ ...meta, ...parsed, path }`, and re-assigning a key in JS leaves
@@ -806,11 +788,11 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
          * has it and its value from the LAST — so moving it does not change
          * which `path` wins over a data file's own. (B31.)
          */
-        put_quoted(&ident, &ilen, &icap, "path", rel);
-        put_quoted(&ident, &ilen, &icap, "name", name);
-        put_quoted(&ident, &ilen, &icap, "ext", ext);
-        put_number(&ident, &ilen, &icap, "size", size);
-        put_quoted(&ident, &ilen, &icap, "mtime", when);
+        mdy_yaml_put_string(ib, "path", rel, 0);
+        mdy_yaml_put_string(ib, "name", name, 0);
+        mdy_yaml_put_string(ib, "ext", ext, 0);
+        mdy_yaml_put_number(ib, "size", size);
+        mdy_yaml_put_string(ib, "mtime", when, 0);
         /*
          * A picture's dimensions, read from its header. Not decodable —
          * corrupt, truncated, a variant this does not know — is not an error:
@@ -820,16 +802,28 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         if (is_image && bytes) {
             int iw = 0, ih = 0;
             if (mdy_image_size(bytes, body_len, &iw, &ih) == 0) {
-                put_number(&ident, &ilen, &icap, "width", iw);
-                put_number(&ident, &ilen, &icap, "height", ih);
+                mdy_yaml_put_number(ib, "width", iw);
+                mdy_yaml_put_number(ib, "height", ih);
             }
         }
+
+        /*
+         * Checked ONCE, here, rather than at each put: a builder remembers a
+         * refused allocation and answers NULL, so a block that is short a key
+         * cannot get out. The text path had no error channel at all — that is
+         * what `put_room` not failing was working around.
+         */
+        mdy_yaml *ident = mdy_yaml_builder_done(ib);
+        if (!ident) { free(bytes); free(source); free(listing);
+                      walked_free(files, file_count);
+                      if (error && error_len) snprintf(error, error_len, "out of memory");
+                      return -1; }
 
         size_t need = len + body_len + 4096;
         if (need > cap) {
             while (need > cap) cap *= 2;
             char *grown = realloc(source, cap);
-            if (!grown) { free(bytes); free(source); free(listing);
+            if (!grown) { mdy_yaml_free(ident); free(bytes); free(source); free(listing);
                           walked_free(files, file_count); return -1; }
             source = grown;
         }
@@ -871,7 +865,8 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             if (need2 > cap) {
                 while (need2 > cap) cap *= 2;
                 char *grown = realloc(source, cap);
-                if (!grown) { if (rewritten) free(rewritten); free(bytes); free(source);
+                if (!grown) { if (rewritten) free(rewritten); mdy_yaml_free(ident);
+                              free(bytes); free(source);
                               free(listing); walked_free(files, file_count); return -1; }
                 source = grown;
             }
@@ -903,6 +898,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
              * succeeded. MDY_YAML_OOM is what tells them apart. */
             if (!own && strcmp(yerr, MDY_YAML_OOM) == 0) {
                 if (error && error_len) snprintf(error, error_len, "out of memory");
+                mdy_yaml_free(ident);
                 free(bytes); free(source); free(listing);
                 walked_free(files, file_count);
                 return -1;
@@ -926,7 +922,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         if (file_count == file_cap) {
             size_t want = file_cap ? file_cap * 2 : 16;
             WalkedFile *grown = realloc(files, want * sizeof *grown);
-            if (!grown) { mdy_yaml_free(own); free(ident); free(bytes); free(source);
+            if (!grown) { mdy_yaml_free(own); mdy_yaml_free(ident); free(bytes); free(source);
                           free(listing); walked_free(files, file_count); return -1; }
             files = grown;
             file_cap = want;
@@ -936,15 +932,23 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         f->len = len - file_start;
         f->data = own;
         f->is_md = is_md;
+        /* Both, before anything below can fail: the slot is taken, so a
+         * failure from here on goes through walked_free and it must not find
+         * two uninitialised pointers to free. */
+        f->pre = NULL;
+        f->post = NULL;
         if (is_yaml) {
             /* A default: the file's own fields win, except `path`. */
-            char *only_path = NULL;
-            size_t plen = 0, pcap = 0;
-            put_quoted(&only_path, &plen, &pcap, "path", rel);
+            mdy_yaml_builder *pb = mdy_yaml_builder_new();
+            if (pb) mdy_yaml_put_string(pb, "path", rel, 0);
+            mdy_yaml *only_path = mdy_yaml_builder_done(pb);
+            if (!only_path) { mdy_yaml_free(ident); free(bytes); free(source); free(listing);
+                              walked_free(files, file_count);
+                              if (error && error_len) snprintf(error, error_len, "out of memory");
+                              return -1; }
             f->pre = ident;
             f->post = only_path;
         } else {
-            f->pre = NULL;
             f->post = ident;
         }
         free(bytes);
@@ -1001,11 +1005,11 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
              * that reported success.
              */
             if (files[i].pre) {
-                e->ident_pre[at] = strdup(files[i].pre);
+                e->ident_pre[at] = mdy_yaml_clone(files[i].pre);
                 if (!e->ident_pre[at]) goto ident_oom;
             }
             if (files[i].post) {
-                e->ident_post[at] = strdup(files[i].post);
+                e->ident_post[at] = mdy_yaml_clone(files[i].post);
                 if (!e->ident_post[at]) goto ident_oom;
             }
             /* The parsed mapping goes to the FIRST document of the file —
@@ -1125,9 +1129,9 @@ const char *mdy_engine_root_at(mdy_engine *e, size_t i) {
  * `tags` is set when there are any OR when a part declared the key at all, so
  * a document that says `tags: []` keeps its empty list rather than losing it.
  */
-void put_document_tags(char **buf, size_t *len, size_t *cap,
-                              const mdy_yaml_node *const *parts, size_t part_count,
-                              const char *body, size_t body_len) {
+mdy_yaml *document_tags(const mdy_yaml_node *const *parts, size_t part_count,
+                        const char *body, size_t body_len, int *oom) {
+    *oom = 0;
     char (*tags)[128] = NULL;
     size_t count = 0, cap_t = 0;
     int declared_key = 0;
@@ -1153,8 +1157,24 @@ void put_document_tags(char **buf, size_t *len, size_t *cap,
 
     scan_hashtags(body, body_len, &tags, &count, &cap_t);
 
-    if (count > 0 || declared_key) put_tag_list(buf, len, cap, tags, count);
+    mdy_yaml *out = NULL;
+    if (count > 0 || declared_key) {
+        /* A sequence of values, not a `tags:` block to be parsed back. The
+         * text form is what made ONE tag with a quote in it unparseable, and
+         * an unparseable block did not fail: the document fell back to
+         * whatever its front matter said and was silently never lowercased or
+         * deduplicated at all. */
+        const char **items = count ? malloc(count * sizeof *items) : NULL;
+        if (count && !items) { free(tags); *oom = 1; return NULL; }
+        for (size_t k = 0; k < count; k++) items[k] = tags[k];
+        mdy_yaml_builder *b = mdy_yaml_builder_new();
+        if (b) mdy_yaml_put_strings(b, "tags", items, count);
+        out = mdy_yaml_builder_done(b);
+        free(items);
+        if (!out) *oom = 1;
+    }
     free(tags);
+    return out;
 }
 
 int mdy_engine_open_dir(mdy_engine *e, const char *root, char *error, size_t error_len) {
