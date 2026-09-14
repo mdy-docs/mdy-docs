@@ -131,12 +131,30 @@ struct mdy_engine {
     size_t kept_count, kept_cap;
     size_t next_token;
     int depth;                  /* renders inside renders */
-    void (*on_emit)(void *ud, const char *path, const char *content);
-    void *on_emit_ud;
-    void (*on_publish)(void *ud, const char *name, const char *data_json, size_t doc_index);
-    void *on_publish_ud;
-    void (*on_binary)(void *ud, const char *path, const uint8_t *bytes, size_t len);
-    void *on_binary_ud;
+    /*
+     * WHAT THE HOST HEARS. One struct because they are one thing with one
+     * rule: an imported package's `$.emit` contributes to the SAME outputs as
+     * the site that imported it, so a child engine takes the whole set from
+     * its importer — `child->cb = e->cb;`, which was eight assignments that
+     * had to be kept in step with this list by hand.
+     *
+     * `on_message` is the exception inside the group and stays documented as
+     * one: it is registered in document mode only (cli.c), so the messages
+     * the directory walk prints go to stderr rather than through it.
+     */
+    struct {
+        void (*on_emit)(void *ud, const char *path, const char *content);
+        void *on_emit_ud;
+        void (*on_publish)(void *ud, const char *name, const char *data_json, size_t doc_index);
+        void *on_publish_ud;
+        void (*on_binary)(void *ud, const char *path, const uint8_t *bytes, size_t len);
+        void *on_binary_ud;
+        void (*on_source)(void *ud, const char *path);
+        void *on_source_ud;
+        void (*on_message)(void *ud, size_t doc_index, uint32_t line, uint32_t column,
+                           const char *rule, const char *reason);
+        void *on_message_ud;
+    } cb;
     /* Fenced code's colouring: highlight.js, in lamassu — see load_highlighter(). */
     JsValue highlight_fn;
     int highlight_state;        /* 0 not yet asked for, 1 ready, -1 unavailable */
@@ -149,8 +167,6 @@ struct mdy_engine {
     char **ctx_json;            /* each a JSON text, parsed at render */
     char *ctx_strict;           /* 0: text that is not JSON is a string */
     size_t ctx_count;
-    void (*on_source)(void *ud, const char *path);
-    void *on_source_ud;
     /* Set by any native that reaches outside the document being rendered —
      * see the render memo. Saved and restored around each render. */
     int taint;
@@ -160,9 +176,6 @@ struct mdy_engine {
     char **scope_names;
     char **scope_json;
     size_t scope_count;
-    void (*on_message)(void *ud, size_t doc_index, uint32_t line, uint32_t column,
-                       const char *rule, const char *reason);
-    void *on_message_ud;
     int want_response;
     char *last_response;
     JsValue render_res;         /* the `res` of the render in progress, for its references */

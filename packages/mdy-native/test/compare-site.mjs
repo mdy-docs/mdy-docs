@@ -56,9 +56,11 @@ const cOut = join(work, 'c');
 
 try {
   /* A build that fails is a result, not a crash — say which one and why. */
+  const logs = {};
   const build = async (what, cmd, args) => {
     try {
-      await run(cmd, args, { maxBuffer: 64 * 1024 * 1024 });
+      const { stdout } = await run(cmd, args, { maxBuffer: 64 * 1024 * 1024 });
+      logs[what] = stdout;
     } catch (err) {
       const why = String(err.stderr || err.message).trim().split('\n').slice(-3).join('\n      ');
       console.log(`the ${what} build failed:\n      ${why}`);
@@ -72,9 +74,32 @@ try {
         [join(here, '../../../bin/mdy.js'), 'build', site, '--entry', entry, '--out', jsOut])) {
     process.exit();
   }
+  /*
+   * NOT --quiet, because the log is output too. `[read]` names every file the
+   * walk took as a source and `[write]` every file the build produced, and
+   * both are part of what `mdy build` IS — a user reads them to see what the
+   * build saw. Nothing compared them until an imported package's files turned
+   * out to be read without a `[read]` line where node prints one; the outputs
+   * were identical, so every check here passed.
+   */
   if (!await build('C', join(here, '..', 'build/mdy'),
-        ['build', site, '--entry', entry, '--out', cOut, '--quiet'])) {
+        ['build', site, '--entry', entry, '--out', cOut])) {
     process.exit();
+  }
+
+  /*
+   * The `[read]` and `[write]` lines, in order. The summary line is left out
+   * on purpose: it carries how long the build took, and the two engines do
+   * not take the same time.
+   */
+  const traced = (text) => (text || '').split('\n')
+    .filter((l) => l.startsWith('[read]') || l.startsWith('[write]'));
+  const jsLog = traced(logs.JavaScript), cLog = traced(logs.C);
+  const logDiffer = [];
+  for (let i = 0; i < Math.max(jsLog.length, cLog.length); i++) {
+    if (jsLog[i] !== cLog[i]) {
+      logDiffer.push(`line ${i + 1}: JavaScript ${jsLog[i] ?? '(nothing)'} / C ${cLog[i] ?? '(nothing)'}`);
+    }
   }
 
   const [a, b] = await Promise.all([walk(jsOut), walk(cOut)]);
@@ -138,6 +163,16 @@ try {
     for (const line of differ.slice(0, 10)) console.log(`  ${line}`);
     if (differ.length > 10) console.log(`  … and ${differ.length - 10} more`);
     process.exitCode = 1;
+  }
+  /* Reported separately, and never "as expected": there is no known
+   * divergence in the log the way there is in a resized PNG. */
+  if (logDiffer.length) {
+    console.log(`  the build log differs on ${logDiffer.length} line(s)`);
+    for (const line of logDiffer.slice(0, 10)) console.log(`    ${line}`);
+    if (logDiffer.length > 10) console.log(`    … and ${logDiffer.length - 10} more`);
+    process.exitCode = 1;
+  } else {
+    console.log(`  the build log agrees on ${jsLog.length} line(s)`);
   }
 } finally {
   await rm(work, { recursive: true, force: true });

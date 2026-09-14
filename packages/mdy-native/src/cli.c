@@ -610,6 +610,21 @@ typedef struct {
     int quiet;
     Progress *progress;
     int pages, images, failed;
+    /*
+     * A binary's `[write]` line, held back until every page has had one.
+     *
+     * node writes all the text outputs, THEN all the binary ones, then
+     * static/ (src/build.js) — so a resized image is logged after the last
+     * page. This engine produces a binary in the middle of a render and wrote
+     * it there, which put one line in a different place and shifted every
+     * line after it. Nothing compared the build log until test/compare-site.mjs
+     * started to, and over examples/blog that was thirteen lines.
+     *
+     * The FILE is still written as it is produced — only the line waits. That
+     * keeps the streaming this had and node does not: buffering the bytes to
+     * match an order would hold a site's every image in memory to fix a log.
+     */
+    char **pending; size_t pending_count, pending_cap;
 } BuildSink;
 
 static void build_log(BuildSink *s, const char *tag_open, const char *tag_close, const char *tag, const char *path) {
@@ -642,7 +657,23 @@ static void build_image(void *ud, const char *path, const uint8_t *bytes, size_t
         return;
     }
     s->images++;
-    build_log(s, GREEN, "[write]", path);
+    if (s->pending_count == s->pending_cap) {
+        size_t want = s->pending_cap ? s->pending_cap * 2 : 8;
+        s->pending = mdy_xrealloc(s->pending, want * sizeof *s->pending);
+        s->pending_cap = want;
+    }
+    s->pending[s->pending_count++] = mdy_xstrdup(path);
+}
+
+/* The held-back lines, once the pages are done. */
+static void build_flush_binaries(BuildSink *s) {
+    for (size_t i = 0; i < s->pending_count; i++) {
+        build_log(s, GREEN, "[write]", s->pending[i]);
+        free(s->pending[i]);
+    }
+    free(s->pending);
+    s->pending = NULL;
+    s->pending_count = s->pending_cap = 0;
 }
 
 /*
@@ -723,7 +754,7 @@ static int cmd_build(int argc, char **argv) {
 
     double started = now_ms();
     Progress progress = { .enabled = !quiet && on_terminal(stderr) };
-    BuildSink sink = { out_abs, quiet, &progress, 0, 0, 0 };
+    BuildSink sink = { .out = out_abs, .quiet = quiet, .progress = &progress };
     Messages messages = { 0 };
     /*
      * One exit, for the reason render_tree_out has one: this had five, and no
@@ -772,6 +803,8 @@ static int cmd_build(int argc, char **argv) {
     }
     free(html);
     html = NULL;
+
+    build_flush_binaries(&sink);
 
     /* Every root's static/, imports first — so the site's own copy of a name
      * is the one that survives. */

@@ -392,7 +392,7 @@ static bool emit_native(JsContext *ctx, JsValue this_val, const JsValue *args,
          * emitting the page without its composed pieces, or not at all, is a
          * file that is wrong rather than a file that is missing. */
         if (!filled) failed = 1;
-        else if (e->on_emit) e->on_emit(e->on_emit_ud, path, filled);
+        else if (e->cb.on_emit) e->cb.on_emit(e->cb.on_emit_ud, path, filled);
         free(filled);
     }
     free(path);
@@ -701,24 +701,24 @@ void mdy_engine_on_emit(mdy_engine *e,
                         void (*fn)(void *ud, const char *path, const char *content),
                         void *ud) {
     if (!e) return;
-    e->on_emit = fn;
-    e->on_emit_ud = ud;
+    e->cb.on_emit = fn;
+    e->cb.on_emit_ud = ud;
 }
 
 void mdy_engine_on_publish(mdy_engine *e,
                            void (*fn)(void *ud, const char *name,
                                       const char *data_json, size_t doc_index),
                            void *ud) {
-    e->on_publish = fn;
-    e->on_publish_ud = ud;
+    e->cb.on_publish = fn;
+    e->cb.on_publish_ud = ud;
 }
 
 void mdy_engine_on_binary(mdy_engine *e,
                           void (*fn)(void *ud, const char *path,
                                      const uint8_t *bytes, size_t len),
                           void *ud) {
-    e->on_binary = fn;
-    e->on_binary_ud = ud;
+    e->cb.on_binary = fn;
+    e->cb.on_binary_ud = ud;
 }
 
 /*
@@ -777,8 +777,8 @@ void mdy_engine_on_message(mdy_engine *e,
                            void (*fn)(void *ud, size_t doc_index, uint32_t line, uint32_t column,
                                       const char *rule, const char *reason),
                            void *ud) {
-    e->on_message = fn;
-    e->on_message_ud = ud;
+    e->cb.on_message = fn;
+    e->cb.on_message_ud = ud;
 }
 
 void mdy_engine_set_response(mdy_engine *e, int keep) { e->want_response = keep ? 1 : 0; }
@@ -812,8 +812,8 @@ void mdy_engine_clear_context(mdy_engine *e) {
 }
 
 void mdy_engine_on_source(mdy_engine *e, void (*fn)(void *ud, const char *path), void *ud) {
-    e->on_source = fn;
-    e->on_source_ud = ud;
+    e->cb.on_source = fn;
+    e->cb.on_source_ud = ud;
 }
 
 /*
@@ -2029,7 +2029,7 @@ static bool publish_native(JsContext *ctx, JsValue this_val, const JsValue *args
         return false;
     }
 
-    if (e->on_publish) {
+    if (e->cb.on_publish) {
         /*
          * The data arrives ALREADY serialised, by the guest's own
          * JSON.stringify — see the `$` wrapper. That is deliberate: a second
@@ -2038,7 +2038,7 @@ static bool publish_native(JsContext *ctx, JsValue this_val, const JsValue *args
          * shows up as a last digit in a page and nowhere else.
          */
         char *json = argc > 1 ? js_string_utf8(args[1]) : NULL;
-        e->on_publish(e->on_publish_ud, name, json ? json : "{}", first);
+        e->cb.on_publish(e->cb.on_publish_ud, name, json ? json : "{}", first);
         free(json);
     }
     free(name);
@@ -2249,7 +2249,7 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
         return false;
     }
 
-    if (e->on_binary) e->on_binary(e->on_binary_ud, out_path, made, out_len);
+    if (e->cb.on_binary) e->cb.on_binary(e->cb.on_binary_ud, out_path, made, out_len);
     free(made);
 
     /* Remembered on the token table, which the whole import graph shares — a
@@ -2892,11 +2892,11 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
     free(text);
     free(map);
 
-    if (tree && e->on_message) {
+    if (tree && e->cb.on_message) {
         size_t n = mdy_message_count(tree);
         for (size_t i = 0; i < n; i++) {
             const mdy_message *m = mdy_message_at(tree, i);
-            e->on_message(e->on_message_ud, e->current, m->line, m->column, m->rule, m->reason);
+            e->cb.on_message(e->cb.on_message_ud, e->current, m->line, m->column, m->rule, m->reason);
         }
     }
     return tree;

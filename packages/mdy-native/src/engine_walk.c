@@ -722,7 +722,7 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
 
     for (const char *rel = listing; *rel; rel += strlen(rel) + 1) {
         if (!is_source(rel)) continue;
-        if (e->on_source) e->on_source(e->on_source_ud, rel);
+        if (e->cb.on_source) e->cb.on_source(e->cb.on_source_ud, rel);
 
         const char *name = basename_of(rel);
         const char *ext = extension_of(name);
@@ -1064,13 +1064,13 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         mdy_engine *child = mdy_engine_new(e->session);
         if (!child) { if (error && error_len) snprintf(error, error_len, "out of memory"); return -1; }
         /* An `$.emit` from an imported package contributes to the SAME
-         * outputs as the site that imported it. */
-        child->on_emit = e->on_emit;
-        child->on_emit_ud = e->on_emit_ud;
-        child->on_publish = e->on_publish;
-        child->on_publish_ud = e->on_publish_ud;
-        child->on_binary = e->on_binary;
-        child->on_binary_ud = e->on_binary_ud;
+         * outputs as the site that imported it — and so, it turns out, does
+         * everything else the host listens for. This was three of the five
+         * pairs, assigned by hand; `on_source` was not among them, so an
+         * imported package's files were read without a `[read]` line where
+         * node prints one. Whole struct, so the next callback added cannot
+         * be forgotten here. */
+        child->cb = e->cb;
         child->tokens = token_table(e);
         /* In the cache before it is built, so a package that imports itself
          * through a diamond finds the one in progress rather than starting a
