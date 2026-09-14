@@ -202,9 +202,9 @@ static const char USAGE[] =
 "                        the page it names renders with the message as `req`,\n"
 "                        its output printed under the [deliver] line. One\n"
 "                        attempt each; a refusal is dead-lettered at once.\n"
-"      --tasks           A task's box is a form carrying the line and column\n"
-"                        of its `[x]`, for a handler to write the file (the\n"
-"                        parser's `tasks: true`); default: a disabled box.\n"
+"      --inert-tasks     A task's box is a DISABLED checkbox — display only.\n"
+"                        By default it is a form carrying the line and column\n"
+"                        of its `[x]`, for a handler to write the file back.\n"
 "      --sanitize        Apply the element allowlist to the output and report\n"
 "                        what it drops as a warning (the site engine leaves\n"
 "                        it off: its templates ran in a sandbox already).\n"
@@ -910,7 +910,7 @@ typedef struct {
     int html, emit_js, watch, publish, md;
     /* mdy-docs/parse's knobs, for a host rendering one document as that
      * package's callers do — the playground page, above all */
-    int tasks, sanitize;
+    int inert_tasks, sanitize;
     const char *scope_file, *response_file;
     char **data; size_t data_count;
     const char *input; int is_stdin, is_dir;
@@ -1078,7 +1078,7 @@ static char *generate_output(const DocOptions *o, mdy_session *session,
     cerr = load_scope(e, o);
     if (cerr) { mdy_engine_free(e); return cerr; }
     mdy_engine_set_sanitize(e, o->sanitize);
-    mdy_engine_set_tasks(e, o->tasks);
+    mdy_engine_set_tasks(e, !o->inert_tasks);
     mdy_engine_set_response(e, o->response_file != NULL);
     mdy_engine_on_message(e, doc_message, NULL);
     mdy_engine_on_emit(e, collect_emit, emitted);
@@ -1400,7 +1400,7 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(name, "watch") == 0 || strcmp(name, "w") == 0) canonical = "watch";
         else if (strcmp(name, "publish") == 0) canonical = "publish";
         else if (strcmp(name, "md") == 0) canonical = "md";
-        else if (strcmp(name, "tasks") == 0) canonical = "tasks";
+        else if (strcmp(name, "inert-tasks") == 0) canonical = "inert-tasks";
         else if (strcmp(name, "sanitize") == 0) canonical = "sanitize";
         else if (strcmp(name, "scope") == 0) { canonical = "scope"; takes_value = 1; }
         else if (strcmp(name, "response") == 0) { canonical = "response"; takes_value = 1; }
@@ -1423,7 +1423,7 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(canonical, "watch") == 0) o.watch = 1;
         else if (strcmp(canonical, "publish") == 0) o.publish = 1;
         else if (strcmp(canonical, "md") == 0) o.md = 1;
-        else if (strcmp(canonical, "tasks") == 0) o.tasks = 1;
+        else if (strcmp(canonical, "inert-tasks") == 0) o.inert_tasks = 1;
         else if (strcmp(canonical, "sanitize") == 0) o.sanitize = 1;
         else if (strcmp(canonical, "scope") == 0) o.scope_file = value;
         else if (strcmp(canonical, "response") == 0) o.response_file = value;
@@ -1482,7 +1482,7 @@ static int cmd_document(int argc, char **argv) {
                         : o.response_file ? "--response"
                         : o.data_count ? "--data"
                         : o.data_file ? "--data-file"
-                        : o.tasks ? "--tasks"
+                        : o.inert_tasks ? "--inert-tasks"
                         : o.sanitize ? "--sanitize" : NULL;
         if (bad) {
             snprintf(optmsg, sizeof optmsg, "%s has no meaning for %s", bad, kind_name(o.kind));

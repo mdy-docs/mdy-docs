@@ -105,7 +105,8 @@ export async function build(input, options = {}) {
  * into `messages`, so a page need not know the log's shape.
  *
  * The rest are mdy-docs/parse's own knobs, for a host rendering one document
- * as that package's callers do: `tasks` makes each task's box a form
+ * as that package's callers do: `inertTasks` makes each task's box a
+ * DISABLED checkbox, where by default it is a form
  * carrying its line and column; `sanitize` applies the element allowlist and
  * reports what it drops; `scope` is an object whose keys become variables in
  * the document's code; `response` asks for what the document answered with —
@@ -114,7 +115,7 @@ export async function build(input, options = {}) {
  *
  * @param {string | Uint8Array} source
  * @param {{ html?: boolean, publish?: boolean, data?: Record<string, unknown>,
- *           tasks?: boolean, sanitize?: boolean,
+ *           inertTasks?: boolean, sanitize?: boolean,
  *           scope?: Record<string, unknown>, response?: boolean,
  *           createModule?: Function }} [options]
  * @returns {Promise<{ output: string, messages: Array<object>, warnings: Array<object>,
@@ -123,7 +124,7 @@ export async function build(input, options = {}) {
 export async function document(source, options = {}) {
   const {
     html = true, publish = false, data = null,
-    tasks = false, sanitize = false, scope = null, response = false,
+    inertTasks = false, sanitize = false, scope = null, response = false,
     createModule,
   } = options;
 
@@ -143,7 +144,7 @@ export async function document(source, options = {}) {
   const args = [`${ROOT}/document.mdy`, '-o', `${OUT}/document.out`];
   if (html) args.push('--html');
   if (publish) args.push('--publish');
-  if (tasks) args.push('--tasks');
+  if (inertTasks) args.push('--inert-tasks');
   if (sanitize) args.push('--sanitize');
   if (data) {
     FS.writeFile(`${ROOT}/data.json`, JSON.stringify(data));

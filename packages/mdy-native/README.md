@@ -207,14 +207,15 @@ notes.md --html` is the same bytes as that file inside a site, which is the
 point: one file on its own is not a fourth reading. Anything else is read as a
 document and says so, and stdin, which has no extension, takes `--md`. An
 option needing a document's own code — `--scope`, `--response`, `--publish`,
-`--data`, `--emit-js`, `--tasks`, `--sanitize` — is refused rather than
+`--data`, `--emit-js`, `--inert-tasks`, `--sanitize` — is refused rather than
 ignored for the two kinds that have none. This is a deliberate divergence:
 `node bin/mdy.js` reads every file as a document whatever it is called.
 
 Document mode also carries mdy-docs/parse's own knobs, for a host that
 renders one document the way that package's callers do:
-`--tasks` makes a task's box a form carrying the line and column of its
-`[x]`, which is what `mdy-docs/tasks` posts back into a file; `--sanitize`
+a task's box is a form carrying the line and column of its `[x]`, which is
+what `mdy-docs/tasks` posts back into a file — `--inert-tasks` makes it a
+disabled checkbox instead; `--sanitize`
 applies the element allowlist and reports what it drops; `--scope <file>`
 puts a mapping's keys in the document's code as variables; `--response
 <file>` writes what the document answered with — `res` minus the tree, its

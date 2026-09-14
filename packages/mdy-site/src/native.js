@@ -6,8 +6,8 @@
  * highlighter, in one binary — and `make wasm` there compiles it with
  * emscripten. Its wrapper drives it as the command line is driven: the
  * source written into the module's filesystem, `main()` called with the
- * arguments `mdy document.mdy --html --tasks --sanitize --scope …
- * --response …` would have, the output read back.
+ * arguments `mdy document.mdy --html --sanitize --scope … --response …`
+ * would have, the output read back.
  *
  * The module is compiled once and instantiated per render — the engine
  * keeps a little static state a process never had to reset, and a fresh
@@ -64,10 +64,10 @@ async function factory(options) {
 }
 
 /**
- * Render one document as the tour page reads it: the whole source is one
- * document with `---` a thematic break, tasks are forms, the sanitizer is on
- * and reports what it drops, the host's values are in scope, and `req` is
- * what the document is answering.
+ * Render one document as the tour page reads it: a task's box is a form, the
+ * sanitizer is on and reports what it drops, the host's values are in scope,
+ * and `req` is what the document is answering. A bare `---` starts a second
+ * document, as it does everywhere in mdy — the tour shows only the first.
  *
  * @param {string} source
  * @param {{scope?: Record<string, unknown>, request?: Record<string, unknown>}} [options]
@@ -76,7 +76,6 @@ async function factory(options) {
 export async function render(source, {scope, request} = {}) {
   const r = await renderDocument(source, {
     html: true,
-    tasks: true,
     sanitize: true,
     scope,
     data: request,

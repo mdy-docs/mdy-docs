@@ -113,13 +113,39 @@ test('an option that needs code is refused, not ignored', () => {
    * the caller would get a document rendered without the variables it passed
    * and no sign of it. */
   const md = write('opts.md', MARKDOWN);
-  for (const flag of [['--emit-js'], ['--publish'], ['--tasks'], ['--sanitize'],
+  for (const flag of [['--emit-js'], ['--publish'], ['--inert-tasks'], ['--sanitize'],
                       ['--scope', 'x.yaml'], ['--response', 'r.json'],
                       ['--data', 'k=v'], ['--data-file', 'x.yaml']]) {
     const { status, stderr } = refuses([md, ...flag]);
     assert.equal(status, 1, `${flag[0]} should be refused`);
     assert.match(stderr, new RegExp(`${flag[0].replace(/-/g, '\\-')} has no meaning for a markdown file`));
   }
+});
+
+test("a task's box is a form by default, and --inert-tasks makes it a checkbox", () => {
+  /* The form carries where the `[x]` IS — line, column, and what is there now
+   * — so a handler can write one byte of the file back. A disabled checkbox
+   * carries nothing and is display only, which is the opt-out rather than the
+   * default: a document that lists tasks is usually a document somebody means
+   * to tick. */
+  const m = write('tasks.mdy', '- [ ] buy milk\n');
+  const live = run([m, '--html']);
+  assert.match(live, /<form method="post" class="task-list-item-form">/);
+  assert.match(live, /name="line" value="1"/);
+  assert.match(live, /name="column" value="4"/);
+  assert.match(live, /name="was" value=" "/);
+
+  const inert = run([m, '--inert-tasks', '--html']);
+  assert.match(inert, /<input type="checkbox" disabled>/);
+  assert.doesNotMatch(inert, /<form/);
+});
+
+test("...but a .md's box is the markdown front end's, which has no form", () => {
+  /* Not an oversight: `tasks` is an mdy-parse option and the markdown front
+   * end takes none, so a `.md` task list is GFM's disabled checkbox on both
+   * engines. Refusing --inert-tasks for one says that rather than hiding it. */
+  const md = write('tasks.md', '- [ ] buy milk\n');
+  assert.match(run([md, '--html']), /<input type="checkbox" disabled>/);
 });
 
 test('--html is refused for a record, which has no rendered form', () => {
