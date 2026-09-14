@@ -199,6 +199,18 @@ exists for the browser: the live-preview demo's messages pane
 ([packages/mdy-live-preview-native](../mdy-live-preview-native)) is that
 log, parsed.
 
+Document mode reads a file by its EXTENSION, which is the same three answers
+the directory walk gives: a `.mdy` is a document, a `.md` is markdown through
+the front end a site's `.md` goes through, and a `.yaml` or `.yml` is a record
+— it has no rendered form, so what comes out is the record as JSON. `mdy
+notes.md --html` is the same bytes as that file inside a site, which is the
+point: one file on its own is not a fourth reading. Anything else is read as a
+document and says so, and stdin, which has no extension, takes `--md`. An
+option needing a document's own code — `--scope`, `--response`, `--publish`,
+`--data`, `--emit-js`, `--tasks`, `--sanitize` — is refused rather than
+ignored for the two kinds that have none. This is a deliberate divergence:
+`node bin/mdy.js` reads every file as a document whatever it is called.
+
 Document mode also carries mdy-docs/parse's own knobs, for a host that
 renders one document the way that package's callers do:
 `--tasks` makes a task's box a form carrying the line and column of its

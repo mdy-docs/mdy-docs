@@ -38,6 +38,9 @@
 #include "fsx.h"
 #include "http.h"
 #include "mdydoc.h"
+#include "mdyast.h"
+#include "mdyhtml.h"
+#include "mdymarkdown.h"
 #include "mdytext.h"
 #include "xalloc.h"
 #include "mdyscript.h"
@@ -152,10 +155,14 @@ static const char USAGE[] =
 "  mdy dev [site-dir] [options]     development server — see: mdy dev --help\n"
 "\n"
 "Arguments:\n"
-"  path                   A .mdy file, a directory, or \"-\"/omitted for stdin.\n"
-"                        A FILE renders just that file — its own `---`-split\n"
-"                        documents, the first is the entry — with no access to\n"
-"                        any other file.\n"
+"  path                   A file, a directory, or \"-\"/omitted for stdin.\n"
+"                        A FILE is read by its EXTENSION: a .mdy is a document\n"
+"                        — its own `---`-split documents, the first is the\n"
+"                        entry, with no access to any other file; a .md is\n"
+"                        markdown, through the same front end a site uses for\n"
+"                        one; a .yaml or .yml is a record, and what comes out\n"
+"                        is that record as JSON. Anything else is read as a\n"
+"                        document and says so.\n"
 "                        A DIRECTORY is scanned in full: every file under it\n"
 "                        is inserted as a raw document (path/name/ext/size/\n"
 "                        mtime, plus front matter for .mdy files), so the\n"
@@ -187,6 +194,9 @@ static const char USAGE[] =
 "                        the given file (or, for a directory, any file under\n"
 "                        it) plus --data-file. A failing render reports to\n"
 "                        stderr and keeps watching. Not available with stdin.\n"
+"      --md              Read the input as MARKDOWN whatever it is called —\n"
+"                        what a `.md` name already says, for stdin and for a\n"
+"                        file named something else.\n"
 "      --publish         Deliver what the document published, here: each\n"
 "                        $.publish goes to a broker inside this process and\n"
 "                        the page it names renders with the message as `req`,\n"
@@ -867,15 +877,44 @@ done:
 
 /* ---- mdy [path]: one document --------------------------------------------------- */
 
+/*
+ * WHAT A FILE IS, from its extension — the same three answers the directory
+ * walk gives, so one file on its own is read the way it would be read inside
+ * a site rather than a fourth way.
+ *
+ *   .mdy          a document: front matter, a script layer, mdy markup
+ *   .md           markdown, through the same front end a site's `.md` uses;
+ *                 no code in it to run, so its text IS the file
+ *   .yaml, .yml   a record, not a document — it has no rendered form, so
+ *                 what comes out is the record, as JSON
+ *
+ * Anything else is read as `.mdy` and says so, which is what an unknown
+ * extension has always done. stdin has no extension and is `.mdy`: a caller
+ * piping markdown in can say `--md`.
+ */
+typedef enum { INPUT_MDY, INPUT_MD, INPUT_YAML } InputKind;
+
+static InputKind kind_of(const char *path) {
+    const char *ext = extension_of(path);
+    if (ieq(ext, ".md")) return INPUT_MD;
+    if (ieq(ext, ".yaml") || ieq(ext, ".yml")) return INPUT_YAML;
+    return INPUT_MDY;
+}
+
+static const char *kind_name(InputKind k) {
+    return k == INPUT_MD ? "a markdown file" : k == INPUT_YAML ? "a data file" : "an mdy document";
+}
+
 typedef struct {
     const char *out, *entry, *data_file;
-    int html, emit_js, watch, publish;
+    int html, emit_js, watch, publish, md;
     /* mdy-docs/parse's knobs, for a host rendering one document as that
      * package's callers do — the playground page, above all */
     int tasks, sanitize;
     const char *scope_file, *response_file;
     char **data; size_t data_count;
     const char *input; int is_stdin, is_dir;
+    InputKind kind;
     char *input_abs;
 } DocOptions;
 
@@ -1102,6 +1141,46 @@ static char *generate_output(const DocOptions *o, mdy_session *session,
     }
     if (!text) { snprintf(msg, sizeof msg, "cannot read input: %s", o->is_stdin ? "stdin" : o->input); mdy_engine_free(e); return msg; }
 
+    /*
+     * MARKDOWN. The same front end a site's `.md` goes through, and nothing
+     * else: there is no script layer in a markdown file, so no engine is
+     * involved and `--html` is the whole of the question. Without it the
+     * text a `.md` "wrote" is the file, which is what `$.text` on one gives
+     * inside a site.
+     */
+    if (o->kind == INPUT_MD) {
+        mdy_engine_free(e);
+        if (!o->html) { *out = text; return NULL; }
+        mdy_doc *doc = mdy_markdown_parse(text, len);
+        free(text);
+        if (!doc) return "the markdown could not be read";
+        char *html = mdy_to_html(mdy_root(doc), NULL);
+        mdy_free(doc);
+        if (!html) return "out of memory";
+        *out = html;
+        return NULL;
+    }
+
+    /*
+     * A DATA FILE is a record, not a document: inside a site its fields are
+     * what `$.find` answers with and it renders nothing at all. On its own
+     * the record is the only thing it can produce, so that is what comes
+     * out — as JSON, which is the same text `check-yaml` holds this reader
+     * to against node's.
+     */
+    if (o->kind == INPUT_YAML) {
+        mdy_engine_free(e);
+        char yerr[256] = { 0 };
+        mdy_yaml *doc = mdy_yaml_parse(text, len, yerr, sizeof yerr);
+        free(text);
+        if (!doc) { snprintf(msg, sizeof msg, "%s", yerr[0] ? yerr : "the data file could not be read"); return msg; }
+        char *json = mdy_yaml_to_json(mdy_yaml_root(doc));
+        mdy_yaml_free(doc);
+        if (!json) return "out of memory";
+        *out = json;
+        return NULL;
+    }
+
     if (o->emit_js) {
         mdy_documents *docs = mdy_split_documents(text, len);
         size_t n = mdy_documents_count(docs);
@@ -1320,6 +1399,7 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(name, "data-file") == 0) { canonical = "data-file"; takes_value = 1; }
         else if (strcmp(name, "watch") == 0 || strcmp(name, "w") == 0) canonical = "watch";
         else if (strcmp(name, "publish") == 0) canonical = "publish";
+        else if (strcmp(name, "md") == 0) canonical = "md";
         else if (strcmp(name, "tasks") == 0) canonical = "tasks";
         else if (strcmp(name, "sanitize") == 0) canonical = "sanitize";
         else if (strcmp(name, "scope") == 0) { canonical = "scope"; takes_value = 1; }
@@ -1342,6 +1422,7 @@ static int cmd_document(int argc, char **argv) {
         else if (strcmp(canonical, "data-file") == 0) o.data_file = value;
         else if (strcmp(canonical, "watch") == 0) o.watch = 1;
         else if (strcmp(canonical, "publish") == 0) o.publish = 1;
+        else if (strcmp(canonical, "md") == 0) o.md = 1;
         else if (strcmp(canonical, "tasks") == 0) o.tasks = 1;
         else if (strcmp(canonical, "sanitize") == 0) o.sanitize = 1;
         else if (strcmp(canonical, "scope") == 0) o.scope_file = value;
@@ -1379,8 +1460,37 @@ static int cmd_document(int argc, char **argv) {
         free(out_abs);
         if (same) fail("refusing to overwrite the input");
     }
-    if (!o.is_stdin && !o.is_dir && !ieq(extension_of(o.input), ".mdy"))
+    static char optmsg[256];
+    o.kind = o.is_dir || o.is_stdin ? INPUT_MDY : kind_of(o.input);
+    if (o.md) o.kind = INPUT_MD;
+    /* Still worth saying for anything the dispatch above does not know: it is
+     * being read as a document, and that is a guess rather than a reading of
+     * the name. */
+    if (!o.is_stdin && !o.is_dir && !o.md && o.kind == INPUT_MDY &&
+        !ieq(extension_of(o.input), ".mdy"))
         fprintf(stderr, "mdy: warning: input \"%s\" does not have a .mdy extension\n", o.input);
+
+    /*
+     * The options that need a document's own CODE. A `.md` and a `.yaml`
+     * have none, so these cannot be quietly ignored — a `--scope` that does
+     * nothing is worse than one that is refused.
+     */
+    if (o.kind != INPUT_MDY) {
+        const char *bad = o.emit_js ? "--emit-js"
+                        : o.publish ? "--publish"
+                        : o.scope_file ? "--scope"
+                        : o.response_file ? "--response"
+                        : o.data_count ? "--data"
+                        : o.data_file ? "--data-file"
+                        : o.tasks ? "--tasks"
+                        : o.sanitize ? "--sanitize" : NULL;
+        if (bad) {
+            snprintf(optmsg, sizeof optmsg, "%s has no meaning for %s", bad, kind_name(o.kind));
+            fail(optmsg);
+        }
+    }
+    if (o.kind == INPUT_YAML && o.html)
+        fail("--html has no meaning for a data file: a record has no rendered form");
 
     Outputs emitted = { 0 };
     /* One session for the command: in watch mode `generate_output` runs once

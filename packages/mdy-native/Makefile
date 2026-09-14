@@ -357,6 +357,13 @@ check-cli: build/mdy$(EXE)
 # the same answer.
 check-dev: build/mdy$(EXE)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test test/dev.test.js
+
+# What a FILE is, from its extension: .mdy a document, .md markdown, .yaml a
+# record. Native-only for the reason check-dev is — node reads every file as a
+# document whatever it is called, so there is no shared behaviour here and
+# test/cli.test.js is the wrong place for a difference.
+check-document: build/mdy$(EXE)
+	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test test/document.test.js
 check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
 	@./build/lexbor-test$(EXE)
 	@./build/parse-test$(EXE)
