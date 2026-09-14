@@ -905,13 +905,15 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
             }
             mdy_yaml_type kind = own ? mdy_yaml_type_of(mdy_yaml_root(own)) : MDY_YAML_NULL;
             if (!own)
-                fprintf(stderr, "mdy: %s — %s keeps its raw identity, no parsed fields\n",
-                        yerr[0] ? yerr : "unreadable YAML", rel);
+                engine_message(e, 0, 0, 0, "yaml",
+                               "%s — %s keeps its raw identity, no parsed fields",
+                               yerr[0] ? yerr : "unreadable YAML", rel);
             else if (kind == MDY_YAML_NULL)
                 { mdy_yaml_free(own); own = NULL; }      /* nothing in it, nothing to say */
             else if (kind != MDY_YAML_MAPPING) {
-                fprintf(stderr, "mdy: %s must be a YAML mapping — %s keeps its raw identity,"
-                                " no parsed fields\n", rel, rel);
+                engine_message(e, 0, 0, 0, "yaml",
+                               "%s must be a YAML mapping — %s keeps its raw identity,"
+                               " no parsed fields", rel, rel);
                 mdy_yaml_free(own);
                 own = NULL;
             }

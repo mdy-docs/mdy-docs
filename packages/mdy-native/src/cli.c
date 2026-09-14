@@ -605,6 +605,33 @@ static void progress_finish(Progress *p) {
 
 /* ---- mdy build ----------------------------------------------------------------- */
 
+/*
+ * What the library says, under `build` and `dev`.
+ *
+ * `mdy: <reason>` and nothing else, because it is PARITY: `mdy build` over a
+ * `.yaml` holding a sequence prints
+ *
+ *   mdy: list.yaml must be a YAML mapping — list.yaml keeps its raw identity,
+ *   no parsed fields
+ *
+ * and `node bin/mdy.js` prints the same bytes. Uncoloured for the same
+ * reason — the engine printed these itself until it stopped owning a stream,
+ * and it printed them plain.
+ *
+ * Different from `doc_message` below on purpose. That one says
+ * `mdy: warning: … (rule)`, which is right for a document's own parse
+ * warnings and wrong here: routing the walk's messages through it would
+ * change bytes that match node today. Two shapes because there are two
+ * audiences, not because nobody unified them.
+ */
+static void build_message(void *ud, size_t doc_index, uint32_t line, uint32_t column,
+                          const char *rule, const char *reason) {
+    (void)ud; (void)doc_index; (void)column; (void)rule;
+    if (line) fprintf(stderr, "mdy: line %u: %s\n", (unsigned)line, reason);
+    else fprintf(stderr, "mdy: %s\n", reason);
+}
+
+
 typedef struct {
     const char *out;
     int quiet;
@@ -774,6 +801,7 @@ static int cmd_build(int argc, char **argv) {
     mdy_engine *e = mdy_engine_new(session);
     if (!e) fail("out of memory");
     mdy_engine_on_source(e, build_source, &sink);
+    mdy_engine_on_message(e, build_message, NULL);
 
     char err[1024];
     if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
@@ -1484,6 +1512,7 @@ static mdy_engine *dev_build(Dev *d, Outputs *pages, Outputs *binaries, Messages
     mdy_engine *e = mdy_engine_new(d->session);
     if (!e) { snprintf(error, error_len, "out of memory"); return NULL; }
     mdy_engine_on_source(e, dev_source, d);
+    mdy_engine_on_message(e, build_message, NULL);
     if (mdy_engine_open_dir(e, d->root, error, error_len) != 0) { mdy_engine_free(e); return NULL; }
     mdy_engine_set_context_bool(e, "drafts", d->o->drafts);
     mdy_engine_set_context_bool(e, "future", d->o->future);

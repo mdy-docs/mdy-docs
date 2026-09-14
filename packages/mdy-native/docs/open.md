@@ -77,42 +77,39 @@ four lines each. Freeing inside it is what makes it fit every case.
 Only one of the seven messages had a test. All four that a document can reach
 do now, byte for byte against what node prints, in `resize_checks`.
 
-## 4. Error reporting has four conventions
+## 4. ~~Error reporting has four conventions~~ — DONE
 
-- `0/-1` with a caller-supplied error buffer — the engine, `fsx`
-- `BJ_*` status codes — `memns`, `nis`
-- `NULL` plus a `static` message buffer — `cli`
-- `fprintf(stderr)` from inside the library —
-  [`engine.c:2554`](../src/engine.c#L2554) and
-  [`2569`](../src/engine.c#L2569)
+Three now, and the one that was a *defect* rather than a preference is gone:
+**the library no longer owns a stream.**
 
-Four is too many. Unifying them touches every error path in the engine, changes
-no behaviour, and is checked by nothing but the parity suite — which is the same
-trade as items 1 and 2.
+`engine_message` (`engine_internal.h`) formats and hands over to
+`cb.on_message`. It prints nothing. The four `fprintf(stderr)` calls that were
+inside the engine — two for a highlighter that would not load, two for a
+`.yaml` the walk could not take as a record — go through it, and `build` and
+`dev` register a handler at last. Document mode already had one. What remains
+on stderr inside the library is diagnostics behind `MDY_MEMO_DEBUG` and the
+linemap flag, which are not messages and should not be routed.
 
-**The fourth is not simply a defect, and this is the part worth carrying
-forward**, because the obvious fix is wrong. The reasoning was:
-`mdy_engine_on_message` exists for exactly this, so a library should not print.
-Measured, that is wrong twice:
+**The correction stands, and is why there are still two shapes.** The obvious
+fix was to send everything through `doc_message`, which prints
+`mdy: warning: … (rule)`. That would have been wrong twice: `on_message` was
+registered only in document mode, so the walk's messages would have vanished
+exactly where they fire; and their text is PARITY — `mdy build` over a `.yaml`
+holding a sequence prints the same bytes as `node bin/mdy.js`. So `build` and
+`dev` print `mdy: <reason>` and document mode keeps `mdy: warning: … (rule)`.
+Two shapes because there are two audiences, not because nobody unified them.
 
-- `on_message` is registered in **one** place in the whole CLI
-  ([`cli.c:1022`](../src/cli.c#L1022)), and that is document mode. The
-  comparable messages from the directory walk
-  ([`engine_walk.c:913`](../src/engine_walk.c#L913)) only fire under
-  `mdy build` and `mdy dev`, neither of which registers it. Routing them
-  through the callback would make them vanish exactly where they can happen.
-- The text is **parity**. `mdy build` over a `.yaml` holding a sequence prints
-  `mdy: list.yaml must be a YAML mapping — list.yaml keeps its raw identity, no
-  parsed fields`, and `node bin/mdy.js` prints the same bytes. Going through
-  `doc_message` would print `mdy: warning: … (…)` instead — a divergence
-  introduced by a tidying change.
+**The three that remain are one per library, which is the defensible number.**
+`0/-1` with a caller-supplied buffer is the engine's; `BJ_*` codes are
+nisaba's, whose contract is its own; `NULL` plus a `static` message buffer is
+the CLI's, internal to one file. Unifying those means changing a submodule's
+public API to no behavioural end.
 
-So the real change, if it is ever wanted, is to register `on_message` in build
-and dev first and decide what each should print. That is a decision about the
-CLI's output, not a cleanup of the library. The two highlighter `fprintf`s are
-the same shape.
-
----
+The risk this change created was a message disappearing silently, since an
+engine whose embedder registers nothing now says nothing. `data_checks` used
+to print "(two warnings below are the point)" and leave a reader to look at
+them; it collects and asserts them instead, and a control test that stops the
+library emitting one turns it red.
 
 ## What happened to the review
 

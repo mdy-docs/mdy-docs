@@ -39,6 +39,32 @@ static mdy_session *S;
 static char last_emit_path[256];
 static char last_emit_content[4096];
 
+/*
+ * What the library SAYS, which is not the same as what it writes.
+ *
+ * These used to reach the terminal through an `fprintf(stderr)` inside the
+ * engine, and this file printed "(two warnings below are the point)" and left
+ * a reader to look at them. They go through `on_message` now, so an engine
+ * whose embedder registers nothing says nothing — which is what a callback
+ * means, and is exactly the way this change could have lost them silently.
+ * Collected and asserted rather than displayed.
+ */
+static char warnings[8][512];
+static size_t warning_count;
+
+static void collect_warning(void *ud, size_t doc_index, uint32_t line, uint32_t column,
+                            const char *rule, const char *reason) {
+    (void)ud; (void)doc_index; (void)line; (void)column; (void)rule;
+    if (warning_count < 8) snprintf(warnings[warning_count++], 512, "%s", reason ? reason : "");
+}
+
+/* Whether any message said this, in full. */
+static int warned(const char *exact) {
+    for (size_t i = 0; i < warning_count; i++)
+        if (strcmp(warnings[i], exact) == 0) return 1;
+    return 0;
+}
+
 static void collect_emit(void *ud, const char *path, const char *content) {
     (void)ud;
     snprintf(last_emit_path, sizeof last_emit_path, "%s", path);
@@ -309,7 +335,8 @@ static void data_file_checks(void) {
     emit_count = 0;
     mdy_engine_on_emit(e, collect_all, NULL);
 
-    printf("  (two `keeps its raw identity` warnings below are the point)\n");
+    warning_count = 0;
+    mdy_engine_on_message(e, collect_warning, NULL);
     if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
         printf("  FAIL  open a directory of data files\n      %s\n", err);
         failures++;
@@ -318,6 +345,21 @@ static void data_file_checks(void) {
         return;
     }
     ok_("a data file opening with `---` is ONE document", mdy_engine_count(e) == 6, NULL);
+    /* Both warnings, in full. `plus.yaml`'s message carries the READER's words
+     * for what it found, so only its tail is fixed; `list.yaml`'s is fixed
+     * throughout and is the one that is byte-for-byte what node prints. */
+    ok_("a .yaml that is not a mapping says so, in the words node uses",
+        warned("list.yaml must be a YAML mapping — list.yaml keeps its raw identity,"
+               " no parsed fields"),
+        warning_count ? warnings[0] : "(nothing was said)");
+    {
+        int found = 0;
+        for (size_t i = 0; i < warning_count; i++)
+            if (strstr(warnings[i], "plus.yaml keeps its raw identity, no parsed fields")) found = 1;
+        ok_("...and one the reader could not parse says why, and keeps its identity",
+            found, warning_count > 1 ? warnings[1] : "(nothing was said)");
+    }
+    ok_("...and those are the only two", warning_count == 2, NULL);
 
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;

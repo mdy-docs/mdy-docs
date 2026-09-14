@@ -397,6 +397,24 @@ void resolve_path(const char *base, const char *spec, char *out, size_t out_len)
  * the other NULL, and the caller has to tell them apart: a document that
  * loses its tags loses the indexes it appears in.
  */
+/*
+ * One way for the library to SAY something that is not a failure.
+ *
+ * A message is not an error: the build carries on, and what it reports is
+ * something the AUTHOR should know — a `.yaml` that is not a mapping, a
+ * highlighter that would not load. The engine used to print those itself
+ * with `fprintf(stderr)`, which was the fourth of this project's four error
+ * conventions and the one that was a defect rather than a preference: a
+ * library with a callback for exactly this should not own a stream.
+ *
+ * Nothing is printed here. It formats and hands over to `cb.on_message`, and
+ * an engine whose embedder registered none says nothing — which is what a
+ * callback means. Every mode of the CLI registers one; see `mdy_message` in
+ * cli.c for the shape they print, which is parity text.
+ */
+void engine_message(mdy_engine *e, size_t doc_index, uint32_t line, uint32_t column,
+                    const char *rule, const char *fmt, ...);
+
 mdy_yaml *document_tags(const mdy_yaml_node *const *parts, size_t part_count,
                         const char *body, size_t body_len, int *oom);
 

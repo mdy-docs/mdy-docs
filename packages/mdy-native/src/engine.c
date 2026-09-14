@@ -1,4 +1,5 @@
 /* The contract, and what is not here yet, is in engine.h. */
+#include <stdarg.h>
 #include <stddef.h>
 #include "engine_internal.h"
 #include "xalloc.h"
@@ -771,6 +772,17 @@ int mdy_engine_set_scope_json(mdy_engine *e, const char *name, const char *json)
     e->knobs.scope_json[e->knobs.scope_count] = strdup(json);
     e->knobs.scope_count++;
     return 0;
+}
+
+void engine_message(mdy_engine *e, size_t doc_index, uint32_t line, uint32_t column,
+                    const char *rule, const char *fmt, ...) {
+    if (!e || !e->cb.on_message) return;
+    char reason[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(reason, sizeof reason, fmt, ap);
+    va_end(ap);
+    e->cb.on_message(e->cb.on_message_ud, doc_index, line, column, rule, reason);
 }
 
 void mdy_engine_on_message(mdy_engine *e,
@@ -2537,8 +2549,9 @@ static void load_highlighter(mdy_engine *e) {
         char *text = js_is_object(reason)
             ? js_string_utf8(get_val(e, reason, "message"))
             : js_string_utf8(reason);
-        fprintf(stderr, "fenced code will not be highlighted: the highlighter did not load (%s)\n",
-                text ? text : "no reason given");
+        engine_message(e, e->graph.current, 0, 0, "highlight",
+                       "fenced code will not be highlighted: the highlighter did not load (%s)",
+                       text ? text : "no reason given");
         free(text);
         js_gc_unprotect(e->vm, &promise);
         return;
@@ -2552,7 +2565,8 @@ static void load_highlighter(mdy_engine *e) {
     free(name);
     js_gc_unprotect(e->vm, &promise);
     if (!js_is_function(e->highlight.fn)) {
-        fprintf(stderr, "fenced code will not be highlighted: the highlighter exports no highlightCode\n");
+        engine_message(e, e->graph.current, 0, 0, "highlight",
+                       "fenced code will not be highlighted: the highlighter exports no highlightCode");
         js_gc_unprotect(e->vm, &e->highlight.fn);
         e->highlight.fn = js_undefined();
         return;
