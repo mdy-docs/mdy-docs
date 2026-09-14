@@ -1307,6 +1307,342 @@ static int add_paragraph(mdy_doc *doc, mdy_node *parent, const char *joined, siz
     return 1;
 }
 
+/*
+ * A LIST, from its first marker to the last line of its last item — every
+ * rule that decides where one ends and what an item holds.
+ *
+ * This is the one construct big enough to have a grammar rather than a shape:
+ * loose against tight, continuation lines that need no indentation, `[ ]`
+ * task boxes, nested lists, and blank lines that mean "a gap inside this
+ * item" in one place and "the list is over" in another. It was written INSIDE
+ * `mdy_parse_block`, beside constructs that are ten lines each, and it is why
+ * that function was 524 lines.
+ *
+ * It takes no `base`. A list measures everything against its OWN first
+ * marker's column, never against the run it sits in — which is what lets an
+ * unindented continuation line still belong to an item — so the only column
+ * it needs is one it can read off `lines[i]`.
+ *
+ * It recurses through `mdy_parse_block` for an item's block content. That
+ * mutual recursion is real and is why the cut is here: a list item holds
+ * blocks, which hold lists, and any deeper seam would have to be crossed
+ * twice.
+ *
+ * `i` is the line the marker is on. Returns the first line AFTER the list.
+ */
+static size_t parse_list(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
+                         size_t count, size_t i, int ordered, size_t nesting) {
+    const mdy_line *l = &lines[i];
+    size_t start_line = i;
+    mdy_node *list = mdy_new_element(doc, ordered ? "ol" : "ul", 2);
+    /*
+     * An ordered list that does not begin at 1 says so — `1931.` gives
+     * `<ol start="1931">`, which is what makes the rendered numbering
+     * match what the author wrote. One is the default and is left off.
+     */
+    /* Read now, SET after the items: properties is an object and
+     * the JavaScript puts className on before start, so the order the
+     * two are written in is part of the output. */
+    long first = ordered ? marker_number(l) : -1;
+    mdy_append(list, mdy_new_text(doc, "\n", 1));
+    int any_task = 0;
+
+    /*
+     * LOOSE OR TIGHT. A blank line between items does not end the
+     * list — it makes it loose, and every item then wraps its content
+     * in a <p> rather than holding it inline. That is one decision for
+     * the whole list, so it has to be made before any item is built.
+     */
+    int loose = 0;
+    {
+        size_t scan = i;
+        int seen_blank = 0;
+        while (scan < count) {
+            if (lines[scan].blank) { seen_blank = 1; scan++; continue; }
+            int k_ordered = 0;
+            size_t k_width = list_marker(&lines[scan], &k_ordered);
+            if (k_width && k_ordered == ordered && lines[scan].indent == l->indent) {
+                if (seen_blank) { loose = 1; break; }
+                scan++;
+                continue;
+            }
+            if (lines[scan].indent > l->indent) { scan++; continue; }
+            break;
+        }
+    }
+
+    while (i < count) {
+        /* Skip blank lines BETWEEN items — in a loose list they
+         * separate items rather than ending the list. */
+        if (lines[i].blank) {
+            size_t peek = i;
+            while (peek < count && lines[peek].blank) peek++;
+            int p_ordered = 0;
+            if (peek < count && list_marker(&lines[peek], &p_ordered) &&
+                p_ordered == ordered && lines[peek].indent == l->indent) {
+                i = peek;
+                continue;
+            }
+            break;
+        }
+        int this_ordered = 0;
+        size_t width = list_marker(&lines[i], &this_ordered);
+        if (!width || this_ordered != ordered || lines[i].indent != l->indent) break;
+
+        /*
+         * An item owns every following line indented past the marker:
+         * a plain one continues its text, a deeper list marker becomes
+         * a nested list. `- one` then `  two` is one item reading
+         * "one two"; `- a` then `  - b` is an item holding a <ul>.
+         */
+        /*
+         * A continuation line needs NO indentation — `- one` followed
+         * by an unindented `two` is one item reading "one two". What
+         * ends an item is another marker, or a line that starts a
+         * block of its own; indentation only matters for deciding
+         * whether a blank line is a gap inside the item or the end of
+         * it.
+         */
+        size_t item_end = i + 1;
+        while (item_end < count) {
+            const mdy_line *k = &lines[item_end];
+            if (k->blank) {
+                size_t peek = item_end;
+                while (peek < count && lines[peek].blank) peek++;
+                if (peek < count && lines[peek].indent > l->indent) { item_end = peek; continue; }
+                break;
+            }
+            if (k->indent > l->indent) { item_end++; continue; }
+            int k_ordered = 0;
+            if (list_marker(k, &k_ordered)) break;
+            if (k->text[0] == '<' || k->text[0] == '=') break;
+            if (thematic_break(k)) break;
+            item_end++;
+        }
+        while (item_end > i + 1 && lines[item_end - 1].blank) item_end--;
+
+        const char *body = lines[i].text + width;
+        size_t body_len = lines[i].len - width;
+        trim(&body, &body_len);
+
+        mdy_node *item = mdy_new_element(doc, "li", 2);
+
+        /*
+         * `[ ]` or `[x]` after the marker makes it a task —
+         * `^\\[([ xX])\\](?:[ \\t]+(.*))?$`, so the box has to be
+         * followed by whitespace or by nothing at all. `- [x]done` is
+         * an ordinary item reading `[x]done`.
+         *
+         * The box itself is NOT appended here: it belongs at the head
+         * of whatever holds the content, which for a loose item is the
+         * paragraph and not the <li>.
+         */
+        int task = -1;
+        /* the column of the character between the brackets, 1-based
+         * and counted from the start of the line, indentation and
+         * all — what a handler needs to find the `x` to write */
+        size_t task_column = 0;
+        if (body_len >= 3 && body[0] == '[' && body[2] == ']' &&
+            (body[1] == ' ' || body[1] == 'x' || body[1] == 'X') &&
+            (body_len == 3 || body[3] == ' ' || body[3] == '\t')) {
+            task = body[1] == ' ' ? 0 : 1;
+            task_column = lines[i].indent_chars + (size_t)(body - lines[i].text) + 2;
+            body += 3;
+            body_len -= 3;
+            while (body_len && (*body == ' ' || *body == '\t')) { body++; body_len--; }
+            any_task = 1;
+            mdy_add_class(doc, item, "task-list-item");
+        }
+
+        /*
+         * Continuation lines that are themselves plain join the item's
+         * text; from the first line that opens a block, the rest is
+         * parsed as blocks. That split is what makes `- one` / `  two`
+         * one sentence and `- a` / `  - b` a nested list.
+         */
+        size_t plain_end = i + 1;
+        while (plain_end < item_end && !lines[plain_end].blank) {
+            int sub = 0;
+            if (list_marker(&lines[plain_end], &sub) || lines[plain_end].text[0] == '<' ||
+                lines[plain_end].text[0] == '=') break;
+            plain_end++;
+        }
+
+        size_t total = body_len;
+        for (size_t k = i + 1; k < plain_end; k++) total += lines[k].len + 1;
+        char *joined = mdy_alloc(&doc->arena, total + 1);
+        size_t o = 0;
+        memcpy(joined, body, body_len);
+        o = body_len;
+        for (size_t k = i + 1; k < plain_end; k++) {
+            /* The separator goes in even when the marker line left
+             * nothing behind it — `1931.` then `next` is an item
+             * reading " next", with the space the join put there. */
+            joined[o++] = ' ';
+            memcpy(joined + o, lines[k].text, lines[k].len);
+            o += lines[k].len;
+        }
+        joined[o] = '\0';
+        if (loose) {
+            /* `li("\n" p(content) "\n")` — the shape a blank line
+             * between items produces. */
+            mdy_node *wrap = mdy_new_element(doc, "p", 1);
+            mdy_parse_inline(doc, wrap, joined, o);
+            add_task_box(doc, wrap, task, o, lines, i, task_column);
+            /* The paragraph a loose item wraps its content in spans
+             * the same lines the item does — it IS the item's
+             * content, not a block of its own. */
+            mdy_set_position(wrap, lines, i, item_end > i ? item_end - 1 : i);
+            mdy_append(item, mdy_new_text(doc, "\n", 1));
+            mdy_append(item, wrap);
+            mdy_append(item, mdy_new_text(doc, "\n", 1));
+        } else {
+            mdy_parse_inline(doc, item, joined, o);
+            add_task_box(doc, item, task, o, lines, i, task_column);
+        }
+
+        if (item_end > plain_end) {
+            size_t inner = lines[plain_end].indent;
+            for (size_t k = plain_end; k < item_end; k++)
+                if (!lines[k].blank && lines[k].indent < inner) inner = lines[k].indent;
+            mdy_parse_block(doc, item, lines + plain_end, item_end - plain_end, inner,
+                            nesting + 1);
+        }
+
+        mdy_set_position(item, lines, i, item_end > i ? item_end - 1 : i);
+        mdy_append(list, item);
+        mdy_append(list, mdy_new_text(doc, "\n", 1));
+        i = item_end;
+    }
+
+    /* The list is marked once, after its items, because one task item
+     * makes the whole list a task list. */
+    if (any_task) mdy_add_class(doc, list, "contains-task-list");
+    if (ordered && first >= 0 && first != 1)
+        mdy_set_number(doc, list, "start", (double)first);
+    mdy_set_position(list, lines, start_line, i > start_line ? i - 1 : start_line);
+    separate(doc, parent);
+    mdy_append(parent, list);
+    return i;
+}
+
+/*
+ * A PARAGRAPH -- adjacent non-blank lines joined with a space -- and the
+ * setext heading that a line underneath can turn it into.
+ *
+ * The two are one function because they are one decision made twice over the
+ * same text: the lines are gathered and joined first, and only then does what
+ * comes AFTER them say whether the result is a <p> or an <h1>. Splitting them
+ * would mean gathering twice, or handing the join across a boundary.
+ *
+ * Most of it is the gathering, and all of that is one question: what ENDS a
+ * paragraph. A deeper indent, a fence, a table with its delimiter under it, a
+ * heading, an element opener, a list marker, a thematic break -- each of those
+ * is a block that begins rather than a sentence that continues.
+ *
+ * Returns the first line after what it produced (j + 1 for a setext heading,
+ * because the underline is consumed too), and sets *produced when it made
+ * anything. That flag is the caller\'s and is sticky -- it only goes up, and
+ * what it decides is whether a trailing separator is written.
+ */
+static size_t parse_paragraph(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
+                              size_t count, size_t i, size_t base, int *produced) {
+    size_t j = i;
+    size_t total = 0;
+    while (j < count && !lines[j].blank) {
+        int ordered_here = 0;
+        /* A line that starts another block ends this paragraph — and a
+         * line further in than this run is another block, which is what
+         * makes `top` / `  in` a paragraph and a div rather than one
+         * paragraph reading "top in". */
+        if (j > i && lines[j].indent > base) break;
+        char fence_here = 0;
+        const char *fl = NULL;
+        size_t fll = 0;
+        if (j > i && fence_opener(&lines[j], &fence_here, &fl, &fll)) break;
+        /*
+         * …and so does a table: a header row and its delimiter under a
+         * line of prose start the table, they do not join the sentence.
+         * A CAPTION line does too, which is what makes `| One` a
+         * paragraph and `| Two` the caption of the table beneath it.
+         */
+        if (j > i && memchr(lines[j].text, '|', lines[j].len) && j + 1 < count) {
+            size_t h = caption_at(lines, count, j) ? j + 1 : j;
+            if (h + 1 < count && table_rows(lines, count, h, base)) break;
+        }
+        if (j > i && (lines[j].text[0] == '=' || lines[j].text[0] == '<' ||
+                      list_marker(&lines[j], &ordered_here) ||
+                      thematic_break(&lines[j]))) break;
+        total += lines[j].len + 1;
+        j++;
+    }
+    char *joined = mdy_alloc(&doc->arena, total + 1);
+    size_t o = 0;
+    for (size_t k = i; k < j; k++) {
+        /*
+         * TRAILING whitespace only. A line's leading spaces are its
+         * indentation and were removed when the lines were measured; a
+         * leading NO-BREAK space is not indentation and belongs to the
+         * text, which is what `\u00a0\u00a0Kingdom of …` in the corpus
+         * depends on.
+         */
+        const char *lt = lines[k].text;
+        size_t ll = lines[k].len;
+        mdy_trim_end(&lt, &ll);
+        if (k > i && o) joined[o++] = ' ';
+        memcpy(joined + o, lt, ll);
+        o += ll;
+    }
+    joined[o] = '\0';
+    /* A run of only whitespace produces no paragraph, and so must produce
+     * no separator either — which is why the emptiness is decided here
+     * rather than inside add_paragraph. */
+    /*
+     * Setext: a line of `=` under a paragraph makes it an <h1>, and FOUR
+     * or more `-` make it an <h2>. Three hyphens do not — that is a
+     * thematic break, and the paragraph above it stands on its own.
+     */
+    const mdy_line *under = j < count ? &lines[j] : NULL;
+    int setext = 0;
+    if (under && !under->blank && under->indent == base) {
+        /* `^(?:(=+)|(-{4,}))[ \t]*$` — trailing whitespace is
+         * decoration on either form. */
+        if (underline_of(under, '=', 1)) setext = 1;
+        else if (underline_of(under, '-', 4)) setext = 2;
+    }
+
+    const char *probe = joined;
+    size_t probe_len = o;
+    mdy_trim_end(&probe, &probe_len);
+
+    if (setext && probe_len) {
+        char tag[3] = { 'h', (char)('0' + setext), '\0' };
+        mdy_node *h = mdy_new_element(doc, tag, 2);
+        mdy_parse_inline(doc, h, probe, probe_len);
+        {
+            char rendered[1024];
+            size_t rlen = node_text(h, rendered, sizeof rendered, 0);
+            set_heading_id(doc, h, rendered, rlen);
+        }
+        mdy_set_position(h, lines, i, j);
+        separate(doc, parent);
+        mdy_append(parent, h);
+        *produced = 1;
+        return j + 1;
+    }
+
+    if (probe_len) {
+        separate(doc, parent);
+        mdy_node *before = parent->last;
+        if (add_paragraph(doc, parent, joined, o)) {
+            mdy_node *made = before ? before->next : parent->first;
+            mdy_set_position(made, lines, i, j > i ? j - 1 : i);
+        }
+        *produced = 1;
+    }
+    return j;
+}
+
 void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size_t count,
                      size_t base, size_t nesting) {
     size_t i = 0;
@@ -1535,298 +1871,14 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
 
         /* --- lists --- */
         int ordered = 0;
-        size_t marker = list_marker(l, &ordered);
-        if (marker) {
-            size_t start_line = i;
-            mdy_node *list = mdy_new_element(doc, ordered ? "ol" : "ul", 2);
-            /*
-             * An ordered list that does not begin at 1 says so — `1931.` gives
-             * `<ol start="1931">`, which is what makes the rendered numbering
-             * match what the author wrote. One is the default and is left off.
-             */
-            /* Read now, SET after the items: properties is an object and
-             * the JavaScript puts className on before start, so the order the
-             * two are written in is part of the output. */
-            long first = ordered ? marker_number(l) : -1;
-            mdy_append(list, mdy_new_text(doc, "\n", 1));
-            int any_task = 0;
-
-            /*
-             * LOOSE OR TIGHT. A blank line between items does not end the
-             * list — it makes it loose, and every item then wraps its content
-             * in a <p> rather than holding it inline. That is one decision for
-             * the whole list, so it has to be made before any item is built.
-             */
-            int loose = 0;
-            {
-                size_t scan = i;
-                int seen_blank = 0;
-                while (scan < count) {
-                    if (lines[scan].blank) { seen_blank = 1; scan++; continue; }
-                    int k_ordered = 0;
-                    size_t k_width = list_marker(&lines[scan], &k_ordered);
-                    if (k_width && k_ordered == ordered && lines[scan].indent == l->indent) {
-                        if (seen_blank) { loose = 1; break; }
-                        scan++;
-                        continue;
-                    }
-                    if (lines[scan].indent > l->indent) { scan++; continue; }
-                    break;
-                }
-            }
-
-            while (i < count) {
-                /* Skip blank lines BETWEEN items — in a loose list they
-                 * separate items rather than ending the list. */
-                if (lines[i].blank) {
-                    size_t peek = i;
-                    while (peek < count && lines[peek].blank) peek++;
-                    int p_ordered = 0;
-                    if (peek < count && list_marker(&lines[peek], &p_ordered) &&
-                        p_ordered == ordered && lines[peek].indent == l->indent) {
-                        i = peek;
-                        continue;
-                    }
-                    break;
-                }
-                int this_ordered = 0;
-                size_t width = list_marker(&lines[i], &this_ordered);
-                if (!width || this_ordered != ordered || lines[i].indent != l->indent) break;
-
-                /*
-                 * An item owns every following line indented past the marker:
-                 * a plain one continues its text, a deeper list marker becomes
-                 * a nested list. `- one` then `  two` is one item reading
-                 * "one two"; `- a` then `  - b` is an item holding a <ul>.
-                 */
-                /*
-                 * A continuation line needs NO indentation — `- one` followed
-                 * by an unindented `two` is one item reading "one two". What
-                 * ends an item is another marker, or a line that starts a
-                 * block of its own; indentation only matters for deciding
-                 * whether a blank line is a gap inside the item or the end of
-                 * it.
-                 */
-                size_t item_end = i + 1;
-                while (item_end < count) {
-                    const mdy_line *k = &lines[item_end];
-                    if (k->blank) {
-                        size_t peek = item_end;
-                        while (peek < count && lines[peek].blank) peek++;
-                        if (peek < count && lines[peek].indent > l->indent) { item_end = peek; continue; }
-                        break;
-                    }
-                    if (k->indent > l->indent) { item_end++; continue; }
-                    int k_ordered = 0;
-                    if (list_marker(k, &k_ordered)) break;
-                    if (k->text[0] == '<' || k->text[0] == '=') break;
-                    if (thematic_break(k)) break;
-                    item_end++;
-                }
-                while (item_end > i + 1 && lines[item_end - 1].blank) item_end--;
-
-                const char *body = lines[i].text + width;
-                size_t body_len = lines[i].len - width;
-                trim(&body, &body_len);
-
-                mdy_node *item = mdy_new_element(doc, "li", 2);
-
-                /*
-                 * `[ ]` or `[x]` after the marker makes it a task —
-                 * `^\\[([ xX])\\](?:[ \\t]+(.*))?$`, so the box has to be
-                 * followed by whitespace or by nothing at all. `- [x]done` is
-                 * an ordinary item reading `[x]done`.
-                 *
-                 * The box itself is NOT appended here: it belongs at the head
-                 * of whatever holds the content, which for a loose item is the
-                 * paragraph and not the <li>.
-                 */
-                int task = -1;
-                /* the column of the character between the brackets, 1-based
-                 * and counted from the start of the line, indentation and
-                 * all — what a handler needs to find the `x` to write */
-                size_t task_column = 0;
-                if (body_len >= 3 && body[0] == '[' && body[2] == ']' &&
-                    (body[1] == ' ' || body[1] == 'x' || body[1] == 'X') &&
-                    (body_len == 3 || body[3] == ' ' || body[3] == '\t')) {
-                    task = body[1] == ' ' ? 0 : 1;
-                    task_column = lines[i].indent_chars + (size_t)(body - lines[i].text) + 2;
-                    body += 3;
-                    body_len -= 3;
-                    while (body_len && (*body == ' ' || *body == '\t')) { body++; body_len--; }
-                    any_task = 1;
-                    mdy_add_class(doc, item, "task-list-item");
-                }
-
-                /*
-                 * Continuation lines that are themselves plain join the item's
-                 * text; from the first line that opens a block, the rest is
-                 * parsed as blocks. That split is what makes `- one` / `  two`
-                 * one sentence and `- a` / `  - b` a nested list.
-                 */
-                size_t plain_end = i + 1;
-                while (plain_end < item_end && !lines[plain_end].blank) {
-                    int sub = 0;
-                    if (list_marker(&lines[plain_end], &sub) || lines[plain_end].text[0] == '<' ||
-                        lines[plain_end].text[0] == '=') break;
-                    plain_end++;
-                }
-
-                size_t total = body_len;
-                for (size_t k = i + 1; k < plain_end; k++) total += lines[k].len + 1;
-                char *joined = mdy_alloc(&doc->arena, total + 1);
-                size_t o = 0;
-                memcpy(joined, body, body_len);
-                o = body_len;
-                for (size_t k = i + 1; k < plain_end; k++) {
-                    /* The separator goes in even when the marker line left
-                     * nothing behind it — `1931.` then `next` is an item
-                     * reading " next", with the space the join put there. */
-                    joined[o++] = ' ';
-                    memcpy(joined + o, lines[k].text, lines[k].len);
-                    o += lines[k].len;
-                }
-                joined[o] = '\0';
-                if (loose) {
-                    /* `li("\n" p(content) "\n")` — the shape a blank line
-                     * between items produces. */
-                    mdy_node *wrap = mdy_new_element(doc, "p", 1);
-                    mdy_parse_inline(doc, wrap, joined, o);
-                    add_task_box(doc, wrap, task, o, lines, i, task_column);
-                    /* The paragraph a loose item wraps its content in spans
-                     * the same lines the item does — it IS the item's
-                     * content, not a block of its own. */
-                    mdy_set_position(wrap, lines, i, item_end > i ? item_end - 1 : i);
-                    mdy_append(item, mdy_new_text(doc, "\n", 1));
-                    mdy_append(item, wrap);
-                    mdy_append(item, mdy_new_text(doc, "\n", 1));
-                } else {
-                    mdy_parse_inline(doc, item, joined, o);
-                    add_task_box(doc, item, task, o, lines, i, task_column);
-                }
-
-                if (item_end > plain_end) {
-                    size_t inner = lines[plain_end].indent;
-                    for (size_t k = plain_end; k < item_end; k++)
-                        if (!lines[k].blank && lines[k].indent < inner) inner = lines[k].indent;
-                    mdy_parse_block(doc, item, lines + plain_end, item_end - plain_end, inner,
-                                    nesting + 1);
-                }
-
-                mdy_set_position(item, lines, i, item_end > i ? item_end - 1 : i);
-                mdy_append(list, item);
-                mdy_append(list, mdy_new_text(doc, "\n", 1));
-                i = item_end;
-            }
-
-            /* The list is marked once, after its items, because one task item
-             * makes the whole list a task list. */
-            if (any_task) mdy_add_class(doc, list, "contains-task-list");
-            if (ordered && first >= 0 && first != 1)
-                mdy_set_number(doc, list, "start", (double)first);
-            mdy_set_position(list, lines, start_line, i > start_line ? i - 1 : start_line);
-            separate(doc, parent);
-            mdy_append(parent, list);
+        if (list_marker(l, &ordered)) {
+            i = parse_list(doc, parent, lines, count, i, ordered, nesting);
             produced = 1;
             continue;
         }
 
-        /* --- paragraph: adjacent non-blank lines joined with a space --- */
-        size_t j = i;
-        size_t total = 0;
-        while (j < count && !lines[j].blank) {
-            int ordered_here = 0;
-            /* A line that starts another block ends this paragraph — and a
-             * line further in than this run is another block, which is what
-             * makes `top` / `  in` a paragraph and a div rather than one
-             * paragraph reading "top in". */
-            if (j > i && lines[j].indent > base) break;
-            char fence_here = 0;
-            const char *fl = NULL;
-            size_t fll = 0;
-            if (j > i && fence_opener(&lines[j], &fence_here, &fl, &fll)) break;
-            /*
-             * …and so does a table: a header row and its delimiter under a
-             * line of prose start the table, they do not join the sentence.
-             * A CAPTION line does too, which is what makes `| One` a
-             * paragraph and `| Two` the caption of the table beneath it.
-             */
-            if (j > i && memchr(lines[j].text, '|', lines[j].len) && j + 1 < count) {
-                size_t h = caption_at(lines, count, j) ? j + 1 : j;
-                if (h + 1 < count && table_rows(lines, count, h, base)) break;
-            }
-            if (j > i && (lines[j].text[0] == '=' || lines[j].text[0] == '<' ||
-                          list_marker(&lines[j], &ordered_here) ||
-                          thematic_break(&lines[j]))) break;
-            total += lines[j].len + 1;
-            j++;
-        }
-        char *joined = mdy_alloc(&doc->arena, total + 1);
-        size_t o = 0;
-        for (size_t k = i; k < j; k++) {
-            /*
-             * TRAILING whitespace only. A line's leading spaces are its
-             * indentation and were removed when the lines were measured; a
-             * leading NO-BREAK space is not indentation and belongs to the
-             * text, which is what `\u00a0\u00a0Kingdom of …` in the corpus
-             * depends on.
-             */
-            const char *lt = lines[k].text;
-            size_t ll = lines[k].len;
-            mdy_trim_end(&lt, &ll);
-            if (k > i && o) joined[o++] = ' ';
-            memcpy(joined + o, lt, ll);
-            o += ll;
-        }
-        joined[o] = '\0';
-        /* A run of only whitespace produces no paragraph, and so must produce
-         * no separator either — which is why the emptiness is decided here
-         * rather than inside add_paragraph. */
-        /*
-         * Setext: a line of `=` under a paragraph makes it an <h1>, and FOUR
-         * or more `-` make it an <h2>. Three hyphens do not — that is a
-         * thematic break, and the paragraph above it stands on its own.
-         */
-        const mdy_line *under = j < count ? &lines[j] : NULL;
-        int setext = 0;
-        if (under && !under->blank && under->indent == base) {
-            /* `^(?:(=+)|(-{4,}))[ \t]*$` — trailing whitespace is
-             * decoration on either form. */
-            if (underline_of(under, '=', 1)) setext = 1;
-            else if (underline_of(under, '-', 4)) setext = 2;
-        }
-
-        const char *probe = joined;
-        size_t probe_len = o;
-        mdy_trim_end(&probe, &probe_len);
-
-        if (setext && probe_len) {
-            char tag[3] = { 'h', (char)('0' + setext), '\0' };
-            mdy_node *h = mdy_new_element(doc, tag, 2);
-            mdy_parse_inline(doc, h, probe, probe_len);
-            {
-                char rendered[1024];
-                size_t rlen = node_text(h, rendered, sizeof rendered, 0);
-                set_heading_id(doc, h, rendered, rlen);
-            }
-            mdy_set_position(h, lines, i, j);
-            separate(doc, parent);
-            mdy_append(parent, h);
-            produced = 1;
-            i = j + 1;
-            continue;
-        }
-
-        if (probe_len) {
-            separate(doc, parent);
-            mdy_node *before = parent->last;
-            if (add_paragraph(doc, parent, joined, o)) {
-                mdy_node *made = before ? before->next : parent->first;
-                mdy_set_position(made, lines, i, j > i ? j - 1 : i);
-            }
-            produced = 1;
-        }
-        i = j;
+        /* --- paragraph, and the setext heading a line underneath makes of it --- */
+        i = parse_paragraph(doc, parent, lines, count, i, base, &produced);
     }
 
     if (produced) separate(doc, parent);

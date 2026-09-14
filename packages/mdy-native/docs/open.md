@@ -9,27 +9,33 @@ this file, not carried over from anywhere.
 
 ---
 
-## 1. `mdy_parse_block` is 524 lines and inlines the entire list grammar
+## 1. ~~`mdy_parse_block` is 524 lines and inlines the entire list grammar~~ — DONE
 
-[`src/parse/block.c:1310`](../src/parse/block.c#L1310) — 524 lines, to the
-closing brace at 1833.
+240 lines, and the two constructs that were grammars rather than shapes have
+names:
 
-The list grammar is not *called* from here, it is *written* here: continuation
-lines, loose against tight, the marker rules, and the nesting recursion, all in
-one function beside every other block construct. Lifting the list out is the
-obvious shape, and the reason not to is that a block parser's constructs are
-mutually recursive by nature — a list item holds blocks, which hold lists — so
-the cut has to be made somewhere that does not turn one function into two that
-call each other in both directions.
+    parse_list        195 lines   loose against tight, continuation lines
+                                  that need no indentation, task boxes,
+                                  nested lists, and blank lines that mean
+                                  two different things
+    parse_paragraph    97 lines   the gathering, and the setext heading a
+                                  line underneath makes of it
 
-**What makes it worth opening**: a change to how lists parse. That is where the
-length is actually felt, and it is the only time the cost of the cut is being
-paid anyway.
+`parse_list` takes no `base`, which is the thing the extraction made
+explicit: a list measures everything against its OWN first marker's column,
+never against the run it sits in, and that is what lets an unindented
+continuation line still belong to an item. It recurses through
+`mdy_parse_block` for an item's block content, so the mutual recursion is
+real — and is why the cut is there rather than deeper.
 
-**What would check it**: `make check-parse` over the block corpus, and
-`make check-markdown` at 893/914 with its 21-line baseline unmoved.
+`parse_paragraph` keeps the paragraph and the setext heading together because
+they are one decision made twice over the same text: the lines are gathered
+and joined first, and only then does what comes AFTER them say whether the
+result is a `<p>` or an `<h1>`.
 
----
+Checked by the corpora rather than by reading: `check-markdown` at 893/914
+with its 21-line baseline unmoved, `check-html` 642/642 over 45 MB,
+`check-parse`, all six sites, and the allocation sweep unchanged.
 
 ## 2. `open_dir_inner` is 423 lines
 
