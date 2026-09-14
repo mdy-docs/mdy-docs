@@ -709,9 +709,10 @@ check-site: build/mdy$(EXE)
 #                 remark's `html` node has none — a blank line after every
 #                 raw block, until src/parse/markdown.c dropped it.
 # fixture-awkward is a site made of the inputs that WERE bugs — see its
-# main.mdy, which names the finding each file stands on. §4 called a fixture
-# like it the most valuable single addition, and it earned that on its first
-# run: it found the `.md` table divergence that is now fixed in markdown.c,
+# main.mdy, which names the finding each file stands on. The 2026-09 review
+# called a fixture like it the most valuable single addition it could name,
+# and it earned that on its first run: it found the `.md` table divergence
+# that is now fixed in markdown.c,
 # which no unit test could see because both sides had the same bytes in a
 # different order.
 CHECK_SITES := ../../examples/blog:0 ../../examples/docs-site:0 \

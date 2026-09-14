@@ -19,9 +19,10 @@ Pinned at the commit in `COMMIT` (3.1.0). Apache-2.0; the licence is LICENSE.
 `.md` documents go through remark's pipeline on the JavaScript side, and its
 last stage is `rehype-raw`: the tree goes through an HTML5 parser, which turns
 raw HTML into real elements and repairs what the document got wrong. There was
-no such stage here, so a `raw` node stayed a `raw` node — see **B49** in
-docs/code-review-2026-09.md for what that cost, of which the sharpest is that
-an unclosed `<div>` in one document reached the next one on the page.
+no such stage here, so a `raw` node stayed a `raw` node. That was **B49** of
+the 2026-09 review (retired — `docs/open.md` says where it went), and the
+sharpest thing it cost was that an unclosed `<div>` in one document reached
+the next one on the page.
 
 It is a parser rather than a tag matcher because the rules that matter are
 tree construction's, not the tokenizer's: closing what a document left open,
