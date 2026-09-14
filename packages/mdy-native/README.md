@@ -424,7 +424,7 @@ left behind.
 | **md4c** | CommonMark and GFM, the `.md` front end. `MD_DIALECT_GITHUB`: tables, task lists, strikethrough, autolinks, admonitions, footnotes. One local patch (B48), listed in its README. | MIT |
 | **lexbor** | HTML5 tokenizer and tree construction, five of its modules. The `rehype-raw` stage of the `.md` pipeline: raw HTML into real elements, and repairing what a document got wrong. | Apache-2.0 |
 | **stb** | `stb_image`, `stb_image_write`, `stb_image_resize2` — three headers. Image dimensions for a document's records, and the resizing `$.image` does. | MIT / public domain |
-| **highlight.js** | A fork of highlight.js 11.11.2 and lowlight 3.3.0's emitter, rewritten into lamassu's subset of JavaScript so fenced code is coloured by the real grammars inside the engine this binary already embeds, not by a second implementation of 37 languages in C. | BSD-3-Clause / MIT upstream; see below |
+| **highlight.js** | A fork of highlight.js 11.11.2 and lowlight 3.3.0's emitter, rewritten into lamassu's subset of JavaScript so fenced code is coloured by the real grammars inside the engine this binary already embeds, not by a second implementation of 37 languages in C. | BSD-3-Clause (highlight.js) and MIT (lowlight), both in its `LICENSE` |
 
 **Submodules**, because they are this project's own and change with it:
 
@@ -434,11 +434,15 @@ left behind.
 | **nisaba-db** | The document database: collections, B+trees, the query and update languages, the text index. Carries **binjson** (the wire format a record is stored and sent in), **binjson-structures** (the file and host-IO layers) and **regex-engine**. |
 | **sukkal-msg** | Publish/subscribe over HTTP/1.1 with binjson payloads. `mdy dev` runs a broker of its own from it. |
 
-**One gap worth naming**: `third_party/highlight.js` carries no `LICENSE`
-file. Upstream highlight.js is BSD-3-Clause and lowlight is MIT, and the
-grammars under `languages/` are derived from the former, so the text belongs
-in that directory beside the others'. Every other vendored directory here has
-one.
+**Where each licence text lives.** `md4c/LICENSE.md`, `lexbor/LICENSE` and
+`highlight.js/LICENSE` carry theirs as a file; `stb`'s is at the foot of each
+of its three headers, and `gfm-spec`'s is in `spec.txt`'s own front matter,
+which is how those two projects ship it. `highlight.js/LICENSE` holds *two*,
+because that directory is a fork of two projects: highlight.js under
+BSD-3-Clause covers `core.js`, the grammars and the generated tables, and
+lowlight under MIT covers `lowlight.js`. A port is a derivative work, so the
+hand-ported files are under their upstream's licence exactly as the vendored
+ones are, and BSD-3-Clause requires the notice to travel with the source.
 
 ## Next
 

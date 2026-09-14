@@ -16,6 +16,9 @@ already embeds, rather than a second implementation of 37 languages in C.
     build.mjs          one script from all of it: build/highlight.lamassu.js
     check.mjs          the fork against lowlight, over real files, in both engines
     VERSION            the upstream versions this tracks
+    LICENSE            both of them: highlight.js BSD-3-Clause for core.js,
+                       the grammars and the generated tables; lowlight MIT
+                       for lowlight.js
 
 ```sh
 make highlight         # build/highlight.lamassu.js
