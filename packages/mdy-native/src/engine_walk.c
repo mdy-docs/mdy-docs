@@ -467,6 +467,21 @@ static void absolute_root(const char *root, char *out, size_t out_len) {
  *
  * Returns 1 and fills the parts if `line` is one.
  */
+/* `s` as a JSON string literal, quotes included. Caller frees. */
+static char *json_quoted(const char *s) {
+    mdy_sbuf b = { 0 };
+    mdy_sbuf_put(&b, "\"", 1);
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        char esc[8];
+        if (c == '"' || c == '\\') { esc[0] = '\\'; esc[1] = (char)c; mdy_sbuf_put(&b, esc, 2); }
+        else if (c < 0x20) mdy_sbuf_put(&b, esc, (size_t)snprintf(esc, sizeof esc, "\\u%04x", c));
+        else mdy_sbuf_put(&b, (const char *)&c, 1);
+    }
+    mdy_sbuf_put(&b, "\"", 1);
+    return b.s;
+}
+
 static int import_line(const char *line, size_t len,
                        size_t *indent_len, char *name, size_t name_cap,
                        char *spec, size_t spec_cap) {
@@ -572,16 +587,21 @@ static char *rewrite_imports(mdy_engine *e, const char *source_path,
              * stack-buffer-overflow, READ of size 4277; `import_line` admits
              * a spec of 1023.
              */
+            /* The spec as a JavaScript string literal, as JSON.stringify
+             * writes it for the same line in mdy-docs: a backslash in a
+             * specifier reaches the native as the backslash it was. */
+            char *at = json_quoted(spec);
             static const char REWRITE[] =
                 "%% const %s = { "
-                "render: (target, ctx) => $.__importRender(\"%s\", target, ctx === undefined ? {} : ctx), "
-                "find: (query) => $.__importFind(\"%s\", query === undefined ? {} : query), "
-                "findOne: (query) => $.__importFindOne(\"%s\", query === undefined ? {} : query), "
-                "resize: (record, options) => $.__importResize(\"%s\", record, options === undefined ? {} : options) };";
-            int n = snprintf(NULL, 0, REWRITE, name, spec, spec, spec, spec);
-            if (n < 0) { free(out); return NULL; }
+                "render: (target, ctx) => $.__importRender(%s, target, ctx === undefined ? {} : ctx), "
+                "find: (query) => $.__importFind(%s, query === undefined ? {} : query), "
+                "findOne: (query) => $.__importFindOne(%s, query === undefined ? {} : query), "
+                "resize: (record, options) => $.__importResize(%s, record, options === undefined ? {} : options) };";
+            int n = snprintf(NULL, 0, REWRITE, name, at, at, at, at);
+            if (n < 0) { free(at); free(out); return NULL; }
             char *rewritten = mdy_xmalloc((size_t)n + 1);
-            snprintf(rewritten, (size_t)n + 1, REWRITE, name, spec, spec, spec, spec);
+            snprintf(rewritten, (size_t)n + 1, REWRITE, name, at, at, at, at);
+            free(at);
 
             size_t need = at_out + indent + (size_t)n + 2;
             if (need > cap) {

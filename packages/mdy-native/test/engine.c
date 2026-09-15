@@ -2200,6 +2200,49 @@ static void import_checks(void) {
  * What this asserts is that the tree comes back the depth this says and not
  * the depth it was given.
  */
+#ifndef _WIN32
+/*
+ * An import specifier is written into the document's code as a string
+ * literal, and has to survive that: a backslash in a directory's name is a
+ * backslash to the native that resolves it, as JSON.stringify keeps it.
+ */
+static void import_spec_checks(void) {
+    printf("\n--- engine: an import specifier with a backslash in it ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-spec", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    char site[1100], pkg[1100];
+    snprintf(site, sizeof site, "%s/site", root);
+    snprintf(pkg, sizeof pkg, "%s/p\\k", root);
+    write_file(site, "main.mdy",
+        "% import style from \"../p\\k\"\n"
+        "% $.emit(\"out.txt\", style.render({ path: \"card.mdy\" }, { t: \"through\" }))\n");
+    write_file(pkg, "card.mdy", "= {{ req.t }}\n");
+
+    mdy_engine *e = mdy_engine_new(S);
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+    char *html = NULL;
+    if (mdy_engine_open_dir(e, site, err, sizeof err) == 0) {
+        int entry = mdy_engine_entry(e, "main.mdy");
+        if (entry >= 0) html = mdy_engine_render(e, (size_t)entry, err, sizeof err);
+    }
+    ok_("a package whose directory name holds a backslash is found by its spec",
+        html != NULL && emitted("out.txt") && strstr(emitted("out.txt"), "through") != NULL,
+        html ? emitted("out.txt") : err);
+    free(html);
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+#endif
+
 static void deep_value_checks(void) {
     printf("\n--- engine: values deeper than the walk ---\n");
 
@@ -3787,6 +3830,9 @@ int main(void) {
     memo_key_checks();
     count_checks();
     import_checks();
+#ifndef _WIN32
+    import_spec_checks();
+#endif
     api_checks();
 #ifndef _WIN32
     unreadable_dir_checks();
