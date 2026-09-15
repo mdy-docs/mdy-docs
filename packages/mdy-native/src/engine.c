@@ -190,10 +190,17 @@ static bool rfc822_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     int y = 0, m = 0, d = 0;
     if (sscanf(s, "%4d-%2d-%2d", &y, &m, &d) != 3 || m < 1 || m > 12 || d < 1 || d > 31) {
         free(s);
-        return true;   /* `new Date('nonsense').toUTCString()` is "Invalid Date" */
+        *result = str(e->vm, "Invalid Date", 12);   /* what toUTCString says of one */
+        return true;
     }
     free(s);
 
+    /*
+     * Days since the epoch, and back again. The way back is not a formality:
+     * a day past the month's end is not refused by `new Date` but rolled into
+     * the next month, so `2024-02-31` is the 2nd of March and is printed as
+     * that, weekday and all.
+     */
     long yy = y - (m <= 2);
     long era = (yy >= 0 ? yy : yy - 399) / 400;
     unsigned long yoe = (unsigned long)(yy - era * 400);
@@ -202,6 +209,17 @@ static bool rfc822_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     long days = era * 146097 + (long)doe - 719468;
     /* 1970-01-01 was a Thursday; C's % keeps the sign of the dividend. */
     int dow = (int)(((days % 7) + 11) % 7);
+    {
+        long z = days + 719468;
+        long era2 = (z >= 0 ? z : z - 146096) / 146097;
+        unsigned long doe2 = (unsigned long)(z - era2 * 146097);
+        unsigned long yoe2 = (doe2 - doe2 / 1460 + doe2 / 36524 - doe2 / 146096) / 365;
+        unsigned long doy2 = doe2 - (365 * yoe2 + yoe2 / 4 - yoe2 / 100);
+        unsigned long mp = (5 * doy2 + 2) / 153;
+        d = (int)(doy2 - (153 * mp + 2) / 5 + 1);
+        m = (int)(mp < 10 ? mp + 3 : mp - 9);
+        y = (int)(yoe2 + (unsigned long)era2 * 400) + (m <= 2);
+    }
 
     static const char *const DAYS[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     static const char *const MONTHS[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",

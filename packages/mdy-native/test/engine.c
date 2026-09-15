@@ -2704,6 +2704,13 @@ static void natives_checks(void) {
           "{{ JSON.stringify($.toc($.render(1))) }}\n---\n= Zed\n",
           "<p>[{\"depth\":1,\"text\":\"Zed\",\"slug\":\"zed\"}]</p>");
 
+    /* `new Date('2024-02-31T00:00:00Z')` is the 2nd of March, not a
+     * refusal, and an unreadable date prints as toUTCString prints one. */
+    check("$.rfc822 rolls a day past the month's end into the next month",
+          "{{ $.rfc822('2024-02-31') }}", "<p>Sat, 02 Mar 2024 00:00:00 GMT</p>");
+    check("...and says what toUTCString says of a date it cannot read",
+          "{{ $.rfc822('yesterday') }} {{ $.rfc822('2024-13-01') }}",
+          "<p>Invalid Date Invalid Date</p>");
     refuses("$.node wants a hast node", "{{ $.node('nope') }}",
             "expects a hast node");
     /* A node that contains itself is refused, not descended for ever --
