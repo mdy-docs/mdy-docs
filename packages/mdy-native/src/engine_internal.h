@@ -97,8 +97,7 @@ typedef struct {
 /*
  * THE ENGINE.
  *
- * This was fifty-seven fields in one flat list, grouped only by comment. It
- * is seven named groups and four members now, and the grouping is the
+ * Seven named groups and four top-level members, where the grouping is the
  * documentation: a field's group says what it belongs to and, more usefully,
  * how long it lives.
  *
@@ -111,13 +110,8 @@ typedef struct {
  *   graph      the import graph: this package's root, its imports, the cache
  *   highlight  the fenced-code highlighter, loaded once
  *
- * `session`, `vm` and `ctx` stay at the top level. They are the three things
- * every other group is expressed in terms of, and `e->js.vm` would be 194
- * edits to say nothing `e->vm` does not.
- *
- * The grouping is a rename and nothing else: the allocation sweep over
- * fixture-awkward reports the same 3933 refusals it did before, so not one
- * allocation moved.
+ * `session`, `vm` and `ctx` stay at the top level: they are the three things
+ * every other group is expressed in terms of.
  */
 struct mdy_engine {
     /* The session this was made in — not owned, and outliving this engine is
@@ -243,16 +237,6 @@ struct mdy_engine {
         size_t scope_count;
     } knobs;
 
-    /*
-     * The import graph. `root` is this package's own directory; `imports` is
-     * every `% import name from "spec"` any of its files declared, resolved.
-     *
-     * `cache` is shared by the WHOLE graph and owned by whoever built it —
-     * the same package imported twice is built once. `current` is the
-     * document being rendered, which is what tells an `$.__import*` native
-     * which file's import it is being asked about: the same spec written in
-     * two files can resolve to two different packages.
-     */
     /*
      * A document's file identity — path, name, ext, size, mtime — as a YAML
      * mapping, one per document, or NULL for a set that did not come from a
@@ -423,9 +407,17 @@ mdy_yaml *document_tags(const mdy_yaml_node *const *parts, size_t part_count,
  * which is the one place these two lean on each other.
  */
 int open_documents(mdy_engine *e, mdy_documents *docs, char *error, size_t error_len);
-/* `failed` (optional) says the query could not RUN, as distinct from
- * matching nothing -- see run_query_in. Pass NULL only where the caller's
- * own "not found" answer already stops the build. */
+/*
+ * Query this engine's store and return the hits as values in its own VM.
+ * `run_query` is the same-VM case; the values-VM vs store-VM split — a
+ * cross-package `find`, where the set being queried and the VM the result must
+ * be readable in belong to different packages, so the documents are rebuilt on
+ * the caller's side — lives one layer down in run_query_in.
+ *
+ * `failed` (optional) says the query could not RUN, as distinct from matching
+ * nothing -- see run_query_in. Pass NULL only where the caller's own "not
+ * found" answer already stops the build.
+ */
 JsValue run_query(mdy_engine *e, JsValue query, int one, int *failed);
 int index_of_id(mdy_engine *e, const char *hex, size_t len);
 

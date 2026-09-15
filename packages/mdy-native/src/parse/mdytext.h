@@ -35,9 +35,9 @@ uint32_t mdy_lower_cp(uint32_t cp);
  * ASCII lowercase, and ASCII case-insensitive equality.
  *
  * These are here, in the text header both libraries can see, because that was
- * the thing missing: the same fold was written inline in seven places across
+ * the thing missing: the same fold was written inline in several places across
  * the parser and the backend, which share no PRIVATE header, so neither side
- * could hold it for the other (§2). A public text utility is what the parser
+ * could hold it for the other. A public text utility is what the parser
  * already offers the engine, and this is one.
  *
  * ASCII and not Unicode on purpose. Every caller is comparing a file

@@ -21,8 +21,9 @@
  *     that was text stays text.
  *   - A table's whitespace is FOSTER-PARENTED out. HTML5 lets whitespace sit
  *     in a table, but the rule collects a RUN of character tokens, and these
- *     arrive one text node at a time between start tags. §4 wrote that rule
- *     out by hand for tables; this gets it for the same reason node does.
+ *     arrive one text node at a time between start tags. Writing that rule
+ *     out by hand for tables is the alternative; this gets it for the same
+ *     reason node does.
  *
  * So this pushes into lexbor's construction dispatcher, which is the same
  * layer of the same algorithm as parse5's `_processToken`.

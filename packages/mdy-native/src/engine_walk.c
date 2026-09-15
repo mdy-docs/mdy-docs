@@ -61,9 +61,6 @@ static const char *extension_of(const char *name) {
     return (!dot || dot == name) ? "" : dot;
 }
 
-/* The extensions mdy-docs reads dimensions for. A record carrying width and
- * height is what lets a template lay a page out without opening the file, and
- * `$.resize` refuses without them. */
 /*
  * Epoch milliseconds as ISO 8601 UTC — `2026-09-05T23:34:15.172Z`, which is
  * what a raw record's `mtime` IS. It is not a number: a site formats it by
@@ -99,6 +96,9 @@ void iso8601_utc(double epoch_ms, char *out, size_t out_len) {
              y, m, d, hour, minute, second, milli);
 }
 
+/* The extensions mdy-docs reads dimensions for. A record carrying width and
+ * height is what lets a template lay a page out without opening the file, and
+ * `$.resize` refuses without them. */
 static int is_image_ext(const char *ext) {
     static const char *const EXTS[] = {
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
@@ -673,9 +673,6 @@ static void walked_free(WalkedFile *files, size_t count) {
     free(files);
 }
 
-/* Once, on an engine nobody has opened yet: the root, the import cache and
- * the identity arrays are all taken to be empty here, and a site or a package
- * is walked exactly once. A rebuild is a NEW engine (cli.c's dev_rebuild). */
 /*
  * WHAT THE WALK ACCUMULATES, per file, before anything is a document yet.
  *
@@ -934,6 +931,9 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
     return 0;
 }
 
+/* Once, on an engine nobody has opened yet: the root, the import cache and
+ * the identity arrays are all taken to be empty here, and a site or a package
+ * is walked exactly once. A rebuild is a NEW engine (cli.c's dev_rebuild). */
 static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
                           const Ancestors *ancestors, char *error, size_t error_len) {
     if (error && error_len) error[0] = '\0';

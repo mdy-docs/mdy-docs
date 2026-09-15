@@ -170,9 +170,6 @@ static void attr_info(const char *property, size_t len, AttrInfo *out) {
     out->attribute_len = len;
 }
 
-/* ---- void elements --------------------------------------------------------- */
-
-/** html-void-elements, the same list the parser uses. */
 /* ---- values ---------------------------------------------------------------- */
 
 /** `String(value)` for a number, which for every value this tree can hold is

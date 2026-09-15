@@ -4,9 +4,9 @@
  * html.c, script.c, yaml.c and data.c each declared the same struct and the
  * same thirteen-line `put`, differing only in the capacity of the first
  * allocation — 8192, 4096, 128, 1024, each sized to what that caller
- * typically writes. §2 listed it as duplication left unfolded for want of a
- * home; the home was here all along, since all four are one library with a
- * private header.
+ * typically writes. It was duplication left unfolded for want of a home; the
+ * home was here all along, since all four are one library with a private
+ * header.
  *
  * `seed` is how the four stay four in the one place it mattered: a caller
  * that knows it is about to write a page does not want to double from 256 to

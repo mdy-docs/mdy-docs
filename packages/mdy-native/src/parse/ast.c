@@ -293,9 +293,9 @@ void mdy_clear_class(mdy_doc *doc, mdy_node *el) {
 /* ---- a growable output buffer -------------------------------------------- */
 
 /*
- * The buffer is internal.h's (§2 -- this file held the eighth copy of the
- * same thirteen lines). The `int` return stays: thirty-five call sites
- * propagate it, and `ok` says the same thing one adapter away.
+ * The JSON writer's growable buffer. Its writers return an `int` rather than
+ * carrying the sticky `ok` flag internal.h's buffer uses: the call sites here
+ * propagate that return directly, and `ok` says the same thing one adapter away.
  */
 typedef struct { char *s; size_t len, cap; int positions; } Out;
 

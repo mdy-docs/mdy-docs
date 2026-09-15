@@ -68,9 +68,6 @@ struct mdy_yaml {
     mdy_yaml_node *root;
 };
 
-/* ---- a growable byte buffer, arena-backed at the end ------------------------ */
-
-
 /* ---- lines ------------------------------------------------------------------ */
 
 typedef struct {

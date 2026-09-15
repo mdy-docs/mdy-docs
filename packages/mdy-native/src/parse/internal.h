@@ -88,18 +88,12 @@ _Noreturn void mdy_oom_exit(void);
 /*
  * Arena allocation, which does not return NULL.
  *
- * That was always the CONTRACT -- twenty-six of the forty-two call sites in
- * this library do not check, because a recursive-descent parser has no way to
- * unwind from the middle of a node -- but it was not true, and an exhausted
- * arena returned NULL into all of them. The sixteen that did check were no
- * better off: they returned NULL to a caller that carried on, so the parse
- * finished with nodes silently missing and the document was written out as
- * though that were what it said.
- *
- * So the contract is enforced instead of assumed: a block that cannot be
- * allocated ends the process with one line on stderr. Everything in this
- * library is reached from a parse that has nowhere to put an out-of-memory,
- * and a caller that could do something useful with one does not exist.
+ * A recursive-descent parser has no way to unwind from the middle of a node,
+ * so most call sites cannot act on a failure and the contract is that there is
+ * none to act on: a block that cannot be allocated ends the process with one
+ * line on stderr, rather than returning NULL into a parse that would carry on
+ * and write out a document with nodes silently missing. Everything in this
+ * library is reached from a parse with nowhere to put an out-of-memory.
  */
 void *mdy_alloc(mdy_arena *arena, size_t size);
 char *mdy_strdup_n(mdy_arena *arena, const char *s, size_t len);
@@ -335,7 +329,7 @@ const char *mdy_match_emoji(const char *p, size_t left, int at_boundary, size_t 
 typedef struct {
     const char *text;   /* not NUL terminated — use len */
     size_t len;
-    size_t indent;      /* columns of leading space, tabs counted as 2 */
+    size_t indent;      /* columns of leading indent; a tab to the next 4-col stop */
     size_t indent_chars; /* the CHARACTERS that indentation took — a task's column counts these */
     int blank;
     uint32_t number;    /* 1-based line number in the original file */

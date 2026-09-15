@@ -39,9 +39,8 @@ void mdy_options_default(mdy_options *out) {
 
 /* ---- lines --------------------------------------------------------------- */
 
-/** Split into lines, measuring indentation as we go. A tab runs to the next
- * four-column tab stop,
- * matching the JavaScript's own "every two columns is one level". */
+/** Split into lines, measuring indentation as we go. A tab advances to the
+ * next four-column tab stop, matching the JavaScript's `indentWidth`. */
 static mdy_line *split_lines(mdy_doc *doc, const char *text, size_t len, size_t *count) {
     size_t n = 1;
     for (size_t i = 0; i < len; i++) if (text[i] == '\n') n++;
@@ -328,12 +327,6 @@ static void separate(mdy_doc *doc, mdy_node *parent) {
     if (parent->type == MDY_ELEMENT) mdy_append(parent, mdy_new_text(doc, "\n", 1));
 }
 
-/*
- * A heading's `id`, unique across the document: a second `= Same` is `same-1`,
- * a third `same-2`. mdy-docs calls this the heading state and shares it across
- * a stream's documents on purpose — two articles on one page must not both own
- * `#introduction`.
- */
 /* How much node_text would write, so a caller can hold all of it. */
 static size_t node_text_len(const mdy_node *n) {
     if (n->type == MDY_TEXT) return mdy_text_len(n);
@@ -618,17 +611,7 @@ static int doctype_line(const mdy_line *l) {
     return 1;
 }
 
-/** Consume an element opener at line `i`; returns the next line to read. */
-
-/*
- * The disabled checkbox at the head of a task item, and the space that
- * separates it from the text.
- *
- * The space goes in only when there IS text — `content.unshift({text: ' '})`
- * runs under `if (content.length)` — so an empty task ends at its box. The
- * box carries a position because the JavaScript builds it with the block
- * element helper, which gives every node one.
- */
+/* Put `child` at the front of `parent`'s children. */
 static void prepend(mdy_node *parent, mdy_node *child) {
     child->next = parent->first;
     parent->first = child;
@@ -857,7 +840,6 @@ static int is_separator(const mdy_line *l) {
     return 1;
 }
 
-/* html-void-elements: the elements that hold nothing. */
 /* The five elements whose content is text and nothing else — html.js's
  * `rawText` set, and the same names the HTML parser treats as RCDATA. */
 static int is_raw_text(const char *tag) {
@@ -914,6 +896,7 @@ static size_t emit_raw_text_element(mdy_doc *doc, mdy_node *parent, mdy_node *el
     return end;
 }
 
+/* Consume an element opener at line `i`; returns the next line to read. */
 static size_t parse_element(mdy_doc *doc, mdy_node *parent,
                             const mdy_line *lines, size_t count, size_t i, size_t nesting) {
     const mdy_line *l = &lines[i];
@@ -1361,9 +1344,8 @@ static int add_paragraph(mdy_doc *doc, mdy_node *parent, const char *joined, siz
  * This is the one construct big enough to have a grammar rather than a shape:
  * loose against tight, continuation lines that need no indentation, `[ ]`
  * task boxes, nested lists, and blank lines that mean "a gap inside this
- * item" in one place and "the list is over" in another. It was written INSIDE
- * `mdy_parse_block`, beside constructs that are ten lines each, and it is why
- * that function was 524 lines.
+ * item" in one place and "the list is over" in another — which is why it is
+ * its own function rather than another case inside `mdy_parse_block`.
  *
  * It takes no `base`. A list measures everything against its OWN first
  * marker's column, never against the run it sits in — which is what lets an

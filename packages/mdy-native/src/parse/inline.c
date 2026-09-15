@@ -621,10 +621,11 @@ void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t l
  * these confused produced `umm-el-qa-ab` and `edward-r-ayrton`, which are
  * links to nowhere.
  *
- * Letters and numbers are Unicode there. A UTF-8 continuation byte is kept
- * here on the same basis: a multi-byte character is a letter far more often
- * than not, and treating one as punctuation would mangle every non-English
- * label in the corpus.
+ * "Letters and numbers" is Unicode-aware, and decided per CODE POINT: the loop
+ * below decodes each character and classifies it with mdy_is_letter_or_number_cp,
+ * so a multi-byte letter is kept whole and a multi-byte punctuation mark is
+ * deleted whole. Deciding per byte would keep or drop half a character and
+ * mangle every non-English label in the corpus.
  */
 /* `out_len` may be NULL for a caller that only wants the string — the heading
  * ids want the length, the wiki links do not. */
