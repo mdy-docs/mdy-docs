@@ -9,7 +9,7 @@
 
 typedef struct {
     bjv *root;
-    bjv *stack[64];
+    bjv *stack[BJ_MAX_DEPTH];   /* binjson's own limit, so nothing it decodes is refused here */
     size_t depth;
     char *pending_key;       /* the key the next value in an object goes under */
     int failed;
@@ -55,7 +55,7 @@ static void attach(Builder *b, bjv *v) {
 
 static void push(Builder *b, bjv *v) {
     attach(b, v);
-    if (v && b->depth < 64) b->stack[b->depth++] = v;
+    if (v && b->depth < BJ_MAX_DEPTH) b->stack[b->depth++] = v;
     else b->failed = 1;
 }
 static void pop(Builder *b) { if (b->depth) b->depth--; }

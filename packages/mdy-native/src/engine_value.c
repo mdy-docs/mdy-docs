@@ -461,7 +461,8 @@ int js_to_binjson(mdy_engine *e, bj_builder *b, JsValue v) {
  * The decoder is a visitor, so this keeps a stack of the containers it is
  * inside and hangs each finished value on whichever is on top.
  */
-enum { BJ_STACK_MAX = 64 };
+/* binjson's own nesting limit, so a document the store holds always decodes. */
+enum { BJ_STACK_MAX = 1000 };
 
 typedef struct {
     mdy_engine *e;
