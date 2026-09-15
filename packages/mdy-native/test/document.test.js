@@ -46,6 +46,37 @@ const refuses = (args) => {
   return { status: 0, stderr: '' };
 };
 
+/*
+ * `mdy <dir> --publish`: what the entry published is delivered to the page
+ * each message names, in this process, one attempt each; a page that throws
+ * is dead-lettered at once and the `.dead` page renders in the same pass.
+ * The log's shape is what the wasm wrapper's parseMessages reads.
+ */
+test('--publish delivers in this process, dead-letters a refusal, and renders the .dead page', () => {
+  const site = join(dir, 'pub');
+  mkdirSync(site, { recursive: true });
+  writeFileSync(join(site, 'main.mdy'),
+    '+++\ntitle: main\n+++\n% $.publish("orders.new", { id: 7 })\n% $.publish("orders.bad", { id: 8 })\nsent\n');
+  writeFileSync(join(site, 'orders.new.mdy'),
+    '+++\nmessageName: orders.new\n+++\ngot {{ req.msg ? req.msg.name : "page" }}\n');
+  writeFileSync(join(site, 'orders.bad.mdy'),
+    '+++\nmessageName: orders.bad\n+++\n% if (req.msg) throw new Error("nope")\nbad page\n');
+  writeFileSync(join(site, 'orders.bad.dead.mdy'),
+    '+++\nmessageName: orders.bad.dead\n+++\ndead: {{ req.msg ? req.msg.name : "page" }}\n');
+  const r = spawnSync(bin, [site, '--publish'], { encoding: 'utf8' });
+  const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/^\s*\d{1,2}:\d\d:\d\d [AP]M /gm, '');
+  const out = strip(r.stdout), err = strip(r.stderr);
+  assert.equal(r.status, 0, err);
+  assert.match(out, /\[send\] orders\.new #1, \d+ bytes\n/);
+  assert.match(out, /\[deliver\] orders\.new #1 → rendered orders\.new\.mdy in \d+ms\n  <p>got orders\.new<\/p>\n/,
+    "the page's output is indented under its delivery line");
+  assert.match(err, /\[refuse\] orders\.bad #1 — orders\.bad\.mdy threw after \d+ms\n  mdy: document \d+ failed: nope\n  out of attempts — dead-lettering to orders\.bad\.dead\n/,
+    'a refusal names the error and the verdict');
+  assert.match(out, /\[dead\] orders\.bad\.dead #1 → rendered orders\.bad\.dead\.mdy in \d+ms\n  <p>dead: orders\.bad\.dead<\/p>\n/,
+    'the dead-letter page renders in the same pass');
+  assert.match(out, /\nsent\n$/, "the entry's own output still ends the run");
+});
+
 test('a .md is markdown, not a document', () => {
   const md = write('notes.md', MARKDOWN);
   const html = run([md, '--html']);
