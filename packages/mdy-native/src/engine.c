@@ -2120,6 +2120,21 @@ static bool import_resize_native(JsContext *ctx, JsValue this_val, const JsValue
     return resize_in(e, set, args + 1, argc - 1, result);
 }
 
+/* The `{ path, url, width, height }` object $.resize answers with — built the
+ * same way whether the result was just made or found already done. */
+static JsValue resize_result(mdy_engine *e, const char *out_path, int width, int height) {
+    JsValue r = js_object_new(e->ctx);
+    js_gc_protect(e->vm, &r);
+    set_val(e, r, "path", str(e->vm, out_path, strlen(out_path)));
+    char url[1100];
+    int n = snprintf(url, sizeof url, "/%s", out_path);
+    set_val(e, r, "url", str(e->vm, url, (size_t)n));
+    set_val(e, r, "width", js_number(width));
+    set_val(e, r, "height", js_number(height));
+    js_gc_unprotect(e->vm, &r);
+    return r;
+}
+
 static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
                       int argc, JsValue *result) {
     char msg[768];
@@ -2207,16 +2222,7 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
     for (size_t i = 0; i < t->compose.resized_count; i++) {
         if (strcmp(t->compose.resized[i].path, out_path) == 0) {
             free(path); free(ext); free(shown);
-            JsValue r = js_object_new(e->ctx);
-            js_gc_protect(e->vm, &r);
-            set_val(e, r, "path", str(e->vm, out_path, strlen(out_path)));
-            char url[1100];
-            int n = snprintf(url, sizeof url, "/%s", out_path);
-            set_val(e, r, "url", str(e->vm, url, (size_t)n));
-            set_val(e, r, "width", js_number(t->compose.resized[i].width));
-            set_val(e, r, "height", js_number(t->compose.resized[i].height));
-            js_gc_unprotect(e->vm, &r);
-            *result = r;
+            *result = resize_result(e, out_path, t->compose.resized[i].width, t->compose.resized[i].height);
             return true;
         }
     }
@@ -2251,17 +2257,7 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
     t->compose.resized[t->compose.resized_count].height = height;
     t->compose.resized_count++;
     free(path); free(ext); free(shown);
-
-    JsValue r = js_object_new(e->ctx);
-    js_gc_protect(e->vm, &r);
-    set_val(e, r, "path", str(e->vm, out_path, strlen(out_path)));
-    char url[1100];
-    int n = snprintf(url, sizeof url, "/%s", out_path);
-    set_val(e, r, "url", str(e->vm, url, (size_t)n));
-    set_val(e, r, "width", js_number(width));
-    set_val(e, r, "height", js_number(height));
-    js_gc_unprotect(e->vm, &r);
-    *result = r;
+    *result = resize_result(e, out_path, width, height);
     return true;
 #undef RESIZE_FAIL
 }
