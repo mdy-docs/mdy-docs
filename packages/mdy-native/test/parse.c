@@ -426,6 +426,41 @@ static void small_rule_checks(const mdy_options *o) {
 }
 
 /* Levels of ELEMENTS under the root; a text leaf is not a level. */
+/* Emoji and the attribute schema, pinned as this parser has them. */
+static void emoji_and_schema_checks(const mdy_options *o) {
+    printf("--- mdyast: emoji ---\n");
+    check("a shortcode in either case, and one nobody knows", ":smile: :SMILE: :nosuchcode:",
+          ROOT(EL("p", "", TX("\xf0\x9f\x98\x84 \xf0\x9f\x98\x84 :nosuchcode:"))), o);
+    check("an emoticon needs a word boundary before it", "a:) :) :-) x",
+          ROOT(EL("p", "", TX("a:) \xf0\x9f\x98\x83 \xf0\x9f\x98\x83 x"))), o);
+    check("the colon of a URL is not the eye of a face", "see http://x.com/ now",
+          ROOT(EL("p", "", TX("see ") "," EL("a", "\"href\":\"http://x.com/\"", TX("http://x.com/")) "," TX(" now"))), o);
+    {
+        char code[80];
+        memset(code, 'a', 70);
+        code[70] = '\0';
+        char src[96];
+        snprintf(src, sizeof src, ":%s:", code);
+        mdy_doc *d = mdy_parse(src, 0, o);
+        char *json = mdy_to_json_bare(mdy_root(d));
+        ok_("a shortcode past sixty-four characters is text", json && strstr(json, src) != NULL, json);
+        free(json); mdy_free(d);
+    }
+
+    printf("--- mdyast: the attribute schema, sanitizing ---\n");
+    mdy_options strict = *o;
+    strict.sanitize = 1;
+    check("an attribute is matched by its lowercased name and written lowercased",
+          "<a HREF=\"HTTPS://x\" aria-Label=\"l\" data-Label=\"d\" onclick=\"x\">t",
+          ROOT(EL("a", "\"href\":\"HTTPS://x\",\"ariaLabel\":\"l\",\"dataLabel\":\"d\"", TX("t"))), &strict);
+    check_messages("...and what is dropped is said",
+          "<a HREF=\"HTTPS://x\" onclick=\"x\">t",
+          "1:1-1:34: `onclick` is not allowed on `<a>`, dropping it", &strict);
+    check("a protocol is matched case-insensitively, and a tab before it does not hide it",
+          "<a href=\"\tjavascript:alert(1)\">u\n\n<a href=\"HTTPS://ok\">v",
+          ROOT(EL("a", "", TX("u")) "," EL("a", "\"href\":\"HTTPS://ok\"", TX("v"))), &strict);
+}
+
 static size_t tree_depth(const mdy_node *n) {
     size_t deepest = 0;
     for (const mdy_node *c = n->first; c; c = c->next) {
@@ -652,6 +687,7 @@ int main(void) {
     inline_whole_checks(&o);
     small_rule_checks(&o);
     depth_checks(&o);
+    emoji_and_schema_checks(&o);
     markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");

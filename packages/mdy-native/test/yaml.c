@@ -125,6 +125,21 @@ int main(void) {
           "a: 0x20000000000000\nb: 0o777", "{\"a\":9007199254740992,\"b\":511}");
 
     /* A closing `...`, which is single-document YAML and reads as one. */
+    /* The shortest digits that read back as the same double: 26.185 is
+     * printed as itself, not as 26.184999999999999. */
+    check("a float is written with the fewest digits that read back", "a: 26.185\nb: 0.1\nc: 1e21",
+          "{\"a\":26.185,\"b\":0.1,\"c\":1e+21}");
+    {
+        char err[256];
+        mdy_yaml *doc = mdy_yaml_parse("a: 1\nb:\n  c: 2", 0, err, sizeof err);
+        const mdy_yaml_node *b = doc ? mdy_yaml_get(mdy_yaml_root(doc), "b") : NULL;
+        const mdy_yaml_node *c = b ? mdy_yaml_get(b, "c") : NULL;
+        int ok = c && mdy_yaml_type_of(c) == MDY_YAML_NUMBER && mdy_yaml_number(c) == 2 &&
+                 mdy_yaml_get(mdy_yaml_root(doc), "nope") == NULL && mdy_yaml_get(c, "x") == NULL;
+        printf("  %s  mdy_yaml_get reads a key by name, and answers NULL for a missing one or a non-mapping\n", ok ? "ok  " : "FAIL");
+        if (!ok) failures++;
+        mdy_yaml_free(doc);
+    }
     check("a closing document marker ends the document",
           "a: 1\n...\n", "{\"a\":1}");
     check("...with blank lines after it",

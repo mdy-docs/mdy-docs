@@ -260,6 +260,24 @@ int main(void) {
         check("a long data-* name is written kebab-cased", d, want);
     }
 
+    printf("--- mdyhtml: a NUL, and a comma-free space-separated list ---\n");
+    reset();
+    {
+        mdy_node *p = element("p");
+        mdy_node *t = text("a\0b");
+        t->text_len = 3;
+        child(p, t);
+        check("a NUL inside text is written as a character reference", p, "<p>a&#x0;b</p>");
+    }
+    reset();
+    {
+        mdy_node *s = element("span");
+        static const char *ids[] = { "a", "b" };
+        attr_list(s, "ariaDescribedBy", ids, 2);
+        check("a token list that is space-separated is joined with spaces", s,
+              "<span aria-describedby=\"a b\"></span>");
+    }
+
     printf("--- mdyhtml: node types ---\n");
     reset();
     check("a doctype", node(MDY_DOCTYPE), "<!doctype html>");

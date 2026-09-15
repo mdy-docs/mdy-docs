@@ -49,6 +49,8 @@ static void check(const char *what, const char *source, const char *expected,
 
 int main(void) {
     printf("--- mdyscript: documents to statements ---\n");
+    check("a lone CR ends a line, and CRLF is one ending", "a\rb\r\nc",
+          "const __out = []\n__out.push([0, `a`])\n__out.push([1, `b`])\n__out.push([2, `c`])", "000");
     check("plain content", "hello",
           "const __out = []\n__out.push([0, `hello`])", "0");
     check("a % line", "% const x = 1\ntext",
