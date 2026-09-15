@@ -2704,6 +2704,11 @@ static void natives_checks(void) {
           "{{ JSON.stringify($.toc($.render(1))) }}\n---\n= Zed\n",
           "<p>[{\"depth\":1,\"text\":\"Zed\",\"slug\":\"zed\"}]</p>");
 
+    /* A token nothing holds is left as written, as compose.js leaves an
+     * unknown match; a real one becomes its HTML. */
+    check("$.html leaves a token it does not know as it was written",
+          "{{ $.html('a\\uE000zz\\uE001b') }}",
+          "<p>a\xee\x80\x80zz\xee\x80\x81" "b</p>");
     /* `new Date('2024-02-31T00:00:00Z')` is the 2nd of March, not a
      * refusal, and an unreadable date prints as toUTCString prints one. */
     check("$.rfc822 rolls a day past the month's end into the next month",

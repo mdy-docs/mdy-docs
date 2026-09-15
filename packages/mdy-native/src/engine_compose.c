@@ -322,7 +322,10 @@ char *fill_tokens(mdy_engine *e, const char *s, size_t len) {
              * and the build would report success. */
             if (!html) { free(result); return NULL; }
         }
-        size_t plain = i - last;
+        /* A token nothing holds stays as it was written, as compose.js's
+         * fillTokens leaves an unknown match; only a contents placeholder,
+         * which is held with no tree yet, becomes nothing. */
+        size_t plain = i - last + (h ? 0 : used);
         size_t add = plain + (html ? strlen(html) : 0);
         if (out + add + 1 > cap) {
             while (out + add + 1 > cap) cap *= 2;
