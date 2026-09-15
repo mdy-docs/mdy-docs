@@ -383,10 +383,9 @@ build/yamlcat$(EXE): test/yamlcat.c $(PARSE_LIB) $(LX_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
 build/linkify$(EXE): test/linkify.c $(PARSE_LIB) $(LX_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
-build/md4cprobe$(EXE): test/md4cprobe.c $(MD4C_SRCS)
-	$(CC) $(PARSE_CFLAGS) test/md4cprobe.c $(MD4C_SRCS) -o $@
 
-.PHONY: check-parse compare check-html check-script check-yaml check-links \
+.PHONY: check-parse compare check-html check-script check-yaml check-links check-document \
+        corpus-specs corpus-baseline \
         check-markdown corpus bench check-cli
 
 # bin/mdy.js's own tests (test/cli.test.js), with this binary in its place:
