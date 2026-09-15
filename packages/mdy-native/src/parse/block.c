@@ -1876,8 +1876,21 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
             }
         }
 
+        /*
+         * At the nesting cap, an element or a list is read as flat paragraph
+         * text rather than recursed into: parse_element and parse_list both
+         * re-enter mdy_parse_block at nesting+1, so without this an element
+         * chain or a nested list drives the stack past MDY_MAX_DEPTH — the same
+         * bound the indented-<div> path already applies. mdyast.h says a parsed
+         * tree never nests deeper than this; this is what makes that true.
+         */
+        int at_depth_cap = nesting >= MDY_MAX_DEPTH;
+        if (at_depth_cap && (l->text[0] == '<' || list_marker(l, &(int){0})))
+            mdy_warn(doc, lines, i, "nesting-depth",
+                     "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+
         /* --- an element opener --- */
-        if (l->text[0] == '<') {
+        if (!at_depth_cap && l->text[0] == '<') {
             i = parse_element(doc, parent, lines, count, i, nesting);
             produced = 1;
             continue;
@@ -1895,7 +1908,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
 
         /* --- lists --- */
         int ordered = 0;
-        if (list_marker(l, &ordered)) {
+        if (!at_depth_cap && list_marker(l, &ordered)) {
             i = parse_list(doc, parent, lines, count, i, ordered, nesting);
             produced = 1;
             continue;

@@ -391,7 +391,15 @@ static void set_from_attribute(mdy_doc *doc, mdy_node *el,
     mdy_set_string(doc, el, hast, value, value_len);
 }
 
-static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n) {
+static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n, size_t depth) {
+    /*
+     * lexbor imposes no nesting limit of its own, so a raw `<b><b><b>…` in a
+     * `.md` file becomes a DOM as deep as the input and this recurses once per
+     * level — `<b>` * 200000 overflowed the stack. Past MDY_MAX_DEPTH the
+     * deeper content is dropped rather than crashing the parse; a raw fragment
+     * nested that far is pathological.
+     */
+    if (depth > MDY_MAX_DEPTH) return;
     for (; n != NULL; n = n->next) {
         switch (n->type) {
             case LXB_DOM_NODE_TYPE_ELEMENT: {
@@ -412,7 +420,7 @@ static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n) {
                                        avalue != NULL, svg);
                 }
                 mdy_append(into, el);
-                walk_in(doc, el, n->first_child);
+                walk_in(doc, el, n->first_child, depth + 1);
                 break;
             }
             case LXB_DOM_NODE_TYPE_TEXT: {
@@ -493,7 +501,7 @@ int mdy_raw_reparse(mdy_doc *doc, mdy_node *root) {
          * leave them pointing at the tree this replaced. */
         root->first = NULL;
         root->last = NULL;
-        walk_in(doc, root, fragment->first_child);
+        walk_in(doc, root, fragment->first_child, 0);
     }
 
     lxb_html_document_destroy(html);
