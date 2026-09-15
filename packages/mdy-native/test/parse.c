@@ -316,6 +316,37 @@ int main(void) {
                               EL("li", "", TX("b")) "," TX("\\n"))), &o);
     check("an ordered list", "1. a",
           ROOT(EL("ol", "", TX("\\n") "," EL("li", "", TX("a")) "," TX("\\n"))), &o);
+    /* Every line after an item belongs to it, at any indentation, until a
+     * heading, a break, or a blank line before something that is not an
+     * item: an item holds text and nested lists and nothing else. */
+    check("an indented element line is an item's text, not a block",
+          "- a\n  <b>bold\n",
+          ROOT(EL("ul", "", TX("\\n") "," EL("li", "", TX("a <b>bold")) "," TX("\\n"))), &o);
+    check("an unindented line continues the item too", "- one\ntwo\n- three",
+          ROOT(EL("ul", "", TX("\\n") "," EL("li", "", TX("one two")) "," TX("\\n") ","
+                              EL("li", "", TX("three")) "," TX("\\n"))), &o);
+    check("a heading line ends the list", "- a\n  = Head\n",
+          ROOT(EL("ul", "", TX("\\n") "," EL("li", "", TX("a")) "," TX("\\n")) ","
+               EL("div", "", TX("\\n") "," EL("h1", "\"id\":\"head\"", TX("Head")) "," TX("\\n"))), &o);
+    /* One blank line makes the whole run loose, nested lists included. */
+    check("looseness is decided once for the whole run", "- a\n  - b\n\n- c\n",
+          ROOT(EL("ul", "", TX("\\n") ","
+                   EL("li", "", TX("\\n") "," EL("p", "", TX("a")) "," TX("\\n") ","
+                       EL("ul", "", TX("\\n") "," EL("li", "", TX("\\n") "," EL("p", "", TX("b")) "," TX("\\n")) "," TX("\\n")) ","
+                       TX("\\n")) ","
+                   TX("\\n") ","
+                   EL("li", "", TX("\\n") "," EL("p", "", TX("c")) "," TX("\\n")) "," TX("\\n"))), &o);
+    check("...and reaches a sibling list of the other kind", "- a\n\n1. b\n",
+          ROOT(EL("ul", "", TX("\\n") "," EL("li", "", TX("\\n") "," EL("p", "", TX("a")) "," TX("\\n")) "," TX("\\n")) ","
+               EL("ol", "", TX("\\n") "," EL("li", "", TX("\\n") "," EL("p", "", TX("b")) "," TX("\\n")) "," TX("\\n"))), &o);
+    check("a shallower marker closes back out to its own column", "- a\n    - b\n  - c\n",
+          ROOT(EL("ul", "", TX("\\n") ","
+                   EL("li", "", TX("a") "," TX("\\n") ","
+                       EL("ul", "", TX("\\n") "," EL("li", "", TX("b")) "," TX("\\n")) "," TX("\\n") "," TX("\\n") ","
+                       EL("ul", "", TX("\\n") "," EL("li", "", TX("c")) "," TX("\\n")) "," TX("\\n")) ","
+                   TX("\\n"))), &o);
+    check("ten digits is not a marker", "1234567890. x",
+          ROOT(EL("p", "", TX("1234567890. x"))), &o);
 
     printf("--- mdyast: autolink ---\n");
     check("a bare URL becomes a link", "go to https://example.com now",

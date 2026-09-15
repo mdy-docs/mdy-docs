@@ -376,11 +376,10 @@ static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t l
 static long marker_number(const mdy_line *l) {
     long value = 0;
     size_t i = 0;
-    while (i < l->len && l->text[i] >= '0' && l->text[i] <= '9') {
-        /* Saturate rather than overflow: a 20-digit marker would wrap `long`
-         * (undefined, and `long` is 32-bit on Windows). Every value up to nine
-         * digits — more than any real ordered list — is kept exactly. */
-        if (value <= 99999999L) value = value * 10 + (l->text[i] - '0');
+    /* At most nine digits, which list_marker guarantees: the value fits a
+     * 32-bit long. */
+    while (i < l->len && i < 9 && l->text[i] >= '0' && l->text[i] <= '9') {
+        value = value * 10 + (l->text[i] - '0');
         i++;
     }
     return i ? value : -1;
@@ -396,7 +395,8 @@ static size_t list_marker(const mdy_line *l, int *ordered) {
     }
     size_t digits = 0;
     while (digits < l->len && l->text[digits] >= '0' && l->text[digits] <= '9') digits++;
-    if (digits == 0 || digits >= l->len) return 0;
+    /* `\d{1,9}`: ten digits or more is not a marker at all. */
+    if (digits == 0 || digits > 9 || digits >= l->len) return 0;
     if (l->text[digits] != '.' && l->text[digits] != ')') return 0;
     if (digits + 1 == l->len) { *ordered = 1; return digits + 1; }   /* end of line */
     if (l->text[digits + 1] == ' ' || l->text[digits + 1] == '\t') { *ordered = 1; return digits + 2; }
@@ -1338,225 +1338,251 @@ static int add_paragraph(mdy_doc *doc, mdy_node *parent, const char *joined, siz
 }
 
 /*
- * A LIST, from its first marker to the last line of its last item — every
- * rule that decides where one ends and what an item holds.
+ * A LIST, as block.js's tryList reads one: the run of lines from its first
+ * marker to whatever ends it, then a tree built from the markers' columns.
  *
- * This is the one construct big enough to have a grammar rather than a shape:
- * loose against tight, continuation lines that need no indentation, `[ ]`
- * task boxes, nested lists, and blank lines that mean "a gap inside this
- * item" in one place and "the list is over" in another — which is why it is
- * its own function rather than another case inside `mdy_parse_block`.
+ * What ends the run is a heading line, a thematic break, or a blank line
+ * followed by anything that is not an item. Every other line belongs to the
+ * item before it, at any indentation: `- one` then `two` is one item reading
+ * "one two", and so is `- one` then `  <b>two`, because an item holds text
+ * and nested lists and nothing else. A blank line before an item makes the
+ * whole run loose — every item of every list in it wraps its text in a <p>.
  *
- * It takes no `base`. A list measures everything against its OWN first
- * marker's column, never against the run it sits in — which is what lets an
- * unindented continuation line still belong to an item — so the only column
- * it needs is one it can read off `lines[i]`.
+ * Items nest by their markers' columns: deeper opens a list inside the item
+ * above, shallower closes back out to the list at that column, and a bullet
+ * beside a number at the same column is a sibling list rather than a mixed
+ * one. A list measures nothing against the run it sits in, which is what
+ * lets an unindented continuation line still belong to an item.
  *
- * It recurses through `mdy_parse_block` for an item's block content. That
- * mutual recursion is real and is why the cut is here: a list item holds
- * blocks, which hold lists, and any deeper seam would have to be crossed
- * twice.
- *
- * `i` is the line the marker is on. Returns the first line AFTER the list.
+ * `i` is the line the first marker is on. Returns the first line AFTER the
+ * run.
  */
-/*
- * Where the list item that opens at line `i` ends. A continuation line needs NO
- * indentation — `- one` then an unindented `two` is one item reading "one two"
- * — so what ends an item is another marker, a line that starts a block of its
- * own, or a thematic break; indentation only decides whether a blank line is a
- * gap inside the item or the end of it. Trailing blanks are not the item's.
- */
-static size_t list_item_end(const mdy_line *lines, size_t count, size_t i, size_t marker_indent) {
-    size_t item_end = i + 1;
-    while (item_end < count) {
-        const mdy_line *k = &lines[item_end];
-        if (k->blank) {
-            size_t peek = item_end;
-            while (peek < count && lines[peek].blank) peek++;
-            if (peek < count && lines[peek].indent > marker_indent) { item_end = peek; continue; }
-            break;
-        }
-        if (k->indent > marker_indent) { item_end++; continue; }
-        int k_ordered = 0;
-        if (list_marker(k, &k_ordered)) break;
-        if (k->text[0] == '<' || k->text[0] == '=') break;
-        if (thematic_break(k)) break;
-        item_end++;
+typedef struct {
+    size_t line, end;       /* the marker line, and the last line of its text */
+    size_t indent;          /* the marker's column */
+    int ordered;
+    long start;             /* the number an ordered marker carries */
+    int task;               /* -1 no box, 0 unticked, 1 ticked */
+    size_t column;          /* of the character between the box's brackets, 1-based */
+    const char *head;       /* the marker line's text after the marker and the box */
+    size_t head_len;
+} Item;
+
+typedef struct ListNode ListNode;
+typedef struct {
+    const Item *item;
+    ListNode **children;
+    size_t child_count, child_cap;
+} Entry;
+struct ListNode {
+    size_t indent;
+    int ordered;
+    long start;
+    Entry *entries;
+    size_t count, cap;
+};
+
+static void *grow_in_arena(mdy_doc *doc, void *old, size_t count, size_t *cap, size_t size) {
+    size_t want = *cap ? *cap * 2 : 4;
+    void *grown = mdy_alloc(&doc->arena, want * size);
+    if (count) memcpy(grown, old, count * size);
+    *cap = want;
+    return grown;
+}
+
+static Entry *list_node_add(mdy_doc *doc, ListNode *l, const Item *item) {
+    if (l->count == l->cap) l->entries = grow_in_arena(doc, l->entries, l->count, &l->cap, sizeof *l->entries);
+    Entry *e = &l->entries[l->count++];
+    memset(e, 0, sizeof *e);
+    e->item = item;
+    return e;
+}
+
+static void entry_add_child(mdy_doc *doc, Entry *e, ListNode *child) {
+    if (e->child_count == e->child_cap)
+        e->children = grow_in_arena(doc, e->children, e->child_count, &e->child_cap, sizeof *e->children);
+    e->children[e->child_count++] = child;
+}
+
+/* The last line an entry covers, nested lists included. */
+static size_t entry_end(const Entry *e) {
+    size_t end = e->item->end;
+    for (size_t c = 0; c < e->child_count; c++) {
+        const ListNode *child = e->children[c];
+        size_t nested = entry_end(&child->entries[child->count - 1]);
+        if (nested > end) end = nested;
     }
-    while (item_end > i + 1 && lines[item_end - 1].blank) item_end--;
-    return item_end;
+    return end;
+}
+
+/* An item's text: the marker line's, then each continuation line's with its
+ * trailing whitespace off, joined with a space — which puts a leading space
+ * on an item whose marker line held nothing, as the JavaScript's join does. */
+static char *item_text(mdy_doc *doc, const Item *it, const mdy_line *lines, size_t *out_len) {
+    size_t total = it->head_len;
+    for (size_t k = it->line + 1; k <= it->end; k++) total += lines[k].len + 1;
+    char *joined = mdy_alloc(&doc->arena, total + 1);
+    memcpy(joined, it->head, it->head_len);
+    size_t o = it->head_len;
+    for (size_t k = it->line + 1; k <= it->end; k++) {
+        const char *t = lines[k].text;
+        size_t n = lines[k].len;
+        mdy_trim_end(&t, &n);
+        joined[o++] = ' ';
+        memcpy(joined + o, t, n);
+        o += n;
+    }
+    joined[o] = '\0';
+    *out_len = o;
+    return joined;
+}
+
+/* `listNode`: one <ul> or <ol>, its items, and the lists nested in them. */
+static mdy_node *list_element(mdy_doc *doc, const ListNode *l, int loose, const mdy_line *lines) {
+    mdy_node *list = mdy_new_element(doc, l->ordered ? "ol" : "ul", 2);
+    mdy_append(list, mdy_new_text(doc, "\n", 1));
+    int any_task = 0;
+    for (size_t k = 0; k < l->count; k++) {
+        const Entry *e = &l->entries[k];
+        const Item *it = e->item;
+        mdy_node *li = mdy_new_element(doc, "li", 2);
+        if (it->task >= 0) { any_task = 1; mdy_add_class(doc, li, "task-list-item"); }
+        size_t tlen = 0;
+        char *text = item_text(doc, it, lines, &tlen);
+        if (loose) {
+            /* `li("\n" p(content) "\n")` — the shape a blank line between
+             * items produces. The paragraph spans the item's own lines. */
+            mdy_node *wrap = mdy_new_element(doc, "p", 1);
+            mdy_parse_inline(doc, wrap, text, tlen);
+            add_task_box(doc, wrap, it->task, tlen, lines, it->line, it->column);
+            mdy_set_position(wrap, lines, it->line, it->end);
+            mdy_append(li, mdy_new_text(doc, "\n", 1));
+            mdy_append(li, wrap);
+            mdy_append(li, mdy_new_text(doc, "\n", 1));
+        } else {
+            mdy_parse_inline(doc, li, text, tlen);
+            add_task_box(doc, li, it->task, tlen, lines, it->line, it->column);
+        }
+        for (size_t c = 0; c < e->child_count; c++) {
+            if (!loose) mdy_append(li, mdy_new_text(doc, "\n", 1));
+            mdy_append(li, list_element(doc, e->children[c], loose, lines));
+            mdy_append(li, mdy_new_text(doc, "\n", 1));
+        }
+        mdy_set_position(li, lines, it->line, entry_end(e));
+        mdy_append(list, li);
+        mdy_append(list, mdy_new_text(doc, "\n", 1));
+    }
+    /* Set after the items, as the JavaScript's properties are: className
+     * before start. A list counts from 1 on its own. */
+    if (any_task) mdy_add_class(doc, list, "contains-task-list");
+    if (l->ordered && l->start != 1) mdy_set_number(doc, list, "start", (double)l->start);
+    mdy_set_position(list, lines, l->entries[0].item->line, entry_end(&l->entries[l->count - 1]));
+    return list;
 }
 
 static size_t parse_list(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
-                         size_t count, size_t i, int ordered, size_t nesting) {
-    const mdy_line *l = &lines[i];
-    size_t start_line = i;
-    mdy_node *list = mdy_new_element(doc, ordered ? "ol" : "ul", 2);
-    /*
-     * An ordered list that does not begin at 1 says so — `1931.` gives
-     * `<ol start="1931">`, which is what makes the rendered numbering
-     * match what the author wrote. One is the default and is left off.
-     */
-    /* Read now, SET after the items: properties is an object and
-     * the JavaScript puts className on before start, so the order the
-     * two are written in is part of the output. */
-    long first = ordered ? marker_number(l) : -1;
-    mdy_append(list, mdy_new_text(doc, "\n", 1));
-    int any_task = 0;
+                         size_t count, size_t i, size_t nesting) {
+    Item *items = NULL;
+    size_t n = 0, cap = 0;
+    size_t index = i, last = i;
+    int loose = 0, blank = 0;
 
-    /*
-     * LOOSE OR TIGHT. A blank line between items does not end the
-     * list — it makes it loose, and every item then wraps its content
-     * in a <p> rather than holding it inline. That is one decision for
-     * the whole list, so it has to be made before any item is built.
-     */
-    int loose = 0;
-    {
-        size_t scan = i;
-        int seen_blank = 0;
-        while (scan < count) {
-            if (lines[scan].blank) { seen_blank = 1; scan++; continue; }
-            int k_ordered = 0;
-            size_t k_width = list_marker(&lines[scan], &k_ordered);
-            if (k_width && k_ordered == ordered && lines[scan].indent == l->indent) {
-                if (seen_blank) { loose = 1; break; }
-                scan++;
-                continue;
+    while (index < count) {
+        const mdy_line *l = &lines[index];
+        if (l->blank) { blank = 1; index++; continue; }
+        if (l->text[0] == '=' || thematic_break(l)) break;
+
+        int ordered = 0;
+        size_t width = list_marker(l, &ordered);
+        if (width) {
+            if (blank) loose = 1;
+            if (n == cap) items = grow_in_arena(doc, items, n, &cap, sizeof *items);
+            Item *it = &items[n++];
+            memset(it, 0, sizeof *it);
+            it->line = it->end = index;
+            it->indent = l->indent;
+            it->ordered = ordered;
+            it->start = ordered ? marker_number(l) : -1;
+            it->task = -1;
+            const char *rest = l->text + width;
+            size_t rl = l->len - width;
+            trim(&rest, &rl);
+            /*
+             * `[ ]` or `[x]` after the marker makes it a task —
+             * `^\[([ xX])\](?:[ \t]+(.*))?$`, so the box has to be followed
+             * by whitespace or by nothing at all. `- [x]done` is an ordinary
+             * item reading `[x]done`. The column is the character between
+             * the brackets, 1-based and counted from the start of the line,
+             * indentation and all — what a handler needs to find the `x`.
+             */
+            if (rl >= 3 && rest[0] == '[' && rest[2] == ']' &&
+                (rest[1] == ' ' || rest[1] == 'x' || rest[1] == 'X') &&
+                (rl == 3 || rest[3] == ' ' || rest[3] == '\t')) {
+                it->task = rest[1] != ' ';
+                it->column = l->indent_chars + (size_t)(rest - l->text) + 2;
+                rest += 3;
+                rl -= 3;
+                trim(&rest, &rl);
             }
-            if (lines[scan].indent > l->indent) { scan++; continue; }
-            break;
-        }
-    }
-
-    while (i < count) {
-        /* Skip blank lines BETWEEN items — in a loose list they
-         * separate items rather than ending the list. */
-        if (lines[i].blank) {
-            size_t peek = i;
-            while (peek < count && lines[peek].blank) peek++;
-            int p_ordered = 0;
-            if (peek < count && list_marker(&lines[peek], &p_ordered) &&
-                p_ordered == ordered && lines[peek].indent == l->indent) {
-                i = peek;
-                continue;
-            }
-            break;
-        }
-        int this_ordered = 0;
-        size_t width = list_marker(&lines[i], &this_ordered);
-        if (!width || this_ordered != ordered || lines[i].indent != l->indent) break;
-
-        /*
-         * An item owns every following line indented past the marker:
-         * a plain one continues its text, a deeper list marker becomes
-         * a nested list. `- one` then `  two` is one item reading
-         * "one two"; `- a` then `  - b` is an item holding a <ul>.
-         */
-        size_t item_end = list_item_end(lines, count, i, l->indent);
-
-        const char *body = lines[i].text + width;
-        size_t body_len = lines[i].len - width;
-        trim(&body, &body_len);
-
-        mdy_node *item = mdy_new_element(doc, "li", 2);
-
-        /*
-         * `[ ]` or `[x]` after the marker makes it a task —
-         * `^\\[([ xX])\\](?:[ \\t]+(.*))?$`, so the box has to be
-         * followed by whitespace or by nothing at all. `- [x]done` is
-         * an ordinary item reading `[x]done`.
-         *
-         * The box itself is NOT appended here: it belongs at the head
-         * of whatever holds the content, which for a loose item is the
-         * paragraph and not the <li>.
-         */
-        int task = -1;
-        /* the column of the character between the brackets, 1-based
-         * and counted from the start of the line, indentation and
-         * all — what a handler needs to find the `x` to write */
-        size_t task_column = 0;
-        if (body_len >= 3 && body[0] == '[' && body[2] == ']' &&
-            (body[1] == ' ' || body[1] == 'x' || body[1] == 'X') &&
-            (body_len == 3 || body[3] == ' ' || body[3] == '\t')) {
-            task = body[1] == ' ' ? 0 : 1;
-            task_column = lines[i].indent_chars + (size_t)(body - lines[i].text) + 2;
-            body += 3;
-            body_len -= 3;
-            while (body_len && (*body == ' ' || *body == '\t')) { body++; body_len--; }
-            any_task = 1;
-            mdy_add_class(doc, item, "task-list-item");
-        }
-
-        /*
-         * Continuation lines that are themselves plain join the item's
-         * text; from the first line that opens a block, the rest is
-         * parsed as blocks. That split is what makes `- one` / `  two`
-         * one sentence and `- a` / `  - b` a nested list.
-         */
-        size_t plain_end = i + 1;
-        while (plain_end < item_end && !lines[plain_end].blank) {
-            int sub = 0;
-            if (list_marker(&lines[plain_end], &sub) || lines[plain_end].text[0] == '<' ||
-                lines[plain_end].text[0] == '=') break;
-            plain_end++;
-        }
-
-        size_t total = body_len;
-        for (size_t k = i + 1; k < plain_end; k++) total += lines[k].len + 1;
-        char *joined = mdy_alloc(&doc->arena, total + 1);
-        size_t o = 0;
-        memcpy(joined, body, body_len);
-        o = body_len;
-        for (size_t k = i + 1; k < plain_end; k++) {
-            /* The separator goes in even when the marker line left
-             * nothing behind it — `1931.` then `next` is an item
-             * reading " next", with the space the join put there. */
-            joined[o++] = ' ';
-            memcpy(joined + o, lines[k].text, lines[k].len);
-            o += lines[k].len;
-        }
-        joined[o] = '\0';
-        if (loose) {
-            /* `li("\n" p(content) "\n")` — the shape a blank line
-             * between items produces. */
-            mdy_node *wrap = mdy_new_element(doc, "p", 1);
-            mdy_parse_inline(doc, wrap, joined, o);
-            add_task_box(doc, wrap, task, o, lines, i, task_column);
-            /* The paragraph a loose item wraps its content in spans
-             * the same lines the item does — it IS the item's
-             * content, not a block of its own. */
-            mdy_set_position(wrap, lines, i, item_end > i ? item_end - 1 : i);
-            mdy_append(item, mdy_new_text(doc, "\n", 1));
-            mdy_append(item, wrap);
-            mdy_append(item, mdy_new_text(doc, "\n", 1));
+            it->head = rest;
+            it->head_len = rl;
         } else {
-            mdy_parse_inline(doc, item, joined, o);
-            add_task_box(doc, item, task, o, lines, i, task_column);
+            if (blank) break;
+            items[n - 1].end = index;
         }
-
-        if (item_end > plain_end) {
-            size_t inner = lines[plain_end].indent;
-            for (size_t k = plain_end; k < item_end; k++)
-                if (!lines[k].blank && lines[k].indent < inner) inner = lines[k].indent;
-            mdy_parse_block(doc, item, lines + plain_end, item_end - plain_end, inner,
-                            nesting + 1);
-        }
-
-        mdy_set_position(item, lines, i, item_end > i ? item_end - 1 : i);
-        mdy_append(list, item);
-        mdy_append(list, mdy_new_text(doc, "\n", 1));
-        i = item_end;
+        blank = 0;
+        last = index;
+        index++;
     }
 
-    /* The list is marked once, after its items, because one task item
-     * makes the whole list a task list. */
-    if (any_task) mdy_add_class(doc, list, "contains-task-list");
-    if (ordered && first >= 0 && first != 1)
-        mdy_set_number(doc, list, "start", (double)first);
-    mdy_set_position(list, lines, start_line, i > start_line ? i - 1 : start_line);
-    separate(doc, parent);
-    mdy_append(parent, list);
-    return i;
+    /*
+     * The tree, by column. Each level is a <ul> and an <li> under the tree
+     * `parent` already sits in, so the levels that fit are counted against
+     * MDY_MAX_DEPTH; an item that would open one deeper joins the innermost
+     * list instead, and says so.
+     */
+    ListNode **roots = NULL;
+    size_t root_count = 0, root_cap = 0;
+    ListNode *stack[MDY_MAX_DEPTH / 2 + 1];
+    size_t top = 0;
+    size_t levels = nesting + 1 < MDY_MAX_DEPTH ? (MDY_MAX_DEPTH - nesting - 1) / 2 : 0;
+    if (levels == 0) levels = 1;
+    int flattened = 0;
+    for (size_t k = 0; k < n; k++) {
+        const Item *it = &items[k];
+        while (top && it->indent < stack[top - 1]->indent) top--;
+        if (top && it->indent == stack[top - 1]->indent && it->ordered != stack[top - 1]->ordered) top--;
+        if (!top || it->indent > stack[top - 1]->indent) {
+            if (top >= levels) {
+                flattened = 1;
+            } else {
+                ListNode *l = mdy_alloc(&doc->arena, sizeof *l);
+                memset(l, 0, sizeof *l);
+                l->indent = it->indent;
+                l->ordered = it->ordered;
+                l->start = it->start;
+                if (top) {
+                    ListNode *above = stack[top - 1];
+                    entry_add_child(doc, &above->entries[above->count - 1], l);
+                } else {
+                    if (root_count == root_cap)
+                        roots = grow_in_arena(doc, roots, root_count, &root_cap, sizeof *roots);
+                    roots[root_count++] = l;
+                }
+                stack[top++] = l;
+            }
+        }
+        list_node_add(doc, stack[top - 1], it);
+    }
+    if (flattened)
+        mdy_warn(doc, lines, i, "nesting-depth",
+                 "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+
+    for (size_t r = 0; r < root_count; r++) {
+        separate(doc, parent);
+        mdy_append(parent, list_element(doc, roots[r], loose, lines));
+    }
+    return last + 1;
 }
 
 /*
@@ -1906,7 +1932,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
          * bound the indented-<div> path already applies. mdyast.h says a parsed
          * tree never nests deeper than this; this is what makes that true.
          */
-        int at_depth_cap = nesting >= MDY_MAX_DEPTH;
+        int at_depth_cap = nesting + 2 > MDY_MAX_DEPTH;
         if (at_depth_cap && (l->text[0] == '<' || list_marker(l, &(int){0})))
             mdy_warn(doc, lines, i, "nesting-depth",
                      "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
@@ -1929,9 +1955,8 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
         }
 
         /* --- lists --- */
-        int ordered = 0;
-        if (!at_depth_cap && list_marker(l, &ordered)) {
-            i = parse_list(doc, parent, lines, count, i, ordered, nesting);
+        if (!at_depth_cap && list_marker(l, &(int){0})) {
+            i = parse_list(doc, parent, lines, count, i, nesting);
             produced = 1;
             continue;
         }
