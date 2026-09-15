@@ -425,6 +425,59 @@ static void small_rule_checks(const mdy_options *o) {
     }
 }
 
+/* Levels of ELEMENTS under the root; a text leaf is not a level. */
+static size_t tree_depth(const mdy_node *n) {
+    size_t deepest = 0;
+    for (const mdy_node *c = n->first; c; c = c->next) {
+        if (c->type != MDY_ELEMENT) continue;
+        size_t d = tree_depth(c);
+        if (d > deepest) deepest = d;
+    }
+    return deepest + 1;
+}
+
+/*
+ * mdyast.h promises that a parsed tree never nests past MDY_MAX_DEPTH, and
+ * every later pass recurses on that promise. A list is two levels per item
+ * level and a loose one three, which is where the count was short.
+ */
+static void depth_checks(const mdy_options *o) {
+    printf("--- mdyast: the depth cap holds for every construct ---\n");
+    struct { const char *what, *unit; int loose; } shapes[] = {
+        { "a list nested four hundred deep", "- x\n", 0 },
+        { "...a loose one", "- x\n\n", 1 },
+        { "an element chain four hundred deep", "<b\n", 0 },
+        { "an indentation four hundred levels deep", NULL, 0 },
+    };
+    for (size_t k = 0; k < sizeof shapes / sizeof *shapes; k++) {
+        enum { N = 400 };
+        size_t cap = (size_t)N * (N + 8) + 64;
+        char *src = malloc(cap);
+        size_t n = 0;
+        if (shapes[k].unit) {
+            for (int i = 0; i < N; i++) {
+                for (int sp = 0; sp < 2 * i; sp++) src[n++] = ' ';
+                n += (size_t)sprintf(src + n, "%s", shapes[k].unit);
+            }
+        } else {
+            for (int sp = 0; sp < 2 * N; sp++) src[n++] = ' ';
+            n += (size_t)sprintf(src + n, "deep\n");
+        }
+        src[n] = '\0';
+        mdy_doc *d = mdy_parse(src, n, o);
+        size_t depth = tree_depth(mdy_root(d));
+        size_t warnings = 0;
+        for (size_t i = 0; i < mdy_message_count(d); i++)
+            if (strcmp(mdy_message_at(d, i)->rule, "nesting-depth") == 0) warnings++;
+        char detail[128];
+        snprintf(detail, sizeof detail, "depth %zu, %zu depth warning(s)", depth, warnings);
+        /* `depth` counts the root, so the cap is one more than the levels. */
+        ok_(shapes[k].what, depth <= MDY_MAX_DEPTH + 1 && warnings == 1, detail);
+        mdy_free(d);
+        free(src);
+    }
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -598,6 +651,7 @@ int main(void) {
     table_split_checks(&o);
     inline_whole_checks(&o);
     small_rule_checks(&o);
+    depth_checks(&o);
     markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");

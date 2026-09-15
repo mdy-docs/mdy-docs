@@ -233,6 +233,7 @@ struct mdy_doc {
     mdy_message *messages;
     size_t message_count, message_cap;
     int raw_depth_warned;    /* the raw-HTML depth warning is raised once */
+    int depth_warned;        /* and so is the .mdy block parser's */
 
     /* One per document, in order — see mdy_frontmatter. */
     mdy_frontmatter *matter;

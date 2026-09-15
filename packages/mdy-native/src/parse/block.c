@@ -20,6 +20,15 @@
 static void trim(const char **s, size_t *len);
 static int definition_line(const mdy_line *l, const char **id, size_t *id_len,
                            const char **content, size_t *content_len);
+
+/* Said once per document: past the cap every deeper line would say it again,
+ * and one line is what a reader needs. */
+static void warn_depth(mdy_doc *doc, const mdy_line *lines, size_t i) {
+    if (doc->depth_warned) return;
+    doc->depth_warned = 1;
+    mdy_warn(doc, lines, i, "nesting-depth",
+             "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+}
 static size_t parse_definition(mdy_doc *doc, const mdy_line *lines, size_t count, size_t i,
                                const char *id, size_t id_len,
                                const char *head, size_t head_len);
@@ -1613,8 +1622,7 @@ static size_t parse_list(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
         list_node_add(doc, stack[top - 1], it);
     }
     if (flattened)
-        mdy_warn(doc, lines, i, "nesting-depth",
-                 "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+        warn_depth(doc, lines, i);
 
     for (size_t r = 0; r < root_count; r++) {
         separate(doc, parent);
@@ -1787,7 +1795,7 @@ static size_t parse_indented_div(mdy_doc *doc, mdy_node *parent, const mdy_line 
      * the depth ALREADY under `parent`: two chains one inside the other would
      * each pass a check of their own and together be twice as deep.
      */
-    size_t room = nesting < MDY_MAX_DEPTH ? MDY_MAX_DEPTH - nesting : 0;
+    size_t room = nesting + 1 < MDY_MAX_DEPTH ? MDY_MAX_DEPTH - nesting - 1 : 0;
     if (levels > room) levels = room;
     /*
      * Nothing left to nest into. The caller reads the line where it stands,
@@ -1796,8 +1804,7 @@ static size_t parse_indented_div(mdy_doc *doc, mdy_node *parent, const mdy_line 
      * and comes back round to this same test one level down.
      */
     if (levels == 0) {
-        mdy_warn(doc, lines, i, "nesting-depth",
-                 "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+        warn_depth(doc, lines, i);
         return i;
     }
 
@@ -1983,8 +1990,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
          */
         int at_depth_cap = nesting + 2 > MDY_MAX_DEPTH;
         if (at_depth_cap && (l->text[0] == '<' || list_marker(l, &(int){0})))
-            mdy_warn(doc, lines, i, "nesting-depth",
-                     "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+            warn_depth(doc, lines, i);
 
         /* --- an element opener --- */
         if (!at_depth_cap && l->text[0] == '<') {
