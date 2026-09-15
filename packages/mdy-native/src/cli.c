@@ -248,7 +248,7 @@ static char *read_stdin(size_t *len) {
         used += got;
         if (got == 0) break;
     }
-    buf = realloc(buf, used + 1);
+    buf = mdy_xrealloc(buf, used + 1);
     buf[used] = '\0';
     *len = used;
     return buf;
@@ -355,11 +355,11 @@ static void collect_message(void *ud, const char *name, const char *data_json, s
     Messages *m = ud;
     if (m->count == m->cap) {
         m->cap = m->cap ? m->cap * 2 : 8;
-        m->names = realloc(m->names, m->cap * sizeof *m->names);
-        m->json = realloc(m->json, m->cap * sizeof *m->json);
+        m->names = mdy_xrealloc(m->names, m->cap * sizeof *m->names);
+        m->json = mdy_xrealloc(m->json, m->cap * sizeof *m->json);
     }
-    m->names[m->count] = strdup(name);
-    m->json[m->count] = strdup(data_json);
+    m->names[m->count] = mdy_xstrdup(name);
+    m->json[m->count] = mdy_xstrdup(data_json);
     m->count++;
 }
 
@@ -1334,7 +1334,7 @@ static int watch_document(DocOptions *o, mdy_session *session, Outputs *emitted)
         if (!err) {
             if (!o->emit_js) report_emitted(o, emitted);
             size_t n = strlen(output);
-            if (n == 0 || output[n - 1] != '\n') { output = realloc(output, n + 2); output[n] = '\n'; output[n + 1] = 0; }
+            if (n == 0 || output[n - 1] != '\n') { output = mdy_xrealloc(output, n + 2); output[n] = '\n'; output[n + 1] = 0; }
             err = emit_output(o, output);
             free(output);
         }
@@ -1372,7 +1372,7 @@ static int cmd_document(int argc, char **argv) {
     DocOptions o = { 0 };
     const char *positionals[8];
     int npos = 0;
-    o.data = calloc((size_t)argc + 1, sizeof *o.data);
+    o.data = mdy_xcalloc((size_t)argc + 1, sizeof *o.data);
 
     /* node's parseArgs: `--name value`, `--name=value`, `-o value`, `--` ends
      * options, and an option nobody declared is an error. */
