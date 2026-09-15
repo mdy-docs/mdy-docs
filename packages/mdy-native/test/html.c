@@ -333,6 +333,15 @@ int main(void) {
     }
     reset();
     check("an empty root is an empty string", node(MDY_ROOT), "");
+    reset();
+    {
+        /* A tree built by hand can leave a string or a tag NULL. */
+        mdy_node *a = element("a"); attr(a, "href", NULL); child(a, text("x"));
+        check("a NULL string is written as an empty value", a, "<a href=\"\">x</a>");
+        mdy_node *no_tag = element(NULL); child(no_tag, text("y"));
+        mdy_node *p = element("p"); child(p, no_tag);
+        check("an element with no tag lends its children", p, "<p>y</p>");
+    }
 
     if (failures) {
         printf("\n%d check%s failed\n", failures, failures == 1 ? "" : "s");

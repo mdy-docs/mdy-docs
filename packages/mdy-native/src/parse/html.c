@@ -297,7 +297,7 @@ static void write_node(mdy_buf *b, const mdy_node *n, const mdy_node *parent,
              * a program, and `&` in one means `&`. Everywhere else `<` and `&`
              * become references.
              */
-            if (parent && parent->type == MDY_ELEMENT &&
+            if (parent && parent->type == MDY_ELEMENT && parent->tag &&
                 (strcmp(parent->tag, "script") == 0 || strcmp(parent->tag, "style") == 0)) {
                 if (n->text) mdy_buf_put(b, n->text, mdy_text_len(n));
             } else if (n->text) {
