@@ -32,19 +32,21 @@ static void attach(Builder *b, bjv *v) {
          * failed realloc never made. Failure sets `failed`, which bjv_decode
          * turns into a NULL return. */
         size_t ncap = parent->cap ? parent->cap * 2 : 8;
+        /* A value that could not be attached is freed here: nothing else
+         * holds it, and bjv_decode frees only what hangs off the root. */
         bjv **items = realloc(parent->items, ncap * sizeof *items);
-        if (!items) { b->failed = 1; return; }
+        if (!items) { b->failed = 1; bjv_free(v); return; }
         parent->items = items;
         if (parent->type == BJV_OBJECT) {
             char **keys = realloc(parent->keys, ncap * sizeof *keys);
-            if (!keys) { b->failed = 1; return; }
+            if (!keys) { b->failed = 1; bjv_free(v); return; }
             parent->keys = keys;
         }
         parent->cap = ncap;
     }
     if (parent->type == BJV_OBJECT) {
         char *k = b->pending_key ? b->pending_key : strdup("");
-        if (!k) { b->failed = 1; return; }
+        if (!k) { b->failed = 1; bjv_free(v); return; }
         parent->keys[parent->count] = k;
     }
     b->pending_key = NULL;

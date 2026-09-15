@@ -302,11 +302,7 @@ void splice_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent) {
  * that is the shape it can hold.
  */
 char *fill_tokens(mdy_engine *e, const char *s, size_t len) {
-    size_t cap = len + 256, out = 0;
-    char *result = malloc(cap);
-    if (!result) return NULL;
-    result[0] = '\0';
-
+    mdy_sbuf out = { .seed = len + 256 };
     size_t i = 0, last = 0;
     while (i < len) {
         char id[24];
@@ -320,35 +316,16 @@ char *fill_tokens(mdy_engine *e, const char *s, size_t len) {
             /* A held tree that will not serialise is not an empty token: the
              * page would be written with the rendered piece silently missing
              * and the build would report success. */
-            if (!html) { free(result); return NULL; }
+            if (!html) { free(out.s); return NULL; }
         }
         /* A token nothing holds stays as it was written, as compose.js's
          * fillTokens leaves an unknown match; only a contents placeholder,
          * which is held with no tree yet, becomes nothing. */
-        size_t plain = i - last + (h ? 0 : used);
-        size_t add = plain + (html ? strlen(html) : 0);
-        if (out + add + 1 > cap) {
-            while (out + add + 1 > cap) cap *= 2;
-            char *grown = realloc(result, cap);
-            if (!grown) { free(html); free(result); return NULL; }
-            result = grown;
-        }
-        memcpy(result + out, s + last, plain);
-        out += plain;
-        if (html) { memcpy(result + out, html, strlen(html)); out += strlen(html); free(html); }
-        result[out] = '\0';
+        mdy_sbuf_put(&out, s + last, i - last + (h ? 0 : used));
+        if (html) { mdy_sbuf_puts(&out, html); free(html); }
         i += used;
         last = i;
     }
-
-    size_t tail = len - last;
-    if (out + tail + 1 > cap) {
-        char *grown = realloc(result, out + tail + 1);
-        if (!grown) { free(result); return NULL; }
-        result = grown;
-    }
-    memcpy(result + out, s + last, tail);
-    out += tail;
-    result[out] = '\0';
-    return result;
+    mdy_sbuf_put(&out, s + last, len - last);
+    return out.s;
 }
