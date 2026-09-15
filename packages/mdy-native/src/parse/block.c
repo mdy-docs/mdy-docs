@@ -1619,7 +1619,7 @@ static size_t parse_paragraph(mdy_doc *doc, mdy_node *parent, const mdy_line *li
          * line further in than this run is another block, which is what
          * makes `top` / `  in` a paragraph and a div rather than one
          * paragraph reading "top in". */
-        if (j > i && lines[j].indent > base) break;
+        if (j > i && lines[j].indent >= base + 2) break;
         char fence_here = 0;
         const char *fl = NULL;
         size_t fll = 0;
@@ -1673,7 +1673,7 @@ static size_t parse_paragraph(mdy_doc *doc, mdy_node *parent, const mdy_line *li
      */
     const mdy_line *under = j < count ? &lines[j] : NULL;
     int setext = 0;
-    if (under && !under->blank && under->indent == base) {
+    if (under && !under->blank && under->indent < base + 2) {
         /* `^(?:(=+)|(-{4,}))[ \t]*$` — trailing whitespace is
          * decoration on either form. */
         if (underline_of(under, '=', 1)) setext = 1;
@@ -1731,7 +1731,7 @@ static size_t parse_indented_div(mdy_doc *doc, mdy_node *parent, const mdy_line 
                                  size_t count, size_t i, size_t base, size_t nesting,
                                  int *produced) {
     size_t j = i;
-    while (j < count && (lines[j].blank || lines[j].indent > base)) j++;
+    while (j < count && (lines[j].blank || lines[j].indent >= base + 2)) j++;
     while (j > i && lines[j - 1].blank) j--;
 
     size_t inner = lines[i].indent;
@@ -1739,14 +1739,13 @@ static size_t parse_indented_div(mdy_doc *doc, mdy_node *parent, const mdy_line 
         if (!lines[k].blank && lines[k].indent < inner) inner = lines[k].indent;
 
     /*
-     * EVERY TWO COLUMNS IS ONE LEVEL. The grammar says so in as many words,
-     * and it means an indent of eight is FOUR nested <div>s rather than one
-     * deep-indented one. Making a single div for any depth looks right in a
-     * two-space document and is wrong in every other: the corpus has
-     * eight-column indents that come out four levels deep.
+     * EVERY TWO COLUMNS IS ONE LEVEL — block.js opens a <div> at `base + 2`
+     * and reads its lines against that, so an indent of eight is FOUR nested
+     * <div>s rather than one deep-indented one, and a line one column in is
+     * not a block at all but the text of the run it sits in. The levels are
+     * made here at once, which is what that recursion amounts to.
      */
     size_t levels = (inner - base) / 2;
-    if (levels == 0) levels = 1;
     /*
      * One line of four hundred thousand spaces is two hundred thousand levels,
      * and this is the only construct that nests without the source growing with
@@ -1808,7 +1807,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
          * its continuation lines, so by the time this fires the indentation
          * belongs to nothing else.
          */
-        if (l->indent > base) {
+        if (l->indent >= base + 2) {
             size_t next = parse_indented_div(doc, parent, lines, count, i, base, nesting, &produced);
             if (next != i) { i = next; continue; }
             /* depth exhausted: fall through and read the line where it stands */

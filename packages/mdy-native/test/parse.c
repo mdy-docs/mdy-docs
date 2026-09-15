@@ -318,6 +318,13 @@ static void definition_checks(const mdy_options *o) {
         mdy_free(d);
     }
 
+    printf("--- mdyast: indentation, two columns a level ---\n");
+    check("one column in is the paragraph's own text", "top\n in",
+          ROOT(EL("p", "", TX("top in"))), o);
+    check("...and three columns in is one level, not two", "top\n   in",
+          ROOT(EL("p", "", TX("top")) "," EL("div", "", TX("\\n") "," EL("p", "", TX("in")) "," TX("\\n"))), o);
+    check("a setext underline one column in still underlines", "para\n ====",
+          ROOT(EL("h1", "\"id\":\"para\"", TX("para"))), o);
 }
 
 int main(void) {
