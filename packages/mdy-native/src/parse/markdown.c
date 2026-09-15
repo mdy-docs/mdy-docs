@@ -1207,7 +1207,10 @@ static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
              * returns two nodes, not one, so `foo  \nbaz` is
              * `foo`, `<br>`, `\nbaz` — the newline belongs to the text that
              * follows and merges with it, which is why this goes through
-             * text_out rather than appending a node of its own. */
+             * text_out rather than appending a node of its own. Inside an
+             * image's alt it is nothing: the alt is the text of the nodes,
+             * and a break has none. */
+            if (b->gathering) return 0;
             append(b, mdy_new_element(b->doc, "br", 2));
             text_out(b, "\n", 1);
             return 0;

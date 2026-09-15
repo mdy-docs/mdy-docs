@@ -260,6 +260,14 @@ static void markdown_raw_checks(void) {
         free(json); free(html); mdy_free(d);
     }
     {
+        const char *why = NULL;
+        mdy_doc *d = mdy_markdown_parse("![a  \nb](x)\n", 0, &why);
+        char *html = d ? mdy_to_html(mdy_root(d), NULL) : NULL;
+        ok_("a hard break inside an image's alt is nothing, not a <br> beside the image",
+            html && strstr(html, "alt=\"ab\"") && !strstr(html, "<br>"), html ? html : why);
+        free(html); mdy_free(d);
+    }
+    {
         char *deep = malloc(300 * 3 + 16);
         size_t n = 0;
         for (int i = 0; i < 300; i++) n += (size_t)sprintf(deep + n, "<b>");
