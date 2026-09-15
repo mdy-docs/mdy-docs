@@ -15,13 +15,13 @@
  * broker-facing side — `mdy dead` talking to a wedged broker, below — for
  * which node has no equivalent either.
  */
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, unlinkSync, mkdirSync, renameSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +29,12 @@ import { encode } from '../../../third_party/nisaba-db/third_party/binjson/js/bi
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = process.env.MDY_CLI ?? join(here, '..', 'build', 'mdy');
+
+/* Every site here gets a throwaway directory; collect them and remove the
+ * lot at the end rather than leaving one per test under . */
+const temps = [];
+const mkTemp = () => { const d = mkdtempSync(join(tmpdir(), 'mdy-dev-')); temps.push(d); return d; };
+after(() => { for (const d of temps) rmSync(d, { recursive: true, force: true }); });
 
 /* One delivery, in the shape sukkal POSTs: an array of jobs. A `payload` is
  * not needed to reach what is under test and would only say less clearly what
@@ -81,7 +87,7 @@ function startDev(root, extra = []) {
 }
 
 test('a delivery arriving before the first good build is held, not fatal', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), BROKEN);
 
   const dev = startDev(root);
@@ -137,7 +143,7 @@ test('a delivery arriving before the first good build is held, not fatal', async
  * to be refused and, the part that matters, the SERVER to still be there.
  */
 test('a request bigger than the cap is refused, and the server survives', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), WORKING);
 
   const dev = startDev(root);
@@ -211,7 +217,7 @@ test('a request bigger than the cap is refused, and the server survives', async 
  * this waits longer than that and no longer than it has to.
  */
 test('a client that stops reading does not stall the server', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'),
     '% $.emit("big.html", "x".repeat(16 * 1024 * 1024))\n= big\n');
 
@@ -324,7 +330,7 @@ test('a broker that refuses a publish is reported, and the server goes on', asyn
   await new Promise((r) => broker.listen(0, '127.0.0.1', r));
   const brokerPort = broker.address().port;
 
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'),
     "% $.publish('handlers.thing', { n: 1 })\n= main\n");
   writeFileSync(join(root, 'thing.mdy'),
@@ -412,7 +418,7 @@ test('a rebuild re-publishes a value that changed, and only one that changed', a
   await new Promise((r) => broker.listen(0, '127.0.0.1', r));
   const brokerPort = broker.address().port;
 
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   let body = 0;
   const write = (n) =>
     writeFileSync(join(root, 'main.mdy'),
@@ -468,7 +474,7 @@ test('a rebuild re-publishes a value that changed, and only one that changed', a
 });
 
 test('a queued message whose page has gone is returned, not marked done', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), "% $.publish('handlers.a', { n: 1 })\n= main\n");
   writeFileSync(join(root, 'a.mdy'),
     '+++\nmessageName: handlers.a\n+++\n% throw new Error("later")\n= handler\n');
@@ -500,7 +506,7 @@ test('a queued message whose page has gone is returned, not marked done', async 
  * or a message that failed would bounce between the two forever.
  */
 test('the dead-letter channel with no page is still kept, not returned', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), "% $.publish('handlers.b', { n: 1 })\n= main\n");
   writeFileSync(join(root, 'b.mdy'),
     '+++\nmessageName: handlers.b\n+++\n% throw new Error("nope")\n= handler\n');
@@ -540,7 +546,7 @@ function runCli(args) {
 }
 
 test('an unknown option is named, rather than taken for the site directory', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-cli-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), '= main\n');
 
   for (const args of [
@@ -558,7 +564,7 @@ test('an unknown option is named, rather than taken for the site directory', asy
 });
 
 test("an option whose value is missing says so", async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-cli-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), '= main\n');
 
   for (const [args, opt] of [
@@ -574,20 +580,44 @@ test("an option whose value is missing says so", async () => {
   }
 });
 
-test('what is valid still works, and `--` still escapes', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-cli-'));
-  writeFileSync(join(root, 'main.mdy'), '% $.emit("i.html", "x")\n= main\n');
-  const out = mkdtempSync(join(tmpdir(), 'mdy-out-'));
+test('the build knobs each change what is built, and `--` still escapes', async () => {
+  /* The entry branches on the two context flags the build passes as `req`, so
+   * each flag has an OBSERVABLE effect — an extra emitted page — rather than
+   * just an exit code. --quiet is observable the other way: no summary line. */
+  const root = mkTemp();
+  writeFileSync(join(root, 'main.mdy'),
+    '% $.emit("always.html", "x")\n' +
+    '% if (req.drafts ?? false) $.emit("draft.html", "d")\n' +
+    '% if (req.future ?? false) $.emit("future.html", "f")\n' +
+    '= main\n');
 
-  for (const args of [
-    ['build', root, '--out', out],
-    ['build', root, '--out', out, '--drafts'],
-    ['build', root, '--out', out, '--future', '--quiet'],
-    ['build', '--help'],
-  ]) {
-    const { code } = await runCli(args);
-    assert.equal(code, 0, `${args.join(' ')} should succeed`);
-  }
+  const build = async (flags) => {
+    const out = mkTemp();                 /* a fresh out per case: no carryover */
+    const { code, out: text } = await runCli(['build', root, '--out', out, ...flags]);
+    assert.equal(code, 0, `build ${flags.join(' ')} should succeed`);
+    return { text, files: readdirSync(out) };
+  };
+
+  const plain = await build([]);
+  assert.deepEqual(plain.files.sort(), ['always.html'],
+    'neither draft nor future page without the flags');
+  assert.match(plain.text, /built .*page/, 'and the default build says what it did');
+
+  const drafts = await build(['--drafts']);
+  assert.ok(drafts.files.includes('draft.html'), '--drafts emits the draft page');
+  assert.ok(!drafts.files.includes('future.html'), 'and only that one');
+
+  const future = await build(['--future']);
+  assert.ok(future.files.includes('future.html'), '--future emits the future page');
+  assert.ok(!future.files.includes('draft.html'), 'and only that one');
+
+  const quiet = await build(['--quiet']);
+  assert.ok(quiet.files.includes('always.html'), '--quiet still builds');
+  assert.doesNotMatch(quiet.text, /built/, 'but prints no summary');
+
+  const help = await runCli(['build', '--help']);
+  assert.equal(help.code, 0);
+  assert.match(help.out, /mdy build/, '--help prints the usage');
 
   /* The escape the error message points at: a positional that starts with `-`
    * is reachable after `--`. It fails because no such directory exists, which
@@ -601,7 +631,7 @@ test('dev refuses a port already in use', async () => {
   /* Two servers must not silently share a port — the second one has to say
    * the port is taken and exit, not quietly bind nothing. SO_REUSEADDR lets a
    * port in TIME_WAIT be reused, but not one that is actively listening. */
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), '% $.emit("i.html", "x")\n= main\n');
 
   const first = startDev(root);
@@ -648,7 +678,7 @@ const getHead = (port, path) =>
   });
 
 test('dev serves the site, injects live-reload, types static files, and 404s the unknown', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'),
     '% $.emit("index.html", "<html><body>home</body></html>")\n= x\n');
   mkdirSync(join(root, 'static'), { recursive: true });
@@ -686,7 +716,7 @@ test('dev serves the site, injects live-reload, types static files, and 404s the
 });
 
 test("dev serves a site's own 404.html for the unknown, when it has one", async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'),
     '% $.emit("index.html", "<html><body>home</body></html>")\n' +
     '% $.emit("404.html", "<html><body>custom not found</body></html>")\n= x\n');
@@ -726,7 +756,7 @@ async function untilRebuilds(dev, atLeast, ms = 15000) {
 }
 
 test('the watcher notices a sibling .yaml change and a deletion, not just the entry', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'), '% $.emit("index.html", "x")\n= x\n');
   writeFileSync(join(root, 'data.yaml'), 'a: 1\n');
   writeFileSync(join(root, 'note.md'), 'first\n');
@@ -753,7 +783,7 @@ test('the watcher notices a sibling .yaml change and a deletion, not just the en
 });
 
 test('an atomic save (write a temp, rename over) is picked up', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'),
     '% $.emit("index.html", "<html><body>before</body></html>")\n= x\n');
 
@@ -777,7 +807,7 @@ test('an atomic save (write a temp, rename over) is picked up', async () => {
 });
 
 test('a burst of writes coalesces into far fewer rebuilds than writes', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const root = mkTemp();
   const main = join(root, 'main.mdy');
   writeFileSync(main, '% $.emit("index.html", "x")\n= 0\n');
 

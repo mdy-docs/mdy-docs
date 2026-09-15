@@ -13,10 +13,10 @@
  * test/cli.test.js is the wrong place for a difference rather than an
  * agreement.
  */
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const bin = process.env.MDY_CLI ?? join(here, '..', 'build', 'mdy');
 
 const dir = mkdtempSync(join(tmpdir(), 'mdy-doc-'));
+after(() => rmSync(dir, { recursive: true, force: true }));
 const MARKDOWN = '# Hello\n\nSome *markdown* and a [link](https://example.com).\n';
 const RECORD = 'title: A record\ncount: 3\ntags:\n  - one\n  - two\n';
 

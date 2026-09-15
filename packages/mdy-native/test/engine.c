@@ -46,18 +46,25 @@ static char last_emit_content[4096];
  * a message can go missing without anything failing. Collected and asserted
  * rather than printed for a reader to look at.
  */
-static char warnings[8][512];
+/* The first WARN_STORE messages are kept in full for `warned()` to look at;
+ * `warning_count` is the TRUE total, incremented past the store, so a "these
+ * are the only two" assertion catches a ninth warning instead of a silent
+ * cap swallowing it. Reads of the array below stay inside WARN_STORE. */
+#define WARN_STORE 8
+static char warnings[WARN_STORE][512];
 static size_t warning_count;
 
 static void collect_warning(void *ud, size_t doc_index, uint32_t line, uint32_t column,
                             const char *rule, const char *reason) {
     (void)ud; (void)doc_index; (void)line; (void)column; (void)rule;
-    if (warning_count < 8) snprintf(warnings[warning_count++], 512, "%s", reason ? reason : "");
+    if (warning_count < WARN_STORE) snprintf(warnings[warning_count], 512, "%s", reason ? reason : "");
+    warning_count++;
 }
 
-/* Whether any message said this, in full. */
+/* Whether any of the kept messages said this, in full. */
 static int warned(const char *exact) {
-    for (size_t i = 0; i < warning_count; i++)
+    size_t kept = warning_count < WARN_STORE ? warning_count : WARN_STORE;
+    for (size_t i = 0; i < kept; i++)
         if (strcmp(warnings[i], exact) == 0) return 1;
     return 0;
 }
@@ -350,7 +357,8 @@ static void data_file_checks(void) {
         warning_count ? warnings[0] : "(nothing was said)");
     {
         int found = 0;
-        for (size_t i = 0; i < warning_count; i++)
+        size_t kept = warning_count < WARN_STORE ? warning_count : WARN_STORE;
+        for (size_t i = 0; i < kept; i++)
             if (strstr(warnings[i], "plus.yaml keeps its raw identity, no parsed fields")) found = 1;
         ok_("...and one the reader could not parse says why, and keeps its identity",
             found, warning_count > 1 ? warnings[1] : "(nothing was said)");

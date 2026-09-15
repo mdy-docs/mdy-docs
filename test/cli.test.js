@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, cpSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, cpSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -17,7 +17,10 @@ const spawnCliSync = (args, options) => spawnSync(cli[0], [...cli.slice(1), ...a
 const example = (name) => join(here, '..', 'examples', name);
 const exampleBlog = join(here, '..', 'examples', 'blog');
 const exampleBlogStyleX = join(here, '..', 'examples', 'blog-style-x');
-const workdir = () => mkdtempSync(join(tmpdir(), 'mdy-'));
+const temps = [];
+// Removed at the end of the run rather than left one-per-test under $TMPDIR.
+const workdir = () => { const d = mkdtempSync(join(tmpdir(), 'mdy-')); temps.push(d); return d; };
+after(() => { for (const d of temps) rmSync(d, { recursive: true, force: true }); });
 // blog/main.mdy imports "../blog-style-x" — copy it as a real sibling,
 // not just blog itself, so a copied fixture resolves the same way the real
 // examples/ directory does.
