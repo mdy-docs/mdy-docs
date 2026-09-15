@@ -797,7 +797,10 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
          * one it stays literal text, which is what the JavaScript does and
          * why definitions are collected before any of this runs.
          */
-        mdy_footnote *note = mdy_footnote_find(ctx->doc, body + 1, body_len - 1);
+        const char *id = body + 1;
+        size_t id_len = body_len - 1;
+        cut(&id, &id_len);                              /* `label.slice(1).trim()` */
+        mdy_footnote *note = mdy_footnote_find(ctx->doc, id, id_len);
         if (!note) return 0;
         int n = mdy_footnote_reference(ctx->doc, note);
 
@@ -805,7 +808,7 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
         /* Sized to the label: at buf[256] a long id truncated the `href` (with
          * its leading `#`) one byte earlier than the `id`, so the ref pointed
          * at an anchor that did not exist. */
-        size_t cap = strlen(pre) + strlen(note->id) + 32;
+        size_t cap = strlen(pre) + strlen(note->safe) + 32;
         char stackbuf[256];
         char *buf = cap <= sizeof stackbuf ? stackbuf : malloc(cap);
         if (!buf) mdy_oom_exit();
@@ -813,10 +816,10 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
         mdy_node *sup = mdy_new_element(ctx->doc, "sup", 3);
         mdy_node *a = mdy_new_element(ctx->doc, "a", 1);
 
-        snprintf(buf, cap, "#%sfn-%s", pre, note->id);
+        snprintf(buf, cap, "#%sfn-%s", pre, note->safe);
         mdy_set_string(ctx->doc, a, "href", buf, strlen(buf));
-        if (n > 1) snprintf(buf, cap, "%sfnref-%s-%d", pre, note->id, n);
-        else snprintf(buf, cap, "%sfnref-%s", pre, note->id);
+        if (n > 1) snprintf(buf, cap, "%sfnref-%s-%d", pre, note->safe, n);
+        else snprintf(buf, cap, "%sfnref-%s", pre, note->safe);
         mdy_set_string(ctx->doc, a, "id", buf, strlen(buf));
         mdy_set_bool(ctx->doc, a, "dataFootnoteRef", 1);
         mdy_set_string(ctx->doc, a, "ariaDescribedBy", "footnote-label", 14);

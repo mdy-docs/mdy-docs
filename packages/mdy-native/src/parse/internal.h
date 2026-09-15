@@ -173,8 +173,9 @@ int mdy_hindex_put(mdy_doc *doc, mdy_hindex *ix, const char *key, uint64_t tag, 
  *     no referenced footnotes gets no section at all.
  */
 typedef struct {
-    const char *id;         /* interned */
-    const char *content;    /* arena-owned, the text after the colon */
+    const char *id;         /* interned, as written */
+    const char *safe;       /* the id in an anchor: runs of [^\w-] replaced by `-` */
+    const char *content;    /* arena-owned, the text after the colon; NULL until defined */
     size_t content_len;
     int number;             /* 1-based, assigned at first reference; 0 = unreferenced */
     int refs;               /* how many references have been seen */

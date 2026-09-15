@@ -18,6 +18,11 @@
 #include "internal.h"
 
 static void trim(const char **s, size_t *len);
+static int definition_line(const mdy_line *l, const char **id, size_t *id_len,
+                           const char **content, size_t *content_len);
+static size_t parse_definition(mdy_doc *doc, const mdy_line *lines, size_t count, size_t i,
+                               const char *id, size_t id_len,
+                               const char *head, size_t head_len);
 
 void mdy_options_default(mdy_options *out) {
     out->documents = 0;
@@ -1632,6 +1637,11 @@ static size_t parse_paragraph(mdy_doc *doc, mdy_node *parent, const mdy_line *li
         if (j > i && (lines[j].text[0] == '=' || lines[j].text[0] == '<' ||
                       list_marker(&lines[j], &ordered_here) ||
                       thematic_break(&lines[j]))) break;
+        {
+            const char *did, *dcontent;
+            size_t did_len, dcontent_len;
+            if (j > i && definition_line(&lines[j], &did, &did_len, &dcontent, &dcontent_len)) break;
+        }
         total += lines[j].len + 1;
         j++;
     }
@@ -1924,6 +1934,16 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
             }
         }
 
+        /* --- a footnote definition, and the lines that run on from it --- */
+        {
+            const char *id, *content;
+            size_t id_len, content_len;
+            if (definition_line(l, &id, &id_len, &content, &content_len)) {
+                i = parse_definition(doc, lines, count, i, id, id_len, content, content_len);
+                continue;
+            }
+        }
+
         /*
          * At the nesting cap, an element or a list is read as flat paragraph
          * text rather than recursed into: parse_element and parse_list both
@@ -1971,135 +1991,140 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
 /* ---- footnote definitions ------------------------------------------------ */
 
 /*
- * `[[ ^id ]]: text`, collected out of the line stream before anything is
- * parsed — a reference only becomes a footnote if its definition exists, so
- * this has to happen first.
- *
- * A collected line is blanked rather than removed. Blank is exactly what a
- * removed line means to every rule below: it separates blocks and produces
- * nothing.
- *
- * `lines` is NON-const on purpose — unlike the parse functions, this pass
- * rewrites the lines it consumes (blanking each definition), which is why it
- * runs before them.
+ * `[[ ^id ]]: text` — footnote.js's definitionLine,
+ * `^\[\[[ \t]*\^([^\]|]+?)[ \t]*\]\][ \t]*:[ \t]*(.*)$`, on a line's text
+ * after its indentation. The id may hold spaces; it may not hold `]` or `|`.
  */
-static void collect_definitions(mdy_doc *doc, mdy_line *lines, size_t count) {
+static int definition_line(const mdy_line *l, const char **id, size_t *id_len,
+                           const char **content, size_t *content_len) {
+    const char *t = l->text;
+    size_t len = l->len;
+    if (len < 7 || t[0] != '[' || t[1] != '[') return 0;
+    size_t k = 2;
+    while (k < len && (t[k] == ' ' || t[k] == '\t')) k++;
+    if (k >= len || t[k] != '^') return 0;
+    k++;
+    size_t id_start = k;
+    while (k < len && t[k] != ']' && t[k] != '|') k++;
+    if (k + 1 >= len || t[k] != ']' || t[k + 1] != ']') return 0;
+    size_t id_end = k;
+    while (id_end > id_start && (t[id_end - 1] == ' ' || t[id_end - 1] == '\t')) id_end--;
+    if (id_end == id_start) return 0;
+    k += 2;
+    while (k < len && (t[k] == ' ' || t[k] == '\t')) k++;
+    if (k >= len || t[k] != ':') return 0;
+    k++;
+    while (k < len && (t[k] == ' ' || t[k] == '\t')) k++;
+    *id = t + id_start;
+    *id_len = id_end - id_start;
+    *content = t + k;
+    *content_len = len - k;
+    return 1;
+}
+
+/*
+ * The ids that have a definition somewhere in the document — footnote.js's
+ * findDefinitions, over every line, fences and list items included. A
+ * reference is a reference only when its id is known, and a definition may
+ * come after the text that points at it, so this runs before any line is
+ * parsed. What each note SAYS is read where the grammar reaches its
+ * definition (parse_definition); until then it is known and undefined.
+ */
+static void find_definitions(mdy_doc *doc, const mdy_line *lines, size_t count) {
     for (size_t i = 0; i < count; i++) {
-        mdy_line *l = &lines[i];
-        /* `[[^x]]:` is the shortest definition — seven characters. `< 8`
-         * rejected it while accepting the same thing with spaces, `[[ ^x ]]:`. */
-        if (l->len < 7 || l->text[0] != '[' || l->text[1] != '[') continue;
-
-        size_t k = 2;
-        while (k < l->len && (l->text[k] == ' ' || l->text[k] == '\t')) k++;
-        if (k >= l->len || l->text[k] != '^') continue;
-        k++;
-
-        size_t id_start = k;
-        while (k < l->len && l->text[k] != ' ' && l->text[k] != '\t' && l->text[k] != ']') k++;
-        size_t id_len = k - id_start;
-        if (id_len == 0) continue;
-
-        while (k < l->len && (l->text[k] == ' ' || l->text[k] == '\t')) k++;
-        if (k + 2 >= l->len || l->text[k] != ']' || l->text[k + 1] != ']' || l->text[k + 2] != ':') continue;
-        k += 3;
-
-        /*
-         * A definition's content runs on: following non-blank lines belong to
-         * it, joined with a space exactly as a paragraph's do, and it ends at
-         * a blank line. Taking only the marker line left every continuation
-         * behind as a stray paragraph in the body of the document — which is
-         * what `p` being 26 too high was, and why several documents showed
-         * footnote prose where their Footnotes section should have been.
-         */
-        const char *head = l->text + k;
-        size_t head_len = l->len - k;
-        trim(&head, &head_len);
-
-        size_t last = i;
-        size_t total = head_len;
-        while (last + 1 < count && !lines[last + 1].blank) {
-            /* Another definition starts its own; it does not continue this. */
-            const mdy_line *next = &lines[last + 1];
-            if (next->len > 4 && next->text[0] == '[' && next->text[1] == '[') {
-                size_t probe = 2;
-                while (probe < next->len && (next->text[probe] == ' ' || next->text[probe] == '\t')) probe++;
-                if (probe < next->len && next->text[probe] == '^') break;
-            }
-            last++;
-            total += next->len + 1;
-        }
-
-        char *joined = mdy_alloc(&doc->arena, total + 1);
-        size_t jo = 0;
-        memcpy(joined, head, head_len);
-        jo = head_len;
-        for (size_t r = i + 1; r <= last; r++) {
-            if (jo) joined[jo++] = ' ';
-            memcpy(joined + jo, lines[r].text, lines[r].len);
-            jo += lines[r].len;
-        }
-        joined[jo] = '\0';
-
-        const char *content = joined;
-        size_t content_len = jo;
-        trim(&content, &content_len);
-
-        /*
-         * A LATER definition with the same id replaces an earlier one. The
-         * reference corpus leans on this hard — one file has 402 definitions
-         * with 360 distinct ids — and keeping the first instead of the last
-         * cost 135 links, because the definitions being shadowed were the
-         * short ones and the definitions doing the shadowing were full of
-         * citations.
-         */
-        mdy_footnote *existing = mdy_footnote_find(doc, l->text + id_start, id_len);
-        if (existing) {
-            existing->content = mdy_strdup_n(&doc->arena, content, content_len);
-            existing->content_len = content_len;
-            for (size_t r = i; r <= last; r++) { lines[r].len = 0; lines[r].blank = 1; }
-            i = last;
-            continue;
-        }
+        const char *id, *content;
+        size_t id_len, content_len;
+        if (!definition_line(&lines[i], &id, &id_len, &content, &content_len)) continue;
+        if (mdy_footnote_find(doc, id, id_len)) continue;
 
         if (doc->note_count == doc->note_cap) {
             size_t grown = doc->note_cap ? doc->note_cap * 2 : 16;
             mdy_footnote *next = mdy_alloc(&doc->arena, sizeof *next * grown);
-            if (!next) return;
             for (size_t n = 0; n < doc->note_count; n++) next[n] = doc->notes[n];
             doc->notes = next;
             doc->note_cap = grown;
         }
         mdy_footnote *note = &doc->notes[doc->note_count++];
-        note->id = mdy_intern(&doc->arena, &doc->names, l->text + id_start, id_len);
-        note->content = mdy_strdup_n(&doc->arena, content, content_len);
-        note->content_len = content_len;
+        note->id = mdy_intern(&doc->arena, &doc->names, id, id_len);
+        /* footnote.js's anchor(): `id.replace(/[^\w-]+/g, '-')`, \w being
+         * ASCII letters, digits and `_`. */
+        {
+            char *safe = mdy_alloc(&doc->arena, id_len + 1);
+            size_t o = 0;
+            for (size_t k = 0; k < id_len; k++) {
+                unsigned char c = (unsigned char)id[k];
+                int word = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                           (c >= '0' && c <= '9') || c == '_' || c == '-';
+                if (word) safe[o++] = (char)c;
+                else if (o == 0 || safe[o - 1] != '-' || (k > 0 && id[k - 1] == '-')) safe[o++] = '-';
+            }
+            safe[o] = '\0';
+            note->safe = safe;
+        }
+        note->content = NULL;
+        note->content_len = 0;
         note->number = 0;
         note->refs = 0;
 
         /* Keep the id -> index map mdy_footnote_find reads in step, and build
-         * it once from notes[] when the list grows past the threshold. The
-         * key is the note's own interned id. */
+         * it once from notes[] when the list grows past the threshold. */
         if (doc->note_index) {
-            if (!mdy_hindex_put(doc, doc->note_index, note->id, 0, doc->note_count - 1))
-                doc->note_index = NULL;
-        } else if (!doc->note_noindex && doc->note_count >= MDY_HINDEX_THRESHOLD) {
+            mdy_hindex_put(doc, doc->note_index, note->id, 0, doc->note_count - 1);
+        } else if (doc->note_count >= MDY_HINDEX_THRESHOLD) {
             mdy_hindex *ix = mdy_alloc(&doc->arena, sizeof *ix);
-            if (!ix) {
-                doc->note_noindex = 1;
-            } else {
-                memset(ix, 0, sizeof *ix);
-                int ok = 1;
-                for (size_t ni = 0; ni < doc->note_count && ok; ni++)
-                    ok = mdy_hindex_put(doc, ix, doc->notes[ni].id, 0, ni);
-                if (ok) doc->note_index = ix;
-                else doc->note_noindex = 1;
-            }
+            memset(ix, 0, sizeof *ix);
+            for (size_t ni = 0; ni < doc->note_count; ni++)
+                mdy_hindex_put(doc, ix, doc->notes[ni].id, 0, ni);
+            doc->note_index = ix;
         }
-
-        for (size_t r = i; r <= last; r++) { lines[r].len = 0; lines[r].blank = 1; }
-        i = last;
     }
+}
+
+/*
+ * A definition where the grammar reaches it, and the lines that run on from
+ * it: every following line joins the note, indented or not, until a blank
+ * line, another definition, a heading or a thematic break — block.js's
+ * defineFootnote. A later definition of the same id replaces an earlier one.
+ * Returns the first line after the definition.
+ */
+static size_t parse_definition(mdy_doc *doc, const mdy_line *lines, size_t count, size_t i,
+                               const char *id, size_t id_len,
+                               const char *head, size_t head_len) {
+    trim(&head, &head_len);
+    size_t last = i;
+    size_t total = head_len;
+    while (last + 1 < count) {
+        const mdy_line *next = &lines[last + 1];
+        const char *nid, *ncontent;
+        size_t nid_len, ncontent_len;
+        if (next->blank || definition_line(next, &nid, &nid_len, &ncontent, &ncontent_len) ||
+            next->text[0] == '=' || thematic_break(next))
+            break;
+        last++;
+        total += next->len + 1;
+    }
+
+    char *joined = mdy_alloc(&doc->arena, total + 1);
+    memcpy(joined, head, head_len);
+    size_t jo = head_len;
+    for (size_t r = i + 1; r <= last; r++) {
+        const char *t = lines[r].text;
+        size_t n = lines[r].len;
+        mdy_trim_end(&t, &n);
+        joined[jo++] = ' ';
+        memcpy(joined + jo, t, n);
+        jo += n;
+    }
+    const char *content = joined;
+    size_t content_len = jo;
+    trim(&content, &content_len);
+
+    mdy_footnote *note = mdy_footnote_find(doc, id, id_len);
+    if (note) {
+        note->content = content;
+        note->content_len = content_len;
+    }
+    return last + 1;
 }
 
 /* ---- front matter and documents ------------------------------------------ */
@@ -2228,7 +2253,7 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
         if (doc->matter_count == 0) record_matter(doc, NULL, 0, 0, 0);
         size_t body = count - start;
         strip_comments(lines + start, &body);
-        collect_definitions(doc, lines + start, body);
+        find_definitions(doc, lines + start, body);
         mdy_parse_block(doc, doc->root, lines + start, body, 0, 0);
         mdy_footnote_section(doc, doc->root);
         return doc;
@@ -2295,7 +2320,7 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
          * scan above still expects them. */
         size_t body = section_end - section_start;
         strip_comments(lines + section_start, &body);
-        collect_definitions(doc, lines + section_start, body);
+        find_definitions(doc, lines + section_start, body);
 
         if (wrapper_len == 0) {
             /* `documents: {wrapper: false}` — they run together, with no

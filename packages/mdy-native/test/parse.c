@@ -275,6 +275,51 @@ static void markdown_raw_checks(void) {
     }
 }
 
+/*
+ * Definitions where the grammar reaches them, as block.js reads them: an id
+ * is known wherever its definition line is, but what the note says is read
+ * only where a definition is a block of its own.
+ */
+static void definition_checks(const mdy_options *o) {
+    printf("--- mdyast: footnote definitions ---\n");
+    struct { const char *what, *source, *has, *lacks; } cases[] = {
+        { "a definition inside a fence is known but not defined: a reference, no note",
+          "```\n[[^x]]: note\n```\nsee [[^x]]\n",
+          "user-content-fnref-x", "<section" },
+        { "a definition line inside a list item is the item's text",
+          "- a\n[[^x]]: note\n",
+          "<li>a <sup>", "<section" },
+        { "a definition stops at a heading, which is still a heading",
+          "[[^x]]: note\n= Head\n\nsee [[^x]]\n",
+          "<h1 id=\"head\">Head</h1>", "note = Head" },
+        { "...and at a thematic break",
+          "[[^x]]: note\n---\nsee [[^x]]\n",
+          "<hr>", "note ---" },
+        { "...but runs on over an indented line",
+          "[[^x]]: one\n    two\n\nsee [[^x]]\n",
+          "<p>one two <a", NULL },
+        { "an id may hold a space, and its anchor replaces what \\w does not cover",
+          "[[ ^my note ]]: text\n\nsee [[ ^my note ]]\n",
+          "href=\"#user-content-fn-my-note\"", "my note\"" },
+        { "the later of two definitions wins",
+          "[[^x]]: first\n\n[[^x]]: second\n\nsee [[^x]]\n",
+          "<p>second <a", "first" },
+        { "a definition closes the paragraph above it",
+          "para\n[[^x]]: note\nsee [[^x]]\n",
+          "<p>para</p>", "para [[" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        mdy_doc *d = mdy_parse(cases[i].source, 0, o);
+        char *html = mdy_to_html(mdy_root(d), NULL);
+        ok_(cases[i].what,
+            html && strstr(html, cases[i].has) && (!cases[i].lacks || !strstr(html, cases[i].lacks)),
+            html);
+        free(html);
+        mdy_free(d);
+    }
+
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -443,6 +488,7 @@ int main(void) {
           ROOT(EL("p", "", TX("body"))), &o);
     footnote_scale_checks(&o);
     intern_checks();
+    definition_checks(&o);
     markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");

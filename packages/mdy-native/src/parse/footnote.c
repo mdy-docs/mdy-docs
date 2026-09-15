@@ -70,8 +70,13 @@ static const char *ref_id(mdy_doc *doc, const char *lead, const char *kind, cons
 }
 
 void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
-    /* Every number belongs to exactly one note, so none means none referenced. */
-    if (doc->next_number == 0) return;
+    /* Only a referenced note that was also defined is listed; a reference
+     * to an id whose definition sat inside a fence or a list item has a
+     * number and nothing to list. No items, no section. */
+    int listed = 0;
+    for (int want = 1; want <= doc->next_number; want++)
+        if (doc->notes[doc->note_order[want - 1]].content) listed = 1;
+    if (!listed) return;
 
     mdy_node *section = mdy_new_element(doc, "section", 7);
     mdy_set_bool(doc, section, "dataFootnotes", 1);
@@ -96,11 +101,12 @@ void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
      */
     for (int want = 1; want <= doc->next_number; want++) {
         mdy_footnote *note = &doc->notes[doc->note_order[want - 1]];
+        if (!note->content) continue;
 
         mdy_node *li = mdy_new_element(doc, "li", 2);
         /* Once: ref_id copies into the arena, and calling it for the string
          * and again for its length made two of every footnote's id. */
-        const char *fn = ref_id(doc, "", "fn-", note->id, 1);
+        const char *fn = ref_id(doc, "", "fn-", note->safe, 1);
         mdy_set_string(doc, li, "id", fn, strlen(fn));
         mdy_append(li, mdy_new_text(doc, "\n", 1));
 
@@ -115,7 +121,7 @@ void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
         for (int n = 1; n <= note->refs; n++) {
             mdy_append(p, mdy_new_text(doc, " ", 1));
             mdy_node *back = mdy_new_element(doc, "a", 1);
-            const char *href = ref_id(doc, "#", "fnref-", note->id, n);
+            const char *href = ref_id(doc, "#", "fnref-", note->safe, n);
             mdy_set_string(doc, back, "href", href, strlen(href));
             mdy_set_bool(doc, back, "dataFootnoteBackref", 1);
             mdy_set_string(doc, back, "ariaLabel", "Back to content", 15);
