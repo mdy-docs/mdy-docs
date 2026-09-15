@@ -266,29 +266,58 @@ char *js_string_utf8(JsValue v) {
  * limit the branch is dropped, which is the answer the parser gives text
  * nested that deep.
  */
-static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth);
+/*
+ * One conversion's walk: the objects on the path down from the root, so a
+ * node that is its own ancestor is refused rather than descended for ever,
+ * and how many nodes have been made, so a tree that names one subtree from
+ * many places — legal, and exponential in its depth — stops at a budget.
+ * Both are what JSON.stringify would do with the same value, give or take
+ * the budget.
+ */
+typedef struct {
+    JsValue path[MDY_MAX_DEPTH];
+    size_t nodes;
+} Walk;
+
+static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth, Walk *w);
 
 mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v) {
-    return js_to_tree_at(e, doc, v, 0);
+    Walk w = { .nodes = 0 };
+    e->compose.tree_fault = NULL;
+    return js_to_tree_at(e, doc, v, 0, &w);
 }
 
 static void js_children_to_tree_at(mdy_engine *e, mdy_doc *doc, mdy_node *parent,
-                                   JsValue kids, size_t depth) {
+                                   JsValue kids, size_t depth, Walk *w) {
     if (!js_is_array(kids)) return;
     uint32_t n = js_array_length(kids);
-    for (uint32_t i = 0; i < n; i++) {
-        mdy_node *child = js_to_tree_at(e, doc, js_array_get(kids, i), depth);
+    for (uint32_t i = 0; i < n && !e->compose.tree_fault; i++) {
+        mdy_node *child = js_to_tree_at(e, doc, js_array_get(kids, i), depth, w);
         if (child) mdy_append(parent, child);
     }
 }
 
 void js_children_to_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent, JsValue kids) {
-    js_children_to_tree_at(e, doc, parent, kids, 1);
+    Walk w = { .nodes = 0 };
+    e->compose.tree_fault = NULL;
+    js_children_to_tree_at(e, doc, parent, kids, 1, &w);
 }
 
-static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth) {
+static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t depth, Walk *w) {
+    if (e->compose.tree_fault) return NULL;
     if (depth >= MDY_MAX_DEPTH) return NULL;
     if (!js_is_object(v)) return NULL;
+    for (size_t i = 0; i < depth; i++) {
+        if (js_same_value(w->path[i], v)) {
+            e->compose.tree_fault = "mdy: the tree refers to itself: a node is its own ancestor";
+            return NULL;
+        }
+    }
+    if (++w->nodes > MDY_TREE_NODES_MAX) {
+        e->compose.tree_fault = "mdy: the tree has more nodes than this engine will convert";
+        return NULL;
+    }
+    w->path[depth] = v;
 
     char *type = js_string_utf8(get_val(e, v, "type"));
     if (!type) return NULL;
@@ -308,7 +337,7 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
         if (out) {
             out->type = MDY_ROOT;
             out->text = NULL;
-            js_children_to_tree_at(e, doc, out, get_val(e, v, "children"), depth + 1);
+            js_children_to_tree_at(e, doc, out, get_val(e, v, "children"), depth + 1, w);
         }
     } else if (strcmp(type, "element") == 0) {
         char *tag = js_string_utf8(get_val(e, v, "tagName"));
@@ -353,7 +382,7 @@ static mdy_node *js_to_tree_at(mdy_engine *e, mdy_doc *doc, JsValue v, size_t de
                     free(pname);
                 }
             }
-            js_children_to_tree_at(e, doc, out, get_val(e, v, "children"), depth + 1);
+            js_children_to_tree_at(e, doc, out, get_val(e, v, "children"), depth + 1, w);
         }
     }
 

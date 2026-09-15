@@ -1493,6 +1493,11 @@ static bool node_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     mdy_doc *doc = mdy_doc_new();
     if (!doc) { *result = js_undefined(); return true; }
     mdy_node *root = js_to_tree(e, doc, args[0]);
+    if (e->compose.tree_fault) {
+        mdy_free(doc);
+        *result = str(e->vm, e->compose.tree_fault, strlen(e->compose.tree_fault));
+        return false;
+    }
     /*
      * `mdy_doc` owns its root, so what came back is hung under it — a root
      * lends its children, and a single element becomes the document's one
@@ -1550,6 +1555,11 @@ static bool html_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     mdy_doc *doc = mdy_doc_new();
     if (!doc) { *result = js_undefined(); return true; }
     mdy_node *root = js_to_tree(e, doc, args[0]);
+    if (e->compose.tree_fault) {
+        mdy_free(doc);
+        *result = str(e->vm, e->compose.tree_fault, strlen(e->compose.tree_fault));
+        return false;
+    }
     char *html = root ? mdy_to_html(root, NULL) : NULL;
     mdy_free(doc);
     *result = str(e->vm, html ? html : "", html ? strlen(html) : 0);
@@ -1867,6 +1877,11 @@ static bool toc_native(JsContext *ctx, JsValue this_val, const JsValue *args,
                js_is_string(get_val(e, args[0], "type"))) {
         owned = mdy_doc_new();
         tree = owned ? js_to_tree(e, owned, args[0]) : NULL;
+        if (owned && e->compose.tree_fault) {
+            mdy_free(owned);
+            *result = str(e->vm, e->compose.tree_fault, strlen(e->compose.tree_fault));
+            return false;
+        }
     }
 
     if (!tree) {
@@ -3419,6 +3434,11 @@ static mdy_doc *tree_from_result(mdy_engine *e, RenderRoots *r, JsValue *transfo
         mdy_doc *doc = mdy_doc_new();
         if (!doc) TFAIL("out of memory");
         mdy_node *root = js_to_tree(e, doc, *transformed);
+        if (e->compose.tree_fault) {
+            const char *why = e->compose.tree_fault;
+            mdy_free(doc);
+            TFAIL("%s", why);
+        }
         /*
          * `mdy_doc` owns its root, so the tree that came back is hung under
          * it: a root lends its children, and a transform that returned a

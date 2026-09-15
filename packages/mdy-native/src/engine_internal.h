@@ -160,6 +160,10 @@ struct mdy_engine {
         /* Set by any native that reaches outside the document being rendered
          * — see the render memo. Saved and restored around each render. */
         int taint;
+        /* Why the last js_to_tree gave up, or NULL: a tree that refers to
+         * itself, or one past the node budget. Set by the conversion and
+         * reported by whoever asked for it. */
+        const char *tree_fault;
         char last_render_key[24];   /* the memo key of the render just done, base 36 */
         char *last_response;
         JsValue render_res;         /* the `res` of the render in progress, for its references */
@@ -330,7 +334,10 @@ JsValue get_val(mdy_engine *e, JsValue obj, const char *name);
 void push_item(mdy_engine *e, JsValue array, JsValue v);
 
 /* A hast tree as the objects the guest sees, and back. `js_to_tree` answers
- * NULL past MDY_MAX_DEPTH — see mdyast.h. */
+ * NULL past MDY_MAX_DEPTH (see mdyast.h), and NULL with `compose.tree_fault`
+ * set for a tree that contains itself or has more than MDY_TREE_NODES_MAX
+ * nodes — which a caller reports rather than renders as nothing. */
+#define MDY_TREE_NODES_MAX (4u << 20)
 JsValue tree_to_js(mdy_engine *e, const mdy_node *n);
 mdy_node *js_to_tree(mdy_engine *e, mdy_doc *doc, JsValue v);
 void js_children_to_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent, JsValue kids);

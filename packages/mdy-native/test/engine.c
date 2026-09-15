@@ -2641,6 +2641,26 @@ static void natives_checks(void) {
 
     refuses("$.node wants a hast node", "{{ $.node('nope') }}",
             "expects a hast node");
+    /* A node that contains itself is refused, not descended for ever --
+     * JSON.stringify refuses the same value. */
+    refuses("$.node refuses a tree that contains itself",
+            "% const t = { type: 'element', tagName: 'div', properties: {}, children: [] }\n"
+            "% t.children.push(t, t)\n{{ $.node(t) }}",
+            "refers to itself");
+    refuses("...so does $.html",
+            "% const t = { type: 'element', tagName: 'div', properties: {}, children: [] }\n"
+            "% t.children.push(t)\n{{ $.html(t) }}",
+            "refers to itself");
+    refuses("...and a transform that returns one",
+            "% transform(() => { const t = { type: 'root', children: [] }; t.children.push(t); return t })\nbody\n",
+            "refers to itself");
+    /* One subtree named from many places is legal and exponential; there is
+     * a budget past which the conversion stops rather than the process. */
+    refuses("$.node stops at its node budget",
+            "% let t = { type: 'text', value: 'x' }\n"
+            "% for (let i = 0; i < 40; i++) t = { type: 'element', tagName: 'b', properties: {}, children: [t, t] }\n"
+            "{{ $.node(t) }}",
+            "more nodes than this engine will convert");
     refuses("$.table wants rows", "{{ $.table('nope') }}",
             "array of row arrays");
     refuses("$.toc wants something it can read", "{{ $.toc(42) }}",
