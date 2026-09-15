@@ -227,6 +227,39 @@ int main(void) {
               "<p FOO=\"1\" Foo-Bar=\"2\">x</p>");
     }
 
+    printf("--- mdyhtml: numbers, as String(n) writes them ---\n");
+    reset();
+    {
+        mdy_node *td = element("td");
+        mdy_prop *n = prop(td, "colSpan"); n->type = MDY_PROP_NUMBER; n->as.number = 0.1;
+        mdy_prop *r = prop(td, "rowSpan"); r->type = MDY_PROP_NUMBER; r->as.number = 1.0 / 0.0;
+        mdy_prop *w = prop(td, "width"); w->type = MDY_PROP_NUMBER; w->as.number = 123456789012.5;
+        child(td, text("x"));
+        check("a non-integer is written with the fewest digits that read back, an infinity by name", td,
+              "<td colspan=\"0.1\" rowspan=\"Infinity\" width=\"123456789012.5\">x</td>");
+        char *json = mdy_to_json_bare(td);
+        int ok = json && strstr(json, "\"colSpan\":0.1,") && strstr(json, "\"rowSpan\":null,") &&
+                 strstr(json, "\"width\":123456789012.5");
+        printf("  %s  %s\n", ok ? "ok  " : "FAIL", "…and the JSON spells the same number the same way, an infinity as null");
+        if (!ok) { printf("      actual   %s\n", json ? json : "(null)"); failures++; }
+        free(json);
+    }
+    reset();
+    {
+        /* A data-* name is kebab-cased at any length the parser admits. */
+        char name[80] = "data";
+        memset(name + 4, 'a', 70);
+        name[4] = 'A';
+        name[74] = 'B';
+        name[75] = '\0';
+        mdy_node *d = element("div");
+        attr(d, name, "1");
+        char want[120];
+        snprintf(want, sizeof want, "<div data-%.*s-b=\"1\"></div>", 70, name + 4);
+        for (char *c = want + 10; *c && *c != '-'; c++) *c = 'a';
+        check("a long data-* name is written kebab-cased", d, want);
+    }
+
     printf("--- mdyhtml: node types ---\n");
     reset();
     check("a doctype", node(MDY_DOCTYPE), "<!doctype html>");

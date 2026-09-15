@@ -79,7 +79,8 @@ typedef struct {
     const char *attribute;
     size_t attribute_len;
     unsigned flags;
-    char buf[128];      /* for a `data-*` name, which is computed */
+    char buf[520];      /* for a `data-*` name, which is computed: the parser
+                         * admits 255 bytes, and each may become two */
 } AttrInfo;
 
 /**
