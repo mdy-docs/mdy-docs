@@ -377,16 +377,10 @@ static int publish_messages(mdy_engine *e, const Messages *m, const char *broker
 }
 
 /*
- * What `build`, `dev` and `dead` do with an argument they do not know.
- *
- * All three ended their option loop with `else root = a`, so an unknown flag
- * or one whose value was missing became the site directory. `mdy build
- * --draft` looked for a site called `--draft` and blamed the entry script for
- * not being in it; `mdy build site --out` built a directory called `--out`.
- * The command failed, which is something, but it failed saying the wrong
- * thing. Document mode in this same binary rejects unknown options with a
- * message that names the way out; these are that message, so the four
- * commands answer alike.
+ * What `build`, `dev` and `dead` do with an argument they do not know: the
+ * refusal document mode gives, which names the way out. An unknown flag
+ * taken as the site directory would fail later, blaming the entry script
+ * for not being in a site called `--draft`.
  */
 static void fail_unknown_option(const char *a) {
     char m[256];

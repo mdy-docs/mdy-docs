@@ -155,8 +155,7 @@ static int is_arrow_letter(char c) {
  * This is the mechanism the JavaScript uses (`findLinks`, then a check at
  * every marker) and it is not an optimisation — it is what stops the `//` in
  * `http://example.com` from opening an emphasis span. Without it a document
- * full of URLs grows emphasis it never asked for, which is exactly what
- * happened here: 200 spurious <em> across the reference corpus.
+ * full of URLs grows emphasis it never asked for.
  */
 #define MDY_MAX_URLS 512
 
@@ -853,9 +852,8 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
         int n = mdy_footnote_reference(ctx->doc, note);
 
         const char *pre = ctx->doc->note_prefix ? ctx->doc->note_prefix : "user-content-";
-        /* Sized to the label: at buf[256] a long id truncated the `href` (with
-         * its leading `#`) one byte earlier than the `id`, so the ref pointed
-         * at an anchor that did not exist. */
+        /* Sized to the label, which has no bound of its own: the `href` and
+         * the `id` are built from the same text and must agree to the byte. */
         size_t cap = strlen(pre) + strlen(note->safe) + 32;
         char stackbuf[256];
         char *buf = cap <= sizeof stackbuf ? stackbuf : malloc(cap);

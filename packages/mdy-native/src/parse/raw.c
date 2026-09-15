@@ -62,14 +62,11 @@ typedef struct {
  * xalloc.h states in general: if a NULL turns into different output, or into
  * a crash, it must not be NULL.
  *
- * It was measured rather than assumed. Handing lexbor the failing allocator
- * directly — under the shim `malloc` here IS the shim's, so
- * `lexbor_memory_setup(malloc, …)` is all it takes — refuses the nth
- * allocation of a build and then segfaults on 490 of 3,747 ordinals, inside
- * lexbor. Its own error paths return a status and its callers check one; what
- * they do not do is survive a NULL from every site, and surviving one is not
- * a property upstream claims. Reading 163 files to add it to a pinned
- * dependency is the wrong shape of work, and a fork to maintain.
+ * lexbor's own error paths return a status and its callers check one; what
+ * they do not do is survive a NULL from every allocation site, and surviving
+ * one is not a property upstream claims. Handed a failing allocator it
+ * segfaults inside its own code rather than reporting, and making a pinned
+ * dependency of 163 files survive that is a fork to maintain.
  *
  * `mdy_oom_exit` is the answer: it says so on stderr and exits non-zero,
  * which is what the allocation sweep's invariant asks of a run that cannot
