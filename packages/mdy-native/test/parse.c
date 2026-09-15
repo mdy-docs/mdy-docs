@@ -361,6 +361,22 @@ static void table_split_checks(const mdy_options *o) {
     }
 }
 
+/* What the scanner takes whole, a marker's closer search steps over whole,
+ * and a URL is found once for the paragraph. */
+static void inline_whole_checks(const mdy_options *o) {
+    printf("--- mdyast: markers around what is taken whole ---\n");
+    check("a marker sequence inside a tag does not close the span", "__x #foo__bar y__",
+          ROOT(EL("p", "", EL("u", "", TX("x ") "," EL("a", "\"href\":\"/tags/foo__bar\"", TX("#foo__bar")) "," TX(" y")))), o);
+    check("...nor inside a wiki link", "**see [[ a | x ]] here**",
+          ROOT(EL("p", "", EL("strong", "", TX("see ") "," EL("a", "\"href\":\"x\"", TX("a")) "," TX(" here")))), o);
+    check("a URL is found once, so one a marker stood before is not a link inside it",
+          "~~http://x.com~~",
+          ROOT(EL("p", "", EL("del", "", TX("http:") "," EL("em", "", TX("x.com"))))), o);
+    check("...while one the paragraph found is still a link inside a span",
+          "__see https://ok.org now__",
+          ROOT(EL("p", "", EL("u", "", TX("see ") "," EL("a", "\"href\":\"https://ok.org\"", TX("https://ok.org")) "," TX(" now")))), o);
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -532,6 +548,7 @@ int main(void) {
     definition_checks(&o);
     dedent_checks(&o);
     table_split_checks(&o);
+    inline_whole_checks(&o);
     markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");

@@ -172,6 +172,7 @@ typedef struct {
     size_t len, cap;
     const Span *urls;    /* sorted, non-overlapping */
     size_t url_count;
+    const char *text;    /* what the spans are offsets into */
     /*
      * How far a wiki link's `]]` search has already come up empty. A `[[` that
      * finds no closer before its line ends fails, and so does every later `[[`
@@ -322,6 +323,55 @@ static const char *typographic(const char *text, size_t len, size_t i, size_t *u
     return drawn;
 }
 
+/*
+ * `#tag` and `@user` at `i`, matching `[\p{L}_](?:[\p{L}\p{N}_-]*[\p{L}\p{N}_])?`:
+ * the bytes the reference takes, marker included, or 1 when there is none.
+ *
+ * Three parts, and each one earns its place. It must START with a letter
+ * or an underscore, so `#1` in "Lost cities #1: Babylon" is not a tag —
+ * numeric tags cost more than they are worth, and that heading is real. It
+ * may not END with a hyphen. And something wordlike before it means this
+ * is the middle of something else, so `a#b` is not one either.
+ *
+ * The label keeps its case: `#Tag-One` links to `/tags/Tag-One`, which is
+ * easy to get wrong when almost everything else here lowercases.
+ */
+static size_t reference_length(const char *text, size_t len, size_t i) {
+    const char *p = text + i;
+    size_t left = len - i;
+    if (left < 2) return 1;
+    uint32_t before = 0;
+    if (i > 0) {
+        /* The character before, which needs its whole width — one byte back
+         * into a multi-byte character is not a character. */
+        size_t back = i;
+        while (back > 0 && ((unsigned char)text[back - 1] & 0xC0) == 0x80) back--;
+        if (back > 0) back--;
+        mdy_utf8_decode(text + back, len - back, &before);
+    }
+    if (before && (before == '_' || mdy_is_letter_or_number_cp(before))) return 1;
+
+    uint32_t first = 0;
+    size_t fw = mdy_utf8_decode(p + 1, left - 1, &first);
+    int starts = first == '_' ||
+        (mdy_is_letter_or_number_cp(first) && !(first >= '0' && first <= '9'));
+    if (!starts) return 1;
+    size_t n = 1 + fw;
+    while (n < left) {
+        uint32_t cp;
+        size_t w = mdy_utf8_decode(p + n, left - n, &cp);
+        if (cp == '-' || cp == '_' || mdy_is_letter_or_number_cp(cp)) n += w;
+        else break;
+    }
+    /* It may not end with a hyphen. */
+    while (n > 1 && p[n - 1] == '-') n--;
+    return n;
+}
+
+static size_t wiki_link_length(Ctx *ctx, const char *p, size_t left);
+static void parse_inline_spans(mdy_doc *doc, mdy_node *parent, const char *text, size_t len,
+                               const Span *urls, size_t url_count);
+
 static void scan(Ctx *ctx, const char *text, size_t len) {
     size_t i = 0;
     while (i < len) {
@@ -370,6 +420,14 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
                 if (!m->raw) {
                     if (text[j] == '\\') { j++; continue; }
                     if (inside_url(ctx, j)) continue;
+                    /* What the scanner takes whole, the closer search steps
+                     * over whole: the `__` in `#foo__bar` closes nothing. */
+                    size_t whole = 0;
+                    if (text[j] == '[' && j + 1 < len && text[j + 1] == '[')
+                        whole = wiki_link_length(ctx, text + j, len - j);
+                    else if (text[j] == '#' || text[j] == '@')
+                        whole = reference_length(text, len, j);
+                    if (whole > 1) { j += whole - 1; continue; }
                 }
                 if (text[j] == m->seq[0] && text[j + 1] == m->seq[1]) { close = j; found = 1; break; }
             }
@@ -385,11 +443,24 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
                     if (inner_len) mdy_append(el, mdy_new_text(ctx->doc, inner, inner_len));
                 } else {
                     /*
-                     * The nested scan works on a slice, so the outer URL spans
-                     * — whose offsets are into the whole string — do not apply.
-                     * It finds its own; that is what mdy_parse_inline does.
+                     * The URLs are the paragraph's, found once: the nested
+                     * scan takes the spans inside its slice, rebased. Finding
+                     * them again on the slice would find more — a scheme the
+                     * marker itself stood before, which linkify refused.
                      */
-                    mdy_parse_inline(ctx->doc, el, inner, inner_len);
+                    size_t off = (size_t)(inner - ctx->text);
+                    Span *sub = NULL;
+                    size_t sub_count = 0;
+                    for (size_t k = 0; k < ctx->url_count; k++) {
+                        const Span *u = &ctx->urls[k];
+                        if (u->start < off || u->end > off + inner_len) continue;
+                        if (!sub) sub = mdy_alloc(&ctx->doc->arena, (ctx->url_count - k) * sizeof *sub);
+                        sub[sub_count] = *u;
+                        sub[sub_count].start -= off;
+                        sub[sub_count].end -= off;
+                        sub_count++;
+                    }
+                    parse_inline_spans(ctx->doc, el, inner, inner_len, sub, sub_count);
                 }
                 ctx->at_boundary = 1;
                 i = found ? close + 2 : len;
@@ -437,49 +508,7 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
         }
 
         if ((p[0] == '#' || p[0] == '@') && left > 1) {
-            /*
-             * `#tag` and `@user`, matching `[\p{L}_](?:[\p{L}\p{N}_-]*[\p{L}\p{N}_])?`.
-             *
-             * Three parts, and each one earns its place. It must START with a
-             * letter or an underscore, so `#1` in "Lost cities #1: Babylon" is
-             * not a tag — numeric tags cost more than they are worth, and that
-             * heading is real. It may not END with a hyphen. And something
-             * wordlike before it means this is the middle of something else,
-             * so `a#b` is not one either.
-             *
-             * The label keeps its case: `#Tag-One` links to `/tags/Tag-One`,
-             * which is easy to get wrong when almost everything else here
-             * lowercases.
-             */
-            uint32_t before = 0;
-            if (i > 0) {
-                /* The character before, which needs its whole width — one byte
-                 * back into a multi-byte character is not a character. */
-                size_t back = i;
-                while (back > 0 && ((unsigned char)text[back - 1] & 0xC0) == 0x80) back--;
-                if (back > 0) back--;
-                mdy_utf8_decode(text + back, len - back, &before);
-            }
-            int wordlike = before && (before == '_' || mdy_is_letter_or_number_cp(before));
-
-            size_t n = 1;
-            if (!wordlike) {
-                uint32_t first = 0;
-                size_t fw = mdy_utf8_decode(p + 1, left - 1, &first);
-                int starts = first == '_' ||
-                    (mdy_is_letter_or_number_cp(first) && !(first >= '0' && first <= '9'));
-                if (starts) {
-                    n = 1 + fw;
-                    while (n < left) {
-                        uint32_t cp;
-                        size_t w = mdy_utf8_decode(p + n, left - n, &cp);
-                        if (cp == '-' || cp == '_' || mdy_is_letter_or_number_cp(cp)) n += w;
-                        else break;
-                    }
-                    /* It may not end with a hyphen. */
-                    while (n > 1 && p[n - 1] == '-') n--;
-                }
-            }
+            size_t n = reference_length(text, len, i);
             if (n > 1) {
                 flush(ctx);
                 mdy_node *a = mdy_new_element(ctx->doc, "a", 1);
@@ -554,19 +583,6 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
 }
 
 void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t len) {
-    if (len == 0) return;
-
-    /*
-     * As many URLs as the paragraph has, with MDY_MAX_URLS only the STARTING
-     * size. A URL left off this list is not merely unlinked — it is re-read as
-     * ordinary text, where the `//` in `http://` opens the emphasis the list
-     * exists to prevent.
-     *
-     * Grown by retry rather than by counting twice: a full array is the only
-     * sign mdy_find_links gives that it had more to say, so `n == cap` means
-     * ask again with room. The common paragraph still does one pass over one
-     * allocation.
-     */
     Span stack_urls[MDY_MAX_URLS];
     Span *urls = stack_urls;
     size_t urls_cap = MDY_MAX_URLS;
@@ -598,14 +614,20 @@ void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t l
         }
         if (found != stack_found) free(found);
     }
+    parse_inline_spans(doc, parent, text, len, urls, url_count);
+    if (urls != stack_urls) free(urls);
+}
 
+/* The scan itself, over `text` with its URLs already found — the whole of a
+ * paragraph, or a marker's slice with the paragraph's spans rebased. */
+static void parse_inline_spans(mdy_doc *doc, mdy_node *parent, const char *text, size_t len,
+                               const Span *urls, size_t url_count) {
     size_t cap = len * 4 + 8;   /* see push() */
     Ctx ctx = { .doc = doc, .parent = parent, .len = 0, .cap = cap,
-                .urls = urls, .url_count = url_count, .at_boundary = 1,
+                .urls = urls, .url_count = url_count, .text = text, .at_boundary = 1,
                 .wiki_skip = text };
     ctx.buf = mdy_alloc(&doc->arena, cap);
     if (ctx.buf) scan(&ctx, text, len);
-    if (urls != stack_urls) free(urls);
 }
 
 /*
@@ -771,9 +793,13 @@ const char *mdy_heading_id(mdy_doc *doc, const char *text, size_t len, size_t *o
  * in a no-break space is real, and an ASCII-only trim keeps it. */
 static void cut(const char **s, size_t *len) { mdy_trim(s, len); }
 
-/** Consume `[[ … ]]` at `p`, emitting a link. Returns bytes consumed, or 0 to
- * leave it as text. */
-static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
+/*
+ * How many bytes the `[[ … ]]` at `p` would take, or 0 when it is left as
+ * text: no `]]` before the line ends, nothing between the brackets, or a
+ * footnote reference nothing defines. The closer search asks this so a
+ * marker inside a link is the link's, as the scanner takes it whole.
+ */
+static size_t wiki_link_length(Ctx *ctx, const char *p, size_t left) {
     /* A closer scan starting at or before here already failed, up to the end
      * of this line — so this one would too. See Ctx.wiki_skip. */
     if (p < ctx->wiki_skip) return 0;
@@ -791,6 +817,25 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
     size_t body_len = close - 2;
     cut(&body, &body_len);
     if (body_len == 0) return 0;
+    if (body[0] == '^') {
+        const char *id = body + 1;
+        size_t id_len = body_len - 1;
+        cut(&id, &id_len);
+        if (!mdy_footnote_find(ctx->doc, id, id_len)) return 0;
+    }
+    return close + 2;
+}
+
+/** Consume `[[ … ]]` at `p`, emitting a link. Returns bytes consumed, or 0 to
+ * leave it as text. */
+static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
+    size_t taken = wiki_link_length(ctx, p, left);
+    if (!taken) return 0;
+    size_t close = taken - 2;
+
+    const char *body = p + 2;
+    size_t body_len = close - 2;
+    cut(&body, &body_len);
     if (body[0] == '^') {
         /*
          * A footnote reference — but only if the definition exists. Without
