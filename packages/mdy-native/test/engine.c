@@ -1349,7 +1349,6 @@ static void session_checks(void) {
      * a crash, because the CLI rotates before it has built anything. */
     mdy_session_rotate_memo(NULL);
     mdy_session_free(NULL);
-    ok_("rotating and freeing nothing are no-ops", 1, NULL);
 }
 
 /* A knob set between two renders on ONE engine changes what the memo may
@@ -1875,7 +1874,10 @@ static void wide_buffer_checks(void) {
         for (int k = 0; k < 200; k++) n += (size_t)snprintf(src + n, sizeof src - n, "c");
         snprintf(src + n, sizeof src - n, "\n");
         char *html = render_source(src);
-        ok_("a long class name is unchanged", html != NULL, "(null)");
+        char want[256];
+        memset(want, 'c', 200);
+        want[200] = '\0';
+        ok_("a long class name is unchanged", html && strstr(html, want), html);
         free(html);
     }
 }
@@ -2201,8 +2203,14 @@ static void import_checks(void) {
 
     mdy_engine *e2 = mdy_engine_new(S);
     int opened = mdy_engine_open_dir(e2, site2, err, sizeof err);
-    ok_("an import specifier of a thousand characters does not overflow the line",
-        opened != 0 || mdy_engine_count(e2) > 0, err);
+    /* The open reads the whole specifier and holds the one document; the
+     * package it names does not exist, so the render is what fails. That the
+     * line is read without harm is the sanitizer build's to see. */
+    int entry2 = opened == 0 ? mdy_engine_entry(e2, "main.mdy") : -1;
+    char *html2 = entry2 >= 0 ? mdy_engine_render(e2, (size_t)entry2, err, sizeof err) : NULL;
+    ok_("an import specifier of a thousand characters is read whole, and its package refused",
+        opened == 0 && mdy_engine_count(e2) == 1 && html2 == NULL && err[0] != '\0', err);
+    free(html2);
     mdy_engine_free(e2);
 
     free(root);
@@ -3243,7 +3251,6 @@ static void broker_checks(void) {
 
     bj_builder_free(bld);
     broker_close(b);
-    ok_("closes with nothing left behind", 1, NULL);
 }
 
 /* ---- the public surface an embedder holds --------------------------------
