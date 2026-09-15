@@ -303,7 +303,6 @@ static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
 
     char *token = hold_tree_as(e, doc, (mdy_node *)mdy_root(doc),
                                e->compose.last_render_key[0] ? e->compose.last_render_key : NULL);
-    if (!token) { *result = js_undefined(); return false; }
     *result = str(e->vm, token, strlen(token));
     free(token);
     return true;
@@ -479,13 +478,13 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
     if (!e->set.docs || !e->set.ids) { close_set(e); return -1; }
     e->set.count = n;
 
+    /* close_set above reset the handle to -1, so the collection is always
+     * opened fresh here. */
+    e->set.handle = nis_open();
     if (e->set.handle < 0) {
-        e->set.handle = nis_open();
-        if (e->set.handle < 0) {
-            if (error && error_len) snprintf(error, error_len, "could not open a collection");
-            close_set(e);
-            return -1;
-        }
+        if (error && error_len) snprintf(error, error_len, "could not open a collection");
+        close_set(e);
+        return -1;
     }
 
     /*
@@ -1294,7 +1293,6 @@ static bool import_render_native(JsContext *ctx, JsValue this_val, const JsValue
      * render owns it from here. Numbered, not keyed: mdy-docs' import render
      * holds sequentially, and the blog's search index says so. */
     char *token = hold_tree(e, tree, (mdy_node *)mdy_root(tree));
-    if (!token) { mdy_free(tree); return true; }
     *result = str(e->vm, token, strlen(token));
     free(token);
     return true;
@@ -1468,7 +1466,6 @@ static bool markdown_native(JsContext *ctx, JsValue this_val, const JsValue *arg
         return false;
     }
     char *token = hold_tree(e, doc, (mdy_node *)mdy_root(doc));
-    if (!token) { *result = js_undefined(); return true; }
     *result = str(e->vm, token, strlen(token));
     free(token);
     return true;
@@ -1512,7 +1509,6 @@ static bool node_native(JsContext *ctx, JsValue this_val, const JsValue *args,
         mdy_append(into, root);
     }
     char *token = hold_tree(e, doc, into);
-    if (!token) { *result = js_undefined(); return true; }
     *result = str(e->vm, token, strlen(token));
     free(token);
     return true;
@@ -1663,7 +1659,6 @@ static bool table_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     mdy_append((mdy_node *)mdy_root(doc), table);
 
     char *token = hold_tree(e, doc, table);
-    if (!token) { *result = js_undefined(); return true; }
     *result = str(e->vm, token, strlen(token));
     free(token);
     return true;
@@ -1839,7 +1834,6 @@ static bool toc_native(JsContext *ctx, JsValue this_val, const JsValue *args,
 
     if (argc < 1 || js_is_undefined(args[0])) {
         char *token = hold_toc(e);
-        if (!token) { *result = js_undefined(); return true; }
         *result = str(e->vm, token, strlen(token));
         free(token);
         return true;

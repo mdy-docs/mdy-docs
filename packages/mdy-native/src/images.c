@@ -120,7 +120,8 @@ static int jpeg_size(const uint8_t *b, size_t n, int *w, int *h) {
             i += 2;
             continue;                               /* no payload */
         }
-        if (i + 3 >= n) return -1;
+        /* `be16(b + i + 2)` reads b[i+2..i+3], and the loop guard `i + 3 < n`
+         * already keeps both in bounds. */
         uint16_t seg = be16(b + i + 2);
         if (seg < 2) return -1;
         /* SOF0..SOF15, except the four that are not frame headers. */
@@ -147,7 +148,7 @@ static int webp_size(const uint8_t *b, size_t n, int *w, int *h) {
         return 0;
     }
     if (memcmp(c, "VP8L", 4) == 0) {               /* lossless: 14 bits each */
-        if (n < 25 || c[8] != 0x2F) return -1;
+        if (c[8] != 0x2F) return -1;   /* n >= 30 already, checked at the top */
         uint32_t bits = (uint32_t)c[9] | ((uint32_t)c[10] << 8) |
                         ((uint32_t)c[11] << 16) | ((uint32_t)c[12] << 24);
         *w = (int)((bits & 0x3FFF) + 1);
