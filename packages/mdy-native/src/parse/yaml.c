@@ -837,6 +837,10 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
     if (c == '[' || c == '{') {
         Cur cur = { p, line, col };
         mdy_yaml_node *n = parse_flow(&cur);
+        if (n && !nothing_after(&p->lines[cur.line], cur.col)) {
+            fail(p, cur.line, "unexpected text after a flow collection");
+            return NULL;
+        }
         p->at = cur.line + 1;
         return n;
     }

@@ -269,6 +269,12 @@ int main(void) {
      * that a refusal is loud: a parser that silently mis-reads data is worse
      * than one that stops.
      */
+    refuses("text after a flow sequence", "a: [1, 2] junk",
+            "line 1: unexpected text after a flow collection");
+    refuses("...and after a flow mapping", "a: {b: 1} junk",
+            "line 1: unexpected text after a flow collection");
+    check("a comment after a flow collection is a comment", "a: [1, 2] # two\nb: {c: 1}  # one",
+          "{\"a\":[1,2],\"b\":{\"c\":1}}");
     refuses("anchors", "a: &x 1\nb: 2", "line 1: anchors and aliases are not supported");
     refuses("aliases", "a: 1\nb: *x", "line 2: anchors and aliases are not supported");
     refuses("tags", "a: !!str 1", "line 1: tags are not supported");
