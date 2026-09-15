@@ -1055,10 +1055,11 @@ static char *write_response(mdy_engine *e, const DocOptions *o) {
     if (!json) json = "null";
     char *path = absolute(o->response_file);
     FILE *f = fopen(path, "wb");
-    if (!f) { snprintf(msg, sizeof msg, "cannot write --response: %s", o->response_file); free(path); return msg; }
-    fputs(json, f);
-    fputc('\n', f);
-    fclose(f);
+    if (!f || fputs(json, f) == EOF || fputc('\n', f) == EOF || fclose(f) != 0) {
+        snprintf(msg, sizeof msg, "cannot write --response: %s", o->response_file);
+        free(path);
+        return msg;
+    }
     free(path);
     return NULL;
 }
@@ -1245,13 +1246,13 @@ static char *emit_output(const DocOptions *o, const char *output) {
     static char msg[4096];
     int out_is_dir = o->out && is_dir(o->out);
     if (o->out && !out_is_dir) {
+        /* fclose's answer is part of the write: a disk that filled is often
+         * reported only when the last buffer is flushed there. */
         FILE *f = fopen(o->out, "wb");
-        if (!f || fputs(output, f) == EOF) {
+        if (!f || fputs(output, f) == EOF || fclose(f) != 0) {
             snprintf(msg, sizeof msg, "cannot write --out: %s", o->out);
-            if (f) fclose(f);
             return msg;
         }
-        fclose(f);
     } else {
         fputs(output, stdout);
         fflush(stdout);
