@@ -2716,6 +2716,11 @@ static void natives_checks(void) {
     check("...and says what toUTCString says of a date it cannot read",
           "{{ $.rfc822('yesterday') }} {{ $.rfc822('2024-13-01') }}",
           "<p>Invalid Date Invalid Date</p>");
+    /* A NUL inside a string is a character of it on both sides of the store. */
+    check("a query string holding a NUL asks for the whole string",
+          "{{ $.find({ title: 'a\\u0000b' }).length }}/{{ $.find({ title: 'a' }).length }}"
+          "\n---\n+++\ntitle: \"a\\0b\"\n+++\nx\n",
+          "<p>1/0</p>");
     refuses("$.node wants a hast node", "{{ $.node('nope') }}",
             "expects a hast node");
     /* A node that contains itself is refused, not descended for ever --

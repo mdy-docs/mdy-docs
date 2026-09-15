@@ -327,6 +327,7 @@ char *from_utf16(const uint16_t *u, size_t len);
 JsValue str(JsVm *vm, const char *s, size_t len);       /* UTF-8 bytes as a JS string */
 JsValue key(JsVm *vm, const char *s);                   /* ...interned, for a property name */
 char *js_string_utf8(JsValue v);                        /* back again; caller frees, NULL if not a string */
+char *js_string_utf8_n(JsValue v, size_t *len);         /* ...with its byte length, which may span a NUL */
 void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v);
 /* ...and the read. Roots `obj` before interning the name, which is a safe
  * point; use it instead of js_object_get(vm, x, key(vm, "n")). */

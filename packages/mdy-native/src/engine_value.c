@@ -253,9 +253,18 @@ JsValue tree_to_js(mdy_engine *e, const mdy_node *n) {
  * string — which for a `type` or a `tagName` means the guest handed back
  * something that is not a node. */
 char *js_string_utf8(JsValue v) {
+    return js_string_utf8_n(v, NULL);
+}
+
+char *js_string_utf8_n(JsValue v, size_t *len) {
     size_t ulen = 0;
     const uint16_t *u = js_string_units(v, &ulen);
-    return u ? from_utf16(u, ulen) : NULL;
+    if (!u) return NULL;
+    char *out = mdy_xmalloc(ulen * 3 + 1);
+    size_t n = mdy_from_utf16(u, ulen, out, ulen * 3);
+    out[n] = '\0';
+    if (len) *len = n;
+    return out;
 }
 
 /*
@@ -413,9 +422,12 @@ int js_to_binjson(mdy_engine *e, bj_builder *b, JsValue v) {
         return bj_put_float(b, d);
     }
     if (js_is_string(v)) {
-        char *s = js_string_utf8(v);
+        /* At its own length: a NUL inside a JavaScript string is a character
+         * of it, and the store holds strings by length too. */
+        size_t n = 0;
+        char *s = js_string_utf8_n(v, &n);
         if (!s) return -1;
-        int rc = bj_put_string(b, (const uint8_t *)s, (uint32_t)strlen(s));
+        int rc = bj_put_string(b, (const uint8_t *)s, (uint32_t)n);
         free(s);
         return rc;
     }
@@ -431,9 +443,10 @@ int js_to_binjson(mdy_engine *e, bj_builder *b, JsValue v) {
         size_t n = js_object_size(v);
         for (size_t i = 0; i < n; i++) {
             JsValue k = js_object_key_at(v, i);
-            char *name = js_string_utf8(k);
+            size_t klen = 0;
+            char *name = js_string_utf8_n(k, &klen);
             if (!name) continue;
-            int rc = bj_put_key(b, (const uint8_t *)name, (uint32_t)strlen(name));
+            int rc = bj_put_key(b, (const uint8_t *)name, (uint32_t)klen);
             free(name);
             if (rc != 0) return -1;
             if (js_to_binjson(e, b, js_object_get(e->vm, v, k)) != 0) return -1;
