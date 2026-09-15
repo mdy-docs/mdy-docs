@@ -689,7 +689,8 @@ const getHead = (port, path) =>
 test('dev serves the site, injects live-reload, types static files, and 404s the unknown', async () => {
   const root = mkTemp();
   writeFileSync(join(root, 'main.mdy'),
-    '% $.emit("index.html", "<html><body>home</body></html>")\n= x\n');
+    '% $.emit("index.html", "<html><body>home</body></html>")\n' +
+    '% $.emit("sub/index.html", "<html><body>sub</body></html>")\n= x\n');
   mkdirSync(join(root, 'static'), { recursive: true });
   writeFileSync(join(root, 'static', 'style.css'), 'body{color:red}\n');
 
@@ -724,6 +725,46 @@ test('dev serves the site, injects live-reload, types static files, and 404s the
     const events = await getHead(port, '/__mdy__/events');
     assert.match(events.headers['content-type'], /text\/event-stream/,
       'the reload endpoint is an event stream');
+
+    /* Nothing above the site is served, however the dots are spelled. */
+    for (const p of ['/../main.mdy', '/%2e%2e/main.mdy', '/static/../../main.mdy']) {
+      assert.equal((await get(port, p)).status, 404, `${p} is not served`);
+    }
+    /* A directory is its index, and HEAD answers like GET without the body. */
+    const sub = await get(port, '/sub/');
+    assert.equal(sub.status, 200, 'a directory is served as its index.html');
+    assert.match(sub.body, /sub/);
+    const head = await getHead(port, '/style.css');
+    assert.equal(head.status, 200);
+    assert.match(head.headers['content-type'], /text\/css/);
+
+    /* The delivery endpoint takes the token it minted and nothing else. */
+    const wrong = await new Promise((resolve, reject) => {
+      const req = request(
+        { host: 'localhost', port, path: '/mdy/mdy-bus', method: 'POST',
+          headers: { 'Authorization': 'Bearer nope', 'X-Sukkal-Subject': 'a.b', 'Content-Length': batch.length } },
+        (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+      req.on('error', reject);
+      req.end(batch);
+    });
+    assert.equal(wrong, 401, 'a delivery with the wrong bearer is refused');
+
+    /* A save reaches the open event stream as an event, which is the whole
+     * of live reload; and a file that did not exist before is a change too. */
+    const event = new Promise((resolve, reject) => {
+      const req = request({ host: 'localhost', port, path: '/__mdy__/events', method: 'GET' }, (res) => {
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { if (/data:/.test(chunk)) { resolve(chunk); req.destroy(); } });
+      });
+      req.on('error', () => {});
+      req.end();
+      setTimeout(() => reject(new Error('no reload event within 8s')), 8000);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    writeFileSync(join(root, 'extra.mdy'), '+++\ntitle: extra\n+++\nnew\n');
+    await dev.until(/rendered/);
+    assert.match(await event, /data:/, 'a rebuild is announced on the event stream');
+    assert.match(dev.log(), /\[read\] extra\.mdy/, 'the new file was read by the rebuild');
   } finally {
     dev.child.kill();
   }
