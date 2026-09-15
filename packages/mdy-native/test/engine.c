@@ -3584,6 +3584,51 @@ static void api_checks(void) {
     }
 }
 
+/*
+ * WHAT IS CHECKED, in the order main runs it. main itself opens with the
+ * document end to end and the natives, then calls each section below, a
+ * function named for what it holds:
+ *
+ *   site_checks
+ *   data_file_checks
+ *   blank_file_checks
+ *   markdown_render_checks
+ *   footnote_checks
+ *   raw_html_checks
+ *   heading_id_checks
+ *   alert_checks
+ *   caret_bracket_checks
+ *   query_order_checks
+ *   reopen_checks
+ *   session_checks
+ *   memo_key_checks
+ *   knob_memo_checks
+ *   splice_checks
+ *   context_checks
+ *   bjval_checks
+ *   count_checks
+ *   import_checks
+ *   import_spec_checks
+ *   api_checks
+ *   unreadable_dir_checks
+ *   token_checks
+ *   url_checks
+ *   nonfinite_checks
+ *   big_integer_checks
+ *   crlf_checks
+ *   attr_entity_checks
+ *   record_key_checks
+ *   wide_buffer_checks
+ *   deep_value_checks
+ *   odd_name_checks
+ *   natives_checks
+ *   resize_checks
+ *   bad_image_checks
+ *   tag_checks
+ *   symlink_checks
+ *   gc_checks
+ *   broker_checks
+ */
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     S = mdy_session_new();
