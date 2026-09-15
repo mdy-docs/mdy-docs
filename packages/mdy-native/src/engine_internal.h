@@ -52,9 +52,12 @@
 #define TOKEN_ID_CAP 24
 typedef struct { char id[TOKEN_ID_CAP]; mdy_doc *doc; mdy_node *tree; int is_toc; } Held;
 
+/* An ObjectId as guest code sees it: twelve bytes as hex. */
+#define OID_HEX_LEN 24
+
 /* One document's index, under the `_id` it was inserted with — see
  * `oid_slots` on the engine. An empty `hex` is an empty slot. */
-typedef struct { char hex[25]; int index; } OidSlot;
+typedef struct { char hex[OID_HEX_LEN + 1]; int index; } OidSlot;
 
 typedef struct Resized Resized;
 

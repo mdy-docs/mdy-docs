@@ -867,18 +867,18 @@ static JsValue context_value(mdy_engine *e, const char *json, int strict) {
  * order the database walked its keys in. That is what makes a query's answer
  * the same on every build.
  */
-static void id_hex(const uint8_t id[12], char out[25]) {
+static void id_hex(const uint8_t id[12], char out[OID_HEX_LEN + 1]) {
     static const char H[] = "0123456789abcdef";
     for (int k = 0; k < 12; k++) {
         out[k * 2] = H[id[k] >> 4];
         out[k * 2 + 1] = H[id[k] & 15];
     }
-    out[24] = '\0';
+    out[OID_HEX_LEN] = '\0';
 }
 
 static uint32_t oid_hash(const char *hex) {
     uint32_t h = 2166136261u;
-    for (int i = 0; i < 24; i++) { h ^= (unsigned char)hex[i]; h *= 16777619u; }
+    for (int i = 0; i < OID_HEX_LEN; i++) { h ^= (unsigned char)hex[i]; h *= 16777619u; }
     return h;
 }
 
@@ -902,7 +902,7 @@ static void oid_map_build(mdy_engine *e) {
     while (cap < e->set.count * 2) cap *= 2;
     OidSlot *slots = mdy_xcalloc(cap, sizeof *slots);
     for (size_t i = 0; i < e->set.count; i++) {
-        char hex[25];
+        char hex[OID_HEX_LEN + 1];
         id_hex(e->set.ids[i], hex);
         size_t at = oid_hash(hex) & (cap - 1);
         while (slots[at].hex[0]) at = (at + 1) & (cap - 1);
@@ -916,12 +916,12 @@ static void oid_map_build(mdy_engine *e) {
 /* `hex` is the 24 characters of an ObjectId; anything else belongs to no
  * document in this set. */
 int index_of_id(mdy_engine *e, const char *hex, size_t len) {
-    if (len != 24) return -1;
+    if (len != OID_HEX_LEN) return -1;
     if (!e->set.oid_slots) oid_map_build(e);
     size_t at = oid_hash(hex) & (e->set.oid_cap - 1);
     for (size_t probe = 0; probe < e->set.oid_cap; probe++) {
         if (!e->set.oid_slots[at].hex[0]) return -1;      /* a hole ends the run */
-        if (memcmp(e->set.oid_slots[at].hex, hex, 24) == 0) return e->set.oid_slots[at].index;
+        if (memcmp(e->set.oid_slots[at].hex, hex, OID_HEX_LEN) == 0) return e->set.oid_slots[at].index;
         at = (at + 1) & (e->set.oid_cap - 1);
     }
     return -1;
@@ -1003,11 +1003,11 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query,
     for (uint32_t i = 0; order && i < n; i++) {
         size_t ulen = 0;
         const uint16_t *u = js_string_units(js_object_get(e->vm, js_array_get(hits, i), id_key), &ulen);
-        if (!u || ulen != 24) continue;
-        char hex[25];
-        for (size_t k = 0; k < 24; k++) hex[k] = u[k] < 128 ? (char)u[k] : '?';
-        hex[24] = '\0';
-        int at = index_of_id(store, hex, 24);
+        if (!u || ulen != OID_HEX_LEN) continue;
+        char hex[OID_HEX_LEN + 1];
+        for (size_t k = 0; k < OID_HEX_LEN; k++) hex[k] = u[k] < 128 ? (char)u[k] : '?';
+        hex[OID_HEX_LEN] = '\0';
+        int at = index_of_id(store, hex, OID_HEX_LEN);
         if (at < 0) continue;                    /* not a document of this set */
         order[placed].at = at;
         order[placed].hit = i;

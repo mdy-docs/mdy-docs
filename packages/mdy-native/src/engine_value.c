@@ -523,11 +523,11 @@ static void d_binary(void *ctx, const uint8_t *s, uint32_t n) {
  * the bytes, and a string of them is the shape mdy-docs hands over. */
 static void d_oid(void *ctx, const uint8_t *b) {
     Decode *d = ctx;
-    char hex[25];
+    char hex[OID_HEX_LEN + 1];
     static const char *H = "0123456789abcdef";
     for (int i = 0; i < 12; i++) { hex[i * 2] = H[b[i] >> 4]; hex[i * 2 + 1] = H[b[i] & 15]; }
-    hex[24] = '\0';
-    decode_put(d, str(d->e->vm, hex, 24));
+    hex[OID_HEX_LEN] = '\0';
+    decode_put(d, str(d->e->vm, hex, OID_HEX_LEN));
 }
 /*
  * A container under construction is rooted through ITS SLOT ON THE STACK, not
