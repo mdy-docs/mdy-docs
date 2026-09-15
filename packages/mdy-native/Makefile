@@ -98,6 +98,10 @@ LAM_LIBS := $(LAMASSU)/build/liblamassu_runtime.a $(LAMASSU)/build/liblamassu_fr
 $(LAM_LIBS):
 	$(MAKE) -C $(LAMASSU) libs
 
+LAM_ASAN_LIBS := $(LAMASSU)/build/liblamassu_runtime_asan.a $(LAMASSU)/build/liblamassu_frontend_asan.a
+$(LAM_ASAN_LIBS):
+	$(MAKE) -C $(LAMASSU) build/liblamassu_runtime_asan.a build/liblamassu_frontend_asan.a
+
 # ---- nisaba ---------------------------------------------------------------
 #
 # All of nisaba's C compiles with cc and no changes — including the files named
@@ -191,6 +195,13 @@ build/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	done
 	$(AR) rcs $@ build/sukkal/*.o
 
+build/libsukkal-asan.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
+	@mkdir -p build/sukkal-asan
+	@for f in $(SUKKAL_SRCS); do \
+	  $(CC) -std=gnu11 -g -O1 -fsanitize=address -fno-omit-frame-pointer -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal-asan/`basename $$f .c`.o || exit 1; \
+	done
+	$(AR) rcs $@ build/sukkal-asan/*.o
+
 # ---- the MDY front end, in C ----------------------------------------------
 #
 # src/parse: the same parser mdy-docs has in JavaScript, producing the same
@@ -257,6 +268,28 @@ build/parse-af/md4c-entity.o: third_party/md4c/src/entity.c src/allocfail.h
 $(PARSE_AF_LIB): $(PARSE_AF_OBJS) $(MD4C_AF_OBJS)
 	$(AR) rcs $@ $(PARSE_AF_OBJS) $(MD4C_AF_OBJS)
 
+# ...and under AddressSanitizer, for build/mdy-asan and the engine test. An
+# instrumented engine linked against an uninstrumented parser catches a
+# parser overflow only when it happens to fault, which is not what a
+# sanitizer build is for.
+ASAN_FLAGS := -g -O1 -fsanitize=address -fno-omit-frame-pointer
+PARSE_ASAN_OBJS := $(patsubst src/parse/%.c,build/parse-asan/%.o,$(PARSE_SRCS))
+MD4C_ASAN_OBJS  := build/parse-asan/md4c.o build/parse-asan/md4c-entity.o
+PARSE_ASAN_LIB  := build/libmdyparse-asan.a
+
+build/parse-asan/%.o: src/parse/%.c $(PARSE_HDRS)
+	@mkdir -p build/parse-asan
+	$(CC) $(PARSE_CFLAGS) $(ASAN_FLAGS) -c $< -o $@
+build/parse-asan/md4c.o: third_party/md4c/src/md4c.c
+	@mkdir -p build/parse-asan
+	$(CC) $(PARSE_CFLAGS) $(ASAN_FLAGS) -c $< -o $@
+build/parse-asan/md4c-entity.o: third_party/md4c/src/entity.c
+	@mkdir -p build/parse-asan
+	$(CC) $(PARSE_CFLAGS) $(ASAN_FLAGS) -c $< -o $@
+
+$(PARSE_ASAN_LIB): $(PARSE_ASAN_OBJS) $(MD4C_ASAN_OBJS)
+	$(AR) rcs $@ $(PARSE_ASAN_OBJS) $(MD4C_ASAN_OBJS)
+
 # stb: three single-file headers, vendored. See third_party/stb/README.md.
 STB_INC   := -Ithird_party/stb
 
@@ -295,6 +328,15 @@ LX_CFLAGS := -std=c11 -Wall -Wextra -Wno-unused-parameter -Wno-shadow \
 build/lexbor/%.o: $(LX_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(LX_CFLAGS) -c $< -o $@
+
+LX_ASAN_OBJS := $(patsubst $(LX_DIR)/%.c,build/lexbor-asan/%.o,$(LX_SRCS))
+LX_ASAN_LIB  := build/liblexbor-asan.a
+build/lexbor-asan/%.o: $(LX_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(LX_CFLAGS) $(ASAN_FLAGS) -c $< -o $@
+$(LX_ASAN_LIB): $(LX_ASAN_OBJS)
+	@mkdir -p build
+	$(AR) rcs $@ $(LX_ASAN_OBJS)
 
 $(LX_LIB): $(LX_OBJS)
 	@mkdir -p build
@@ -548,17 +590,17 @@ check-golden: build/mdy$(EXE)
 	done; \
 	exit $$fail
 
-.PHONY: check-ingest check-engine check-site check-sites check-dev check-alloc check-generated \
+.PHONY: check-ingest check-engine check-engine-asan check-site check-sites check-dev check-alloc check-generated \
         check-alloc-all check-alloc-doc check-alloc-dev clean
 
 # A document from text into a nisaba collection, with no JavaScript in it:
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
 # ingest mdy.js does in JS — `collection.insertOne({ ...doc.data })` — done in
 # C, and it is the seam the engine will be built on.
-build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB)
+build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c src/bjval.c src/xalloc.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/ingest.c src/ingest.c src/nis.c src/oswin.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB) -o $@ $(LDLIBS)
+	  test/ingest.c src/ingest.c src/nis.c src/oswin.c src/bjval.c src/xalloc.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB) -o $@ $(LDLIBS)
 
 check-ingest: build/ingest-test$(EXE)
 	@./build/ingest-test$(EXE)
@@ -650,6 +692,7 @@ build/obj/engine-test.o: test/engine.c $(HL_HDR)
 
 ENGINE_LIBS := $(PARSE_LIB) $(LX_LIB) build/libsukkal.a $(LAM_LIBS)
 AF_LIBS     := $(PARSE_AF_LIB) $(LX_LIB) build/libsukkal.a $(LAM_LIBS)
+ASAN_LIBS   := $(PARSE_ASAN_LIB) $(LX_ASAN_LIB) build/libsukkal-asan.a $(LAM_ASAN_LIBS)
 
 -include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) $(AF_OBJS:.o=.d) \
          build/obj/cli.d build/obj-asan/cli.d build/obj-af/cli.d \
@@ -662,12 +705,21 @@ build/engine-test$(EXE): build/obj/engine-test.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) build/obj/engine-test.o $(ENGINE_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
 
-# The same driver under AddressSanitizer. A use-after-free in the boundary
-# between the tree, the document store and the VM is invisible without it:
-# a freed key cell is silently reused and a property becomes a different one.
-build/mdy-asan$(EXE): build/obj-asan/cli.o $(ASAN_OBJS) $(ENGINE_LIBS)
+# The command under AddressSanitizer, every library it links included, for
+# the hostile corpus (check-hostile). A use-after-free in the boundary between
+# the tree, the document store and the VM is invisible without it: a freed key
+# cell is silently reused and a property becomes a different one.
+build/mdy-asan$(EXE): build/obj-asan/cli.o $(ASAN_OBJS) $(ASAN_LIBS)
 	@mkdir -p build
-	$(CC) $(ASAN_CFLAGS) build/obj-asan/cli.o $(ASAN_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(ASAN_CFLAGS) build/obj-asan/cli.o $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
+
+# The engine test the same way (check-engine-asan).
+build/obj-asan/engine-test.o: test/engine.c $(HL_HDR)
+	@mkdir -p build/obj-asan
+	$(CC) $(ASAN_CFLAGS) $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include -MMD -MP -c $< -o $@
+build/engine-test-asan$(EXE): build/obj-asan/engine-test.o $(ASAN_OBJS) $(ASAN_LIBS)
+	@mkdir -p build
+	$(CC) $(ASAN_CFLAGS) build/obj-asan/engine-test.o $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
 
 # The same driver with a single allocation refused, chosen by
 # MDY_ALLOC_FAIL_NTH. check-alloc sweeps n over a whole build; see check-alloc.
@@ -692,6 +744,13 @@ check-engine: build/engine-test$(EXE)
 	@./build/engine-test$(EXE)
 	@echo "-- again, collecting at every safe point"
 	@MDY_GC_STRESS=1 ./build/engine-test$(EXE)
+
+# The same checks with every library instrumented, and the collector at
+# every safe point: the two together are what turn a use-after-free at the
+# VM boundary into a named line rather than a property that quietly became
+# a different one.
+check-engine-asan: build/engine-test-asan$(EXE)
+	@MDY_GC_STRESS=1 ./build/engine-test-asan$(EXE)
 
 # A whole site built both ways and diffed. SITE names the directory, and
 # defaults to the site next to this repository — the same SITE the front end's
