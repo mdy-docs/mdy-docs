@@ -713,25 +713,32 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
         if (!note) return 0;
         int n = mdy_footnote_reference(ctx->doc, note);
 
-        char buf[256];
+        const char *pre = ctx->doc->note_prefix ? ctx->doc->note_prefix : "user-content-";
+        /* Sized to the label: at buf[256] a long id truncated the `href` (with
+         * its leading `#`) one byte earlier than the `id`, so the ref pointed
+         * at an anchor that did not exist. */
+        size_t cap = strlen(pre) + strlen(note->id) + 32;
+        char stackbuf[256];
+        char *buf = cap <= sizeof stackbuf ? stackbuf : malloc(cap);
+        if (!buf) mdy_oom_exit();
         flush(ctx);
         mdy_node *sup = mdy_new_element(ctx->doc, "sup", 3);
         mdy_node *a = mdy_new_element(ctx->doc, "a", 1);
 
-        const char *pre = ctx->doc->note_prefix ? ctx->doc->note_prefix : "user-content-";
-        snprintf(buf, sizeof buf, "#%sfn-%s", pre, note->id);
+        snprintf(buf, cap, "#%sfn-%s", pre, note->id);
         mdy_set_string(ctx->doc, a, "href", buf, strlen(buf));
-        if (n > 1) snprintf(buf, sizeof buf, "%sfnref-%s-%d", pre, note->id, n);
-        else snprintf(buf, sizeof buf, "%sfnref-%s", pre, note->id);
+        if (n > 1) snprintf(buf, cap, "%sfnref-%s-%d", pre, note->id, n);
+        else snprintf(buf, cap, "%sfnref-%s", pre, note->id);
         mdy_set_string(ctx->doc, a, "id", buf, strlen(buf));
         mdy_set_bool(ctx->doc, a, "dataFootnoteRef", 1);
         mdy_set_string(ctx->doc, a, "ariaDescribedBy", "footnote-label", 14);
 
-        snprintf(buf, sizeof buf, "%d", note->number);
+        snprintf(buf, cap, "%d", note->number);
         mdy_append(a, mdy_new_text(ctx->doc, buf, strlen(buf)));
         mdy_append(sup, a);
         mdy_append(ctx->parent, sup);
         ctx->at_boundary = 0;
+        if (buf != stackbuf) free(buf);
         return close + 2;
     }
 

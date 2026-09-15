@@ -300,7 +300,7 @@ static void separate(mdy_doc *doc, mdy_node *parent) {
  */
 /* How much node_text would write, so a caller can hold all of it. */
 static size_t node_text_len(const mdy_node *n) {
-    if (n->type == MDY_TEXT) return n->text ? strlen(n->text) : 0;
+    if (n->type == MDY_TEXT) return mdy_text_len(n);
     size_t total = 0;
     for (const mdy_node *c = n->first; c; c = c->next) total += node_text_len(c);
     return total;
@@ -308,7 +308,7 @@ static size_t node_text_len(const mdy_node *n) {
 
 static size_t node_text(const mdy_node *n, char *out, size_t cap, size_t o) {
     if (n->type == MDY_TEXT) {
-        size_t len = n->text ? strlen(n->text) : 0;
+        size_t len = mdy_text_len(n);
         if (o + len > cap) len = cap > o ? cap - o : 0;
         memcpy(out + o, n->text, len);
         return o + len;
@@ -348,7 +348,10 @@ static long marker_number(const mdy_line *l) {
     long value = 0;
     size_t i = 0;
     while (i < l->len && l->text[i] >= '0' && l->text[i] <= '9') {
-        value = value * 10 + (l->text[i] - '0');
+        /* Saturate rather than overflow: a 20-digit marker would wrap `long`
+         * (undefined, and `long` is 32-bit on Windows). Every value up to nine
+         * digits — more than any real ordered list — is kept exactly. */
+        if (value <= 99999999L) value = value * 10 + (l->text[i] - '0');
         i++;
     }
     return i ? value : -1;
@@ -601,7 +604,7 @@ static void prepend(mdy_node *parent, mdy_node *child) {
 static size_t text_of(const mdy_node *node, char *buf, size_t cap, size_t at) {
     if (!node) return at;
     if (node->type == MDY_TEXT) {
-        size_t n = strlen(node->text);
+        size_t n = mdy_text_len(node);
         if (at + n >= cap) n = cap - 1 - at;
         memcpy(buf + at, node->text, n);
         at += n;
@@ -827,6 +830,54 @@ static int is_raw_text(const char *tag) {
            strcmp(tag, "title") == 0;
 }
 
+/*
+ * An element whose content is TEXT and nothing else: pre, script, style,
+ * textarea, title. Markup inside a <script> is not markup, and parsing it as
+ * if it were is how a stylesheet ends up with an <em> in it. `el` is the
+ * built element, `[i+1, end)` its lines, `opener_indent` the opener's column.
+ *
+ * The lines come through as written, minus the indentation that put them in
+ * here — two columns past the opener's own, so anything deeper keeps the
+ * difference. A BLANK line contributes nothing at all rather than an empty
+ * line: the JavaScript joins with `filter(Boolean)`, which drops it along with
+ * an empty opener. Appends `el` to `parent` and returns `end`.
+ */
+static size_t emit_raw_text_element(mdy_doc *doc, mdy_node *parent, mdy_node *el,
+                                    const mdy_line *lines, size_t i, size_t end,
+                                    size_t opener_indent, const char *content,
+                                    size_t content_len) {
+    size_t strip = opener_indent + 2;
+    size_t need = 0;
+    if (content) { trim(&content, &content_len); need += content_len + 1; }
+    for (size_t k = i + 1; k < end; k++) {
+        if (lines[k].blank) continue;
+        size_t extra = lines[k].indent > strip ? lines[k].indent - strip : 0;
+        need += extra + lines[k].len + 1;
+    }
+    char *text = need ? mdy_alloc(&doc->arena, need + 1) : NULL;
+    size_t o = 0;
+    if (text) {
+        if (content && content_len) {
+            memcpy(text + o, content, content_len);
+            o += content_len;
+        }
+        for (size_t k = i + 1; k < end; k++) {
+            if (lines[k].blank) continue;
+            if (o) text[o++] = '\n';
+            size_t extra = lines[k].indent > strip ? lines[k].indent - strip : 0;
+            for (size_t sp = 0; sp < extra; sp++) text[o++] = ' ';
+            memcpy(text + o, lines[k].text, lines[k].len);
+            o += lines[k].len;
+        }
+        text[o] = '\0';
+    }
+    if (o) mdy_append(el, mdy_new_text(doc, text, o));
+    mdy_set_position(el, lines, i, end > i + 1 ? end - 1 : i);
+    separate(doc, parent);
+    mdy_append(parent, el);
+    return end;
+}
+
 static size_t parse_element(mdy_doc *doc, mdy_node *parent,
                             const mdy_line *lines, size_t count, size_t i, size_t nesting) {
     const mdy_line *l = &lines[i];
@@ -935,49 +986,8 @@ static size_t parse_element(mdy_doc *doc, mdy_node *parent,
         return i + 1;
     }
 
-    /*
-     * Elements whose content is TEXT and nothing else: pre, script, style,
-     * textarea, title. Markup inside a <script> is not markup, and parsing it
-     * as if it were is how a stylesheet ends up with an <em> in it.
-     *
-     * The lines come through as written, minus the indentation that put them
-     * in here — two columns past the opener's own, so anything deeper keeps
-     * the difference. A BLANK line contributes nothing at all rather than an
-     * empty line: the JavaScript joins with `filter(Boolean)`, which drops it
-     * along with an empty opener.
-     */
-    if (is_raw_text(build)) {
-        size_t strip = l->indent + 2;
-        size_t need = 0;
-        if (content) { trim(&content, &content_len); need += content_len + 1; }
-        for (size_t k = i + 1; k < end; k++) {
-            if (lines[k].blank) continue;
-            size_t extra = lines[k].indent > strip ? lines[k].indent - strip : 0;
-            need += extra + lines[k].len + 1;
-        }
-        char *text = need ? mdy_alloc(&doc->arena, need + 1) : NULL;
-        size_t o = 0;
-        if (text) {
-            if (content && content_len) {
-                memcpy(text + o, content, content_len);
-                o += content_len;
-            }
-            for (size_t k = i + 1; k < end; k++) {
-                if (lines[k].blank) continue;
-                if (o) text[o++] = '\n';
-                size_t extra = lines[k].indent > strip ? lines[k].indent - strip : 0;
-                for (size_t sp = 0; sp < extra; sp++) text[o++] = ' ';
-                memcpy(text + o, lines[k].text, lines[k].len);
-                o += lines[k].len;
-            }
-            text[o] = '\0';
-        }
-        if (o) mdy_append(el, mdy_new_text(doc, text, o));
-        mdy_set_position(el, lines, i, end > i + 1 ? end - 1 : i);
-        separate(doc, parent);
-        mdy_append(parent, el);
-        return end;
-    }
+    if (is_raw_text(build))
+        return emit_raw_text_element(doc, parent, el, lines, i, end, l->indent, content, content_len);
 
     if (content) {
         /*
@@ -1057,7 +1067,11 @@ static void cells_init(Cells *c, const mdy_line *l) {
     const char **st = malloc(want * sizeof *st);
     size_t *ln = malloc(want * sizeof *ln);
     int *al = malloc(want * sizeof *al);
-    if (!st || !ln || !al) { free(st); free(ln); free(al); return; }  /* the stack still serves */
+    /* A wide table needs this buffer: the 64-slot stack cannot hold its
+     * columns, and falling back to it is exactly the silent column loss this
+     * whole struct exists to prevent. An exhausted allocator ends the run, as
+     * everywhere else in the parser. */
+    if (!st || !ln || !al) { free(st); free(ln); free(al); mdy_oom_exit(); }
     c->starts = st; c->lens = ln; c->align = al; c->cap = want;
 }
 
@@ -1617,9 +1631,17 @@ static size_t parse_paragraph(mdy_doc *doc, mdy_node *parent, const mdy_line *li
         mdy_node *h = mdy_new_element(doc, tag, 2);
         mdy_parse_inline(doc, h, probe, probe_len);
         {
-            char rendered[1024];
-            size_t rlen = node_text(h, rendered, sizeof rendered, 0);
-            set_heading_id(doc, h, rendered, rlen);
+            /* ALL of the heading's text, as the `=` path does below: a fixed
+             * buffer gave a long setext heading an id that stopped mid-word. */
+            char stack_text[1024];
+            size_t need = node_text_len(h) + 1;
+            size_t text_cap = need > sizeof stack_text ? need : sizeof stack_text;
+            char *rendered = text_cap > sizeof stack_text ? malloc(text_cap) : stack_text;
+            if (rendered) {
+                size_t rlen = node_text(h, rendered, text_cap, 0);
+                set_heading_id(doc, h, rendered, rlen);
+                if (rendered != stack_text) free(rendered);
+            }
         }
         mdy_set_position(h, lines, i, j);
         separate(doc, parent);
@@ -1640,6 +1662,76 @@ static size_t parse_paragraph(mdy_doc *doc, mdy_node *parent, const mdy_line *li
     return j;
 }
 
+/*
+ * Indentation as structure: a run of lines indented past `base` is a block of
+ * its own, wrapped in nested <div>s at two columns per level. Returns the index
+ * past the run when it produced them, or `i` unchanged when the nesting depth
+ * was exhausted and the line must be read where it stands. Lifted out of
+ * mdy_parse_block, which it recurses back into for the run's own content.
+ */
+static size_t parse_indented_div(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
+                                 size_t count, size_t i, size_t base, size_t nesting,
+                                 int *produced) {
+    size_t j = i;
+    while (j < count && (lines[j].blank || lines[j].indent > base)) j++;
+    while (j > i && lines[j - 1].blank) j--;
+
+    size_t inner = lines[i].indent;
+    for (size_t k = i; k < j; k++)
+        if (!lines[k].blank && lines[k].indent < inner) inner = lines[k].indent;
+
+    /*
+     * EVERY TWO COLUMNS IS ONE LEVEL. The grammar says so in as many words,
+     * and it means an indent of eight is FOUR nested <div>s rather than one
+     * deep-indented one. Making a single div for any depth looks right in a
+     * two-space document and is wrong in every other: the corpus has
+     * eight-column indents that come out four levels deep.
+     */
+    size_t levels = (inner - base) / 2;
+    if (levels == 0) levels = 1;
+    /*
+     * One line of four hundred thousand spaces is two hundred thousand levels,
+     * and this is the only construct that nests without the source growing with
+     * it — everything else costs an indentation step per level, which is
+     * quadratic. So it is the one that has to be held, and it is held against
+     * the depth ALREADY under `parent`: two chains one inside the other would
+     * each pass a check of their own and together be twice as deep.
+     */
+    size_t room = nesting < MDY_MAX_DEPTH ? MDY_MAX_DEPTH - nesting : 0;
+    if (levels > room) levels = room;
+    /*
+     * Nothing left to nest into. The caller reads the line where it stands,
+     * its indentation meaning nothing — said once, here, because this is where
+     * something is actually lost: a clamp with room still left keeps nesting
+     * and comes back round to this same test one level down.
+     */
+    if (levels == 0) {
+        mdy_warn(doc, lines, i, "nesting-depth",
+                 "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
+        return i;
+    }
+
+    mdy_node *outer = NULL, *innermost = NULL;
+    for (size_t d = 0; d < levels; d++) {
+        mdy_node *div = mdy_new_element(doc, "div", 3);
+        mdy_set_position(div, lines, i, j > i ? j - 1 : i);
+        if (innermost) {
+            mdy_append(innermost, mdy_new_text(doc, "\n", 1));
+            mdy_append(innermost, div);
+            mdy_append(innermost, mdy_new_text(doc, "\n", 1));
+        } else {
+            outer = div;
+        }
+        innermost = div;
+    }
+    mdy_parse_block(doc, innermost, lines + i, j - i, base + levels * 2, nesting + levels);
+
+    separate(doc, parent);
+    mdy_append(parent, outer);
+    *produced = 1;
+    return j;
+}
+
 void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size_t count,
                      size_t base, size_t nesting) {
     size_t i = 0;
@@ -1652,86 +1744,17 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
 
         /*
          * Indentation is structural: a line further in than this run's own
-         * column is a block of its own, in a <div>. It nests — four columns
-         * under two is a div inside a div — and it applies at the very start
-         * of a document too, so a file whose first line is indented opens with
-         * one.
-         *
-         * An element opener takes its own indented lines as children instead
-         * (parse_element), and a list item absorbs its continuation lines, so
-         * by the time this fires the indentation belongs to nothing else.
+         * column is a block of its own, in a <div> (parse_indented_div). It
+         * applies at the very start of a document too. An element opener takes
+         * its own indented lines as children instead, and a list item absorbs
+         * its continuation lines, so by the time this fires the indentation
+         * belongs to nothing else.
          */
         if (l->indent > base) {
-            size_t j = i;
-            while (j < count && (lines[j].blank || lines[j].indent > base)) j++;
-            while (j > i && lines[j - 1].blank) j--;
-
-            size_t inner = lines[i].indent;
-            for (size_t k = i; k < j; k++)
-                if (!lines[k].blank && lines[k].indent < inner) inner = lines[k].indent;
-
-            /*
-             * EVERY TWO COLUMNS IS ONE LEVEL. The grammar says so in as many
-             * words, and it means an indent of eight is FOUR nested <div>s
-             * rather than one deep-indented one. Making a single div for any
-             * depth looks right in a two-space document and is wrong in every
-             * other: the corpus has eight-column indents that come out four
-             * levels deep.
-             */
-            size_t levels = (inner - base) / 2;
-            if (levels == 0) levels = 1;
-            /*
-             * One line of four hundred thousand spaces is two hundred
-             * thousand levels, and this is the only construct that nests
-             * without the source growing with it — everything else costs an
-             * indentation step per level, which is quadratic. So it is the
-             * one that has to be held, and it is held against the depth
-             * ALREADY under `parent`: two chains one inside the other would
-             * each pass a check of their own and together be twice as deep.
-             */
-            size_t room = nesting < MDY_MAX_DEPTH ? MDY_MAX_DEPTH - nesting : 0;
-            if (levels > room) levels = room;
-            /*
-             * Nothing left to nest into. The line falls through and is read
-             * where it stands, its indentation meaning nothing — said once,
-             * here, because this is where something is actually lost: a
-             * clamp with room still left keeps nesting and comes back round
-             * to this same test one level down.
-             *
-             * Parsing the run into `parent` instead of falling through would
-             * come straight back here with the same line and the same `base`,
-             * which is not a flatter tree but a shorter road to the same
-             * crash.
-             */
-            if (levels == 0) {
-                mdy_warn(doc, lines, i, "nesting-depth",
-                         "nesting deeper than %d levels is read flat", MDY_MAX_DEPTH);
-                goto not_indented;
-            }
-
-            mdy_node *outer = NULL, *innermost = NULL;
-            for (size_t d = 0; d < levels; d++) {
-                mdy_node *div = mdy_new_element(doc, "div", 3);
-                mdy_set_position(div, lines, i, j > i ? j - 1 : i);
-                if (innermost) {
-                    mdy_append(innermost, mdy_new_text(doc, "\n", 1));
-                    mdy_append(innermost, div);
-                    mdy_append(innermost, mdy_new_text(doc, "\n", 1));
-                } else {
-                    outer = div;
-                }
-                innermost = div;
-            }
-            mdy_parse_block(doc, innermost, lines + i, j - i, base + levels * 2,
-                            nesting + levels);
-
-            separate(doc, parent);
-            mdy_append(parent, outer);
-            produced = 1;
-            i = j;
-            continue;
+            size_t next = parse_indented_div(doc, parent, lines, count, i, base, nesting, &produced);
+            if (next != i) { i = next; continue; }
+            /* depth exhausted: fall through and read the line where it stands */
         }
-    not_indented:
 
         /* --- thematic break: three or more of - * _ alone --- */
         if (thematic_break(l)) {
@@ -1748,6 +1771,12 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
         if (l->text[0] == '=') {
             size_t depth = run_of(l, '=');
             size_t max = doc->options.max_heading ? (size_t)doc->options.max_heading : 6;
+            /* The level becomes a single tag digit (`h1`..`h9`), so it must
+             * stay in 1..9 whatever the option says — a max_heading of 0 falls
+             * to the default above, a negative one casts to a huge size_t, and
+             * either could otherwise make `'0' + depth` a non-digit tag. */
+            if (max < 1) max = 1;
+            if (max > 9) max = 9;
             const char *body = l->text + depth;
             size_t body_len = l->len - depth;
             /* Trailing decoration, e.g. `== Title ==`. */
@@ -1889,11 +1918,17 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
  * A collected line is blanked rather than removed. Blank is exactly what a
  * removed line means to every rule below: it separates blocks and produces
  * nothing.
+ *
+ * `lines` is NON-const on purpose — unlike the parse functions, this pass
+ * rewrites the lines it consumes (blanking each definition), which is why it
+ * runs before them.
  */
 static void collect_definitions(mdy_doc *doc, mdy_line *lines, size_t count) {
     for (size_t i = 0; i < count; i++) {
         mdy_line *l = &lines[i];
-        if (l->len < 8 || l->text[0] != '[' || l->text[1] != '[') continue;
+        /* `[[^x]]:` is the shortest definition — seven characters. `< 8`
+         * rejected it while accepting the same thing with spaces, `[[ ^x ]]:`. */
+        if (l->len < 7 || l->text[0] != '[' || l->text[1] != '[') continue;
 
         size_t k = 2;
         while (k < l->len && (l->text[k] == ' ' || l->text[k] == '\t')) k++;

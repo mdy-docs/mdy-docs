@@ -1151,9 +1151,10 @@ static char *generate_output(const DocOptions *o, mdy_session *session,
     if (o->kind == INPUT_MD) {
         mdy_engine_free(e);
         if (!o->html) { *out = text; return NULL; }
-        mdy_doc *doc = mdy_markdown_parse(text, len);
+        const char *why = NULL;
+        mdy_doc *doc = mdy_markdown_parse(text, len, &why);
         free(text);
-        if (!doc) return "the markdown could not be read";
+        if (!doc) return (char *)(why ? why : "the markdown could not be read");
         char *html = mdy_to_html(mdy_root(doc), NULL);
         mdy_free(doc);
         if (!html) return "out of memory";

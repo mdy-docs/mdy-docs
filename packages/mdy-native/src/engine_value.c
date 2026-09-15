@@ -428,9 +428,11 @@ typedef struct {
     int depth;
     JsValue result;
     int have_result;
+    int failed;       /* nesting past BJ_STACK_MAX: the whole decode is rejected */
 } Decode;
 
 static void decode_put(Decode *d, JsValue v) {
+    if (d->failed) return;
     if (d->depth == 0) { d->result = v; d->have_result = 1; return; }
     JsValue parent = d->stack[d->depth - 1];
     if (js_is_array(parent)) {
@@ -498,9 +500,19 @@ static void d_oid(void *ctx, const uint8_t *b) {
  * nowhere near where it lands. `Decode` lives for the whole decode, so its
  * slots are the addresses that are actually valid to hand out.
  */
+/*
+ * A `begin` past the stack limit does NOT just get dropped: its matching `end`
+ * would still pop, closing a real parent early and folding every later value
+ * into the wrong container — a silently different record. So the whole decode
+ * is failed here (as bjval.c's push does) and every callback becomes a no-op
+ * from this point, leaving the stack frozen for the unwind in binjson_to_js to
+ * release. A store value nested past 64 is already corrupt; rejecting it beats
+ * decoding it wrong.
+ */
 static void d_array_begin(void *ctx, uint32_t count) {
     Decode *d = ctx;
-    if (d->depth >= BJ_STACK_MAX) return;
+    if (d->failed) return;
+    if (d->depth >= BJ_STACK_MAX) { d->failed = 1; return; }
     d->stack[d->depth] = js_array_new(d->e->ctx, count);
     js_gc_protect(d->e->vm, &d->stack[d->depth]);
     d->keys[d->depth] = NULL;
@@ -509,7 +521,8 @@ static void d_array_begin(void *ctx, uint32_t count) {
 static void d_object_begin(void *ctx, uint32_t count) {
     Decode *d = ctx;
     (void)count;
-    if (d->depth >= BJ_STACK_MAX) return;
+    if (d->failed) return;
+    if (d->depth >= BJ_STACK_MAX) { d->failed = 1; return; }
     d->stack[d->depth] = js_object_new(d->e->ctx);
     js_gc_protect(d->e->vm, &d->stack[d->depth]);
     d->keys[d->depth] = NULL;
@@ -517,6 +530,7 @@ static void d_object_begin(void *ctx, uint32_t count) {
 }
 static void d_key(void *ctx, const uint8_t *s, uint32_t n) {
     Decode *d = ctx;
+    if (d->failed) return;
     if (d->depth == 0) return;
     free(d->keys[d->depth - 1]);
     char *k = mdy_xmalloc(n + 1);
@@ -526,6 +540,7 @@ static void d_key(void *ctx, const uint8_t *s, uint32_t n) {
 }
 static void d_end(void *ctx) {
     Decode *d = ctx;
+    if (d->failed) return;
     if (d->depth == 0) return;
     int at = --d->depth;
     free(d->keys[at]);
@@ -552,6 +567,20 @@ JsValue binjson_to_js(mdy_engine *e, const uint8_t *bytes, size_t len, size_t *c
      * while the decode is still allocating. */
     js_gc_protect(e->vm, &d.result);
     int rc = bj_decode(bytes, len, &v, consumed);
+    /*
+     * A container is protected through its stack slot by d_array_begin /
+     * d_object_begin and unprotected by the matching d_end. A truncated or
+     * corrupt value aborts the decode with a begin that never got its end, so
+     * those slots — and the key strings under them — are still live here. A
+     * clean decode has already unwound to depth 0, so this loop runs only on
+     * the abort path; leaving it out would keep the root table pointing into
+     * this frame after it returns, and leak the keys.
+     */
+    while (d.depth > 0) {
+        int at = --d.depth;
+        free(d.keys[at]);
+        js_gc_unprotect(e->vm, &d.stack[at]);
+    }
     js_gc_unprotect(e->vm, &d.result);
-    return rc == 0 ? d.result : js_undefined();
+    return (rc == 0 && !d.failed) ? d.result : js_undefined();
 }

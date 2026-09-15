@@ -213,11 +213,11 @@ static void walk_out(Raw *r, const mdy_node *n) {
             return;
 
         case MDY_TEXT:
-            feed_text(r, n->text ? n->text : "", n->text ? strlen(n->text) : 0);
+            feed_text(r, n->text ? n->text : "", mdy_text_len(n));
             return;
 
         case MDY_RAW:
-            feed(r, n->text ? n->text : "", n->text ? strlen(n->text) : 0);
+            feed(r, n->text ? n->text : "", mdy_text_len(n));
             return;
 
         case MDY_COMMENT: {
@@ -226,7 +226,7 @@ static void walk_out(Raw *r, const mdy_node *n) {
              * to. A `-->` inside is the author's problem on both sides. */
             mdy_buf b = { .ok = 1, .seed = 64 };
             mdy_buf_put(&b, "<!--", 4);
-            if (n->text) mdy_buf_put(&b, n->text, strlen(n->text));
+            if (n->text) mdy_buf_put(&b, n->text, mdy_text_len(n));
             mdy_buf_put(&b, "-->", 3);
             if (b.ok) feed(r, b.s, b.len); else r->failed = 1;
             free(b.s);
@@ -320,10 +320,7 @@ static void set_from_attribute(mdy_doc *doc, mdy_node *el,
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
         const char *cand = MDY_PROP_INFO[mid].property;
-        size_t clen = strlen(cand);
-        size_t n = clen < plen ? clen : plen;
-        int cmp = memcmp(cand, hast, n);
-        if (cmp == 0) cmp = clen < plen ? -1 : (clen > plen ? 1 : 0);
+        int cmp = mdy_strkey_cmp(cand, strlen(cand), hast, plen);
         if (cmp == 0) { flags = MDY_PROP_INFO[mid].flags; break; }
         if (cmp < 0) lo = mid + 1; else hi = mid;
     }
@@ -338,7 +335,7 @@ static void set_from_attribute(mdy_doc *doc, mdy_node *el,
         mdy_prop *existing = NULL;
         for (mdy_prop *q = el->props; q; q = q->next)
             if (strcmp(q->name, hast) == 0) { existing = q; break; }
-        if (existing) { existing->type = MDY_PROP_LIST; existing->list = NULL; existing->list_len = 0; }
+        if (existing) { existing->type = MDY_PROP_LIST; existing->list = NULL; existing->list_len = 0; existing->list_cap = 0; }
 
         size_t k = 0;
         int any = 0;

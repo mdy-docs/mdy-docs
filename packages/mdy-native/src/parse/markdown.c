@@ -21,7 +21,20 @@
 #include "internal.h"
 #include "alert_table.h"
 
-enum { STACK_MAX = 128 };
+/*
+ * The most block nesting a `.md` tree may reach. It is a real cap, not a
+ * guess: every later pass — mdy_raw_reparse's `walk`, the HTML writer's
+ * `write_node`, mdy_clone — recurses once per level, so an unbounded tree here
+ * moves the stack overflow downstream rather than removing it. Set to
+ * MDY_MAX_DEPTH so the two front ends agree on how deep is too deep; the `.mdy`
+ * block parser already produces and every pass already walks trees that deep.
+ *
+ * Was 128, which is only ~64 levels of a `- ` list (a `<ul>` and its `<li>`
+ * are a frame each), so ordinary-if-deep CommonMark hit it, and `push` set
+ * `failed` — indistinguishable from an md4c OOM. Overflow now reports itself
+ * (see `too_deep`) instead of masquerading as an unreadable document.
+ */
+enum { STACK_MAX = MDY_MAX_DEPTH };
 
 /*
  * remark-rehype's `wrap(nodes, loose)`, which is where every `\n` in the tree
@@ -85,6 +98,7 @@ typedef struct {
     mdy_node *note_item;
     unsigned note_index, note_refs;
     int failed;
+    int too_deep;     /* failed specifically because nesting hit STACK_MAX */
 } Build;
 
 static void flush_text(Build *b);
@@ -94,7 +108,7 @@ static Frame *frame(Build *b) { return b->depth > 0 ? &b->stack[b->depth - 1] : 
 
 static void push(Build *b, mdy_node *n, int loose) {
     flush_text(b);
-    if (b->depth >= STACK_MAX) { b->failed = 1; return; }
+    if (b->depth >= STACK_MAX) { b->failed = 1; b->too_deep = 1; return; }
     b->stack[b->depth].node = n;
     b->stack[b->depth].loose = loose;
     b->stack[b->depth].children = 0;
@@ -104,7 +118,7 @@ static void push(Build *b, mdy_node *n, int loose) {
 
 /* A span that builds nothing, so that its leave has something to pop. */
 static void push_inert(Build *b) {
-    if (b->depth >= STACK_MAX) { b->failed = 1; return; }
+    if (b->depth >= STACK_MAX) { b->failed = 1; b->too_deep = 1; return; }
     b->stack[b->depth] = b->stack[b->depth - 1];
     b->stack[b->depth].inert = 1;
     b->depth++;
@@ -161,12 +175,13 @@ static void newline(Build *b) {
      * block, which is a tight list item and nowhere else.
      */
     if (parent->last && parent->last->type == MDY_TEXT && parent->last->text) {
-        size_t n = strlen(parent->last->text);
+        size_t n = mdy_text_len(parent->last);
         char *joined = mdy_alloc(&b->doc->arena, n + 2);
         memcpy(joined, parent->last->text, n);
         joined[n] = '\n';
         joined[n + 1] = '\0';
         parent->last->text = joined;
+        parent->last->text_len = n + 1;
         return;
     }
     mdy_append(parent, mdy_new_text(b->doc, "\n", 1));
@@ -232,28 +247,36 @@ static void put_codepoint(Build *b, unsigned cp) {
 }
 
 /*
+ * The codepoint of a numeric character reference — `&#1234;` or `&#x12AB;` —
+ * with U+FFFD for one that resolves to zero (CommonMark's rule for a NUL). The
+ * caller has already checked the `&#` shape. Shared by entity_utf8 and entity
+ * below, which had a byte-for-byte copy of this loop each.
+ */
+static unsigned numeric_entity_cp(const char *s, size_t len) {
+    unsigned cp = 0;
+    size_t i = 2;
+    int hex = (s[2] == 'x' || s[2] == 'X');
+    if (hex) i = 3;
+    for (; i + 1 < len; i++) {
+        char c = s[i];
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (hex && c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (hex && c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else { cp = 0; break; }
+        cp = cp * (hex ? 16u : 10u) + (unsigned)d;
+    }
+    if (cp == 0) cp = 0xFFFD;
+    return cp;
+}
+
+/*
  * An entity's codepoints, as UTF-8 bytes, or 0 if the table does not have it.
  * The numeric and named halves of `entity()` below, without a Build to write
  * into — which is what an ATTRIBUTE needs.
  */
 static size_t entity_utf8(const char *s, size_t len, char out[8]) {
-    if (len >= 4 && s[1] == '#') {
-        unsigned cp = 0;
-        size_t i = 2;
-        int hex = (s[2] == 'x' || s[2] == 'X');
-        if (hex) i = 3;
-        for (; i + 1 < len; i++) {
-            char c = s[i];
-            int d;
-            if (c >= '0' && c <= '9') d = c - '0';
-            else if (hex && c >= 'a' && c <= 'f') d = c - 'a' + 10;
-            else if (hex && c >= 'A' && c <= 'F') d = c - 'A' + 10;
-            else { cp = 0; break; }
-            cp = cp * (hex ? 16u : 10u) + (unsigned)d;
-        }
-        if (cp == 0) cp = 0xFFFD;
-        return utf8_of(cp, out);
-    }
+    if (len >= 4 && s[1] == '#') return utf8_of(numeric_entity_cp(s, len), out);
     const ENTITY *e = entity_lookup(s, len);
     if (!e) return 0;
     size_t n = utf8_of(e->codepoints[0], out);
@@ -271,24 +294,7 @@ static size_t entity_utf8(const char *s, size_t len, char out[8]) {
  * which is what CommonMark says to do with `&nope;`.
  */
 static void entity(Build *b, const char *s, size_t len) {
-    if (len >= 4 && s[1] == '#') {
-        unsigned cp = 0;
-        size_t i = 2;
-        int hex = (s[2] == 'x' || s[2] == 'X');
-        if (hex) i = 3;
-        for (; i + 1 < len; i++) {
-            char c = s[i];
-            int d;
-            if (c >= '0' && c <= '9') d = c - '0';
-            else if (hex && c >= 'a' && c <= 'f') d = c - 'a' + 10;
-            else if (hex && c >= 'A' && c <= 'F') d = c - 'A' + 10;
-            else { cp = 0; break; }
-            cp = cp * (hex ? 16u : 10u) + (unsigned)d;
-        }
-        if (cp == 0) cp = 0xFFFD;          /* CommonMark: NUL becomes U+FFFD */
-        put_codepoint(b, cp);
-        return;
-    }
+    if (len >= 4 && s[1] == '#') { put_codepoint(b, numeric_entity_cp(s, len)); return; }
     const ENTITY *e = entity_lookup(s, len);
     if (e) {
         put_codepoint(b, e->codepoints[0]);
@@ -342,15 +348,25 @@ static int uri_alnum(unsigned char c) {
 }
 
 /*
- * Writes at most 3 bytes per input byte, so `out` needs 3 * len + 1.
- * Returns the length written.
+ * Writes at most 9 bytes per input byte, so `out` needs URI_OUT_MAX(len).
+ * Returns the length written. Callers MUST size with URI_OUT_MAX — a smaller
+ * buffer overflows.
  *
  * The decode-and-re-encode is not a detour: node reads the file as UTF-8 with
  * replacement, so an ill-formed byte has already become U+FFFD by the time
  * normalizeUri sees it and comes out `%EF%BF%BD`. Walking the bytes directly
  * would emit `%80` for that byte instead. mdy_utf8_decode makes the same
  * substitution, one byte at a time, which is the same answer.
+ *
+ * Why 9 and not 3: a single ill-formed byte is consumed one at a time
+ * (mdy_utf8_decode returns width 1, U+FFFD), and U+FFFD re-encodes to three
+ * UTF-8 bytes, each percent-encoded to `%XX` — nine output bytes for one input
+ * byte. A valid multibyte sequence is 3 bytes out per byte in; an unsafe ASCII
+ * byte is 3; only the replacement case reaches 9, and `[x](` + `\xff`… is
+ * enough to hit it. It was `3 * len + 1`, which overran both buffers below.
  */
+#define URI_OUT_MAX(len) ((len) * 9 + 1)
+
 static size_t normalize_uri(const char *s, size_t len, char *out) {
     static const char HEX[] = "0123456789ABCDEF";
     size_t w = 0;
@@ -392,8 +408,8 @@ static void put_attribute(Build *b, mdy_node *el, const char *name,
     char stack[512];
     char *buf = stack;
     char *heap = NULL;
-    if (len * 3 + 1 > sizeof stack) {
-        heap = malloc(len * 3 + 1);
+    if (URI_OUT_MAX(len) > sizeof stack) {
+        heap = malloc(URI_OUT_MAX(len));
         if (!heap) { b->failed = 1; return; }
         buf = heap;
     }
@@ -509,7 +525,7 @@ static const char *note_slug(Build *b, const MD_ATTRIBUTE *label) {
     for (size_t i = 0; i < len; i++) lower[i] = mdy_lower_ascii(label->text[i]);
     lower[len] = '\0';
 
-    char *out = mdy_alloc(&b->doc->arena, len * 3 + 1);
+    char *out = mdy_alloc(&b->doc->arena, URI_OUT_MAX(len));
     size_t n = normalize_uri(lower, len, out);
     out[n] = '\0';
     return out;
@@ -557,6 +573,76 @@ static const char *note_id(Build *b, const char *lead, const char *kind,
     if (n > 1) snprintf(out, need, "%suser-content-%s%s-%u", lead, kind, slug, n);
     else       snprintf(out, need, "%suser-content-%s%s", lead, kind, slug);
     return out;
+}
+
+/*
+ * A GitHub alert: `> [!NOTE]` and its four siblings.
+ * remark-github-blockquote-alert renames the blockquote to a <div>, gives it
+ * two classes and `dir="auto"`, and UNSHIFTS a title paragraph carrying an
+ * octicon in front of what the quote said. md4c has already eaten the `[!NOTE]`
+ * line and reports the rest as the block's children, so the only work here is
+ * the frame and the title. The icons are data (alert_table.h, generated by
+ * scripts/generate-alerts.mjs). Lifted out of enter_block's switch.
+ */
+static int enter_admonition(Build *b, const MD_BLOCK_ADMONITION_DETAIL *d) {
+    const char *kind = NULL;
+    const char *path = NULL;
+    for (size_t i = 0; i < MDY_ALERT_COUNT; i++) {
+        size_t n = strlen(MDY_ALERTS[i].type);
+        if (d->type.text && d->type.size == n &&
+            memcmp(d->type.text, MDY_ALERTS[i].type, n) == 0) {
+            kind = MDY_ALERTS[i].type;
+            path = MDY_ALERTS[i].path;
+            break;
+        }
+    }
+    /* md4c reports only the five, but a type this table does not know is a
+     * quote rather than a crash. */
+    if (!kind) {
+        before_block(b);
+        mdy_node *q = mdy_new_element(b->doc, "blockquote", 10);
+        append(b, q);
+        push(b, q, 1);
+        return 0;
+    }
+
+    before_block(b);
+    mdy_node *div = mdy_new_element(b->doc, "div", 3);
+    mdy_add_class(b->doc, div, "markdown-alert");
+    char cls[64];
+    int cn = snprintf(cls, sizeof cls, "markdown-alert-%s", kind);
+    if (cn < 0) { b->failed = 1; return -1; }
+    mdy_add_class(b->doc, div, cls);
+    mdy_set_string(b->doc, div, "dir", "auto", 4);
+    append(b, div);
+    push(b, div, 1);
+
+    /* The title paragraph the plugin puts in front. */
+    before_block(b);
+    mdy_node *title = mdy_new_element(b->doc, "p", 1);
+    mdy_add_class(b->doc, title, "markdown-alert-title");
+    mdy_set_string(b->doc, title, "dir", "auto", 4);
+
+    mdy_node *svg = mdy_new_element(b->doc, "svg", 3);
+    mdy_add_class(b->doc, svg, MDY_ALERT_OCTICON);
+    mdy_set_string(b->doc, svg, "viewBox", MDY_ALERT_VIEWBOX, strlen(MDY_ALERT_VIEWBOX));
+    mdy_set_string(b->doc, svg, "width", MDY_ALERT_WIDTH, strlen(MDY_ALERT_WIDTH));
+    mdy_set_string(b->doc, svg, "height", MDY_ALERT_HEIGHT, strlen(MDY_ALERT_HEIGHT));
+    mdy_set_string(b->doc, svg, "ariaHidden", MDY_ALERT_HIDDEN, strlen(MDY_ALERT_HIDDEN));
+    mdy_node *icon = mdy_new_element(b->doc, "path", 4);
+    mdy_set_string(b->doc, icon, "d", path, strlen(path));
+    mdy_append(svg, icon);
+    mdy_append(title, svg);
+
+    /* The title itself is the type UPPERCASED. */
+    char up[32];
+    size_t ulen = strlen(kind) < sizeof up - 1 ? strlen(kind) : sizeof up - 1;
+    for (size_t i = 0; i < ulen; i++)
+        up[i] = (char)(kind[i] >= 'a' && kind[i] <= 'z' ? kind[i] - 32 : kind[i]);
+    mdy_append(title, mdy_new_text(b->doc, up, ulen));
+
+    append(b, title);
+    return 0;
 }
 
 static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
@@ -658,81 +744,8 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             return 0;
         }
 
-        case MD_BLOCK_ADMONITION: {
-            /*
-             * A GitHub alert: `> [!NOTE]` and its four siblings.
-             * remark-github-blockquote-alert renames the blockquote to a
-             * <div>, gives it two classes and `dir="auto"`, and UNSHIFTS a
-             * title paragraph carrying an octicon in front of what the quote
-             * said. md4c has already eaten the `[!NOTE]` line and reports the
-             * rest as the block's children, so the only work here is the
-             * frame and the title.
-             *
-             * The icons are data and come from alert_table.h, which
-             * scripts/generate-alerts.mjs reads out of the plugin itself —
-             * a redrawn octicon is then one command rather than a divergence
-             * nothing reports.
-             */
-            const MD_BLOCK_ADMONITION_DETAIL *d = detail;
-            const char *kind = NULL;
-            const char *path = NULL;
-            for (size_t i = 0; i < MDY_ALERT_COUNT; i++) {
-                size_t n = strlen(MDY_ALERTS[i].type);
-                if (d->type.text && d->type.size == n &&
-                    memcmp(d->type.text, MDY_ALERTS[i].type, n) == 0) {
-                    kind = MDY_ALERTS[i].type;
-                    path = MDY_ALERTS[i].path;
-                    break;
-                }
-            }
-            /* md4c reports only the five, but a type this table does not know
-             * is a quote rather than a crash. */
-            if (!kind) {
-                before_block(b);
-                mdy_node *q = mdy_new_element(b->doc, "blockquote", 10);
-                append(b, q);
-                push(b, q, 1);
-                return 0;
-            }
-
-            before_block(b);
-            mdy_node *div = mdy_new_element(b->doc, "div", 3);
-            mdy_add_class(b->doc, div, "markdown-alert");
-            char cls[64];
-            int cn = snprintf(cls, sizeof cls, "markdown-alert-%s", kind);
-            if (cn < 0) { b->failed = 1; return -1; }
-            mdy_add_class(b->doc, div, cls);
-            mdy_set_string(b->doc, div, "dir", "auto", 4);
-            append(b, div);
-            push(b, div, 1);
-
-            /* The title paragraph the plugin puts in front. */
-            before_block(b);
-            mdy_node *title = mdy_new_element(b->doc, "p", 1);
-            mdy_add_class(b->doc, title, "markdown-alert-title");
-            mdy_set_string(b->doc, title, "dir", "auto", 4);
-
-            mdy_node *svg = mdy_new_element(b->doc, "svg", 3);
-            mdy_add_class(b->doc, svg, MDY_ALERT_OCTICON);
-            mdy_set_string(b->doc, svg, "viewBox", MDY_ALERT_VIEWBOX, strlen(MDY_ALERT_VIEWBOX));
-            mdy_set_string(b->doc, svg, "width", MDY_ALERT_WIDTH, strlen(MDY_ALERT_WIDTH));
-            mdy_set_string(b->doc, svg, "height", MDY_ALERT_HEIGHT, strlen(MDY_ALERT_HEIGHT));
-            mdy_set_string(b->doc, svg, "ariaHidden", MDY_ALERT_HIDDEN, strlen(MDY_ALERT_HIDDEN));
-            mdy_node *icon = mdy_new_element(b->doc, "path", 4);
-            mdy_set_string(b->doc, icon, "d", path, strlen(path));
-            mdy_append(svg, icon);
-            mdy_append(title, svg);
-
-            /* The title itself is the type UPPERCASED. */
-            char up[32];
-            size_t ulen = strlen(kind) < sizeof up - 1 ? strlen(kind) : sizeof up - 1;
-            for (size_t i = 0; i < ulen; i++)
-                up[i] = (char)(kind[i] >= 'a' && kind[i] <= 'z' ? kind[i] - 32 : kind[i]);
-            mdy_append(title, mdy_new_text(b->doc, up, ulen));
-
-            append(b, title);
-            return 0;
-        }
+        case MD_BLOCK_ADMONITION:
+            return enter_admonition(b, detail);
 
         case MD_BLOCK_QUOTE: {
             before_block(b);
@@ -1250,10 +1263,17 @@ static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
  */
 static void collect_text(const mdy_node *n, char *out, size_t cap, size_t *len) {
     if (n->type == MDY_TEXT && n->text) {
-        size_t add = strlen(n->text);
+        size_t add = mdy_text_len(n);
         if (*len + add < cap) { memcpy(out + *len, n->text, add); *len += add; }
     }
     for (const mdy_node *c = n->first; c; c = c->next) collect_text(c, out, cap, len);
+}
+
+/* How many bytes collect_text would gather, so a caller can size for all of it. */
+static size_t collect_text_len(const mdy_node *n) {
+    size_t total = (n->type == MDY_TEXT && n->text) ? mdy_text_len(n) : 0;
+    for (const mdy_node *c = n->first; c; c = c->next) total += collect_text_len(c);
+    return total;
 }
 
 static int has_id(const mdy_node *el) {
@@ -1282,12 +1302,21 @@ static void identify_headings(mdy_doc *doc, mdy_node *n) {
     for (mdy_node *c = n->first; c; c = c->next) {
         if (c->type == MDY_ELEMENT && c->tag && c->tag[0] == 'h' &&
             c->tag[1] >= '1' && c->tag[1] <= '6' && c->tag[2] == '\0' && !has_id(c)) {
-            char text[1024];
-            size_t len = 0;
-            collect_text(c, text, sizeof text, &len);
-            size_t id_len = 0;
-            const char *id = mdy_heading_id(doc, text, len, &id_len);
-            if (id && id_len) mdy_set_string(doc, c, "id", id, id_len);
+            /* All of the heading's text: a fixed 1 KB buffer gave a long
+             * heading an id that stopped mid-word. collect_text needs room for
+             * the terminator, so the cap is one past the measured length. */
+            char stack_text[1024];
+            size_t need = collect_text_len(c) + 1;
+            size_t cap = need > sizeof stack_text ? need : sizeof stack_text;
+            char *text = cap > sizeof stack_text ? malloc(cap) : stack_text;
+            if (text) {
+                size_t len = 0;
+                collect_text(c, text, cap, &len);
+                size_t id_len = 0;
+                const char *id = mdy_heading_id(doc, text, len, &id_len);
+                if (id && id_len) mdy_set_string(doc, c, "id", id, id_len);
+                if (text != stack_text) free(text);
+            }
         }
         identify_headings(doc, c);
     }
@@ -1319,12 +1348,13 @@ static void md_log(const char *msg, void *ud) {
         b->failed = 1;
 }
 
-mdy_doc *mdy_markdown_parse(const char *text, size_t len) {
-    if (!text) return NULL;
+mdy_doc *mdy_markdown_parse(const char *text, size_t len, const char **why) {
+    if (why) *why = NULL;
+    if (!text) { if (why) *why = "no markdown was given"; return NULL; }
     if (len == 0) len = strlen(text);
 
     mdy_doc *doc = mdy_doc_new();
-    if (!doc) return NULL;
+    if (!doc) { if (why) *why = "out of memory"; return NULL; }
 
     Build b = {0};
     b.doc = doc;
@@ -1346,7 +1376,11 @@ mdy_doc *mdy_markdown_parse(const char *text, size_t len) {
     free(b.pending);
     free(b.inline_text);
     free(b.notes);
-    if (rc != 0 || b.failed) { mdy_free(doc); return NULL; }
+    if (rc != 0 || b.failed) {
+        if (why) *why = b.too_deep ? "the markdown nests too deeply" : "the markdown could not be read";
+        mdy_free(doc);
+        return NULL;
+    }
 
     /*
      * rehype-raw, the stage after this one in mdy-docs' `.md` pipeline: the
@@ -1357,7 +1391,11 @@ mdy_doc *mdy_markdown_parse(const char *text, size_t len) {
      * written as raw HTML inside a table is foster-parented out of it — and an
      * id is given in document order.
      */
-    if (mdy_raw_reparse(doc, doc->root) != 0) { mdy_free(doc); return NULL; }
+    if (mdy_raw_reparse(doc, doc->root) != 0) {
+        if (why) *why = "the markdown could not be read";
+        mdy_free(doc);
+        return NULL;
+    }
 
     identify_headings(doc, doc->root);
     return doc;

@@ -93,6 +93,7 @@ typedef struct {
     char *error;
     size_t error_len;
     int failed;
+    size_t depth;       /* open block collections; capped at MDY_YAML_MAX_DEPTH */
 } P;
 
 static void fail(P *p, size_t line, const char *what) {
@@ -219,11 +220,23 @@ static int core_float(const char *s, size_t len, double *out) {
     }
     if (i != len) return 0;
 
-    char tmp[64];
-    size_t n = len - start < sizeof tmp - 1 ? len - start : sizeof tmp - 1;
-    memcpy(tmp, s + start, n);
-    tmp[n] = '\0';
-    *out = neg ? -strtod(tmp, NULL) : strtod(tmp, NULL);
+    /*
+     * The WHOLE span, not a truncated prefix. Truncating drops the tail, and
+     * the tail can be the exponent: `1.` + 65 zeros + `e3` came back as 1.0
+     * rather than 1000. core_int keeps its accumulated value for the same
+     * reason; a float must hand strtod every digit, so a span longer than the
+     * stack buffer is copied to a heap one. On OOM, refuse rather than
+     * mis-read (return 0 — the scalar stays a string).
+     */
+    char stackbuf[64];
+    size_t span = len - start;
+    char *tmp = span < sizeof stackbuf ? stackbuf : malloc(span + 1);
+    if (!tmp) return 0;
+    memcpy(tmp, s + start, span);
+    tmp[span] = '\0';
+    double r = strtod(tmp, NULL);
+    if (tmp != stackbuf) free(tmp);
+    *out = neg ? -r : r;
     return 1;
 }
 
@@ -1043,13 +1056,31 @@ static mdy_yaml_node *parse_block(P *p, size_t indent) {
     size_t at = next_content(p, p->at);
     if (at >= p->count) return new_node(p, MDY_YAML_NULL);
     p->at = at;
+
+    /*
+     * Bound the block recursion as parse_flow_at bounds the flow recursion.
+     * Every nesting step re-enters here — an indented value, a `- ` item, and
+     * the compact `- - x` / `- key:` forms parse_sequence rewrites into a
+     * block of their own — so this is the one place a depth cap belongs.
+     * Without it the flow guard (MDY_YAML_MAX_DEPTH) never saw block nesting,
+     * because block structure has no brackets to count, and `- ` * 400000
+     * (two bytes per level) overflowed the stack. The serializer json_node
+     * recurses over the same tree, so a cap here bounds it too.
+     */
+    if (p->depth >= MDY_YAML_MAX_DEPTH) {
+        fail(p, at, "nested deeper than this reads");
+        return NULL;
+    }
+    p->depth++;
+
     const Line *l = &p->lines[at];
+    mdy_yaml_node *result;
+    if (is_seq_item(l)) result = parse_sequence(p, indent);
+    else if (key_end(l)) result = parse_mapping(p, indent);
+    else result = parse_value_from(p, at, 0, indent == 0 ? 0 : indent - 1);  /* a bare scalar */
 
-    if (is_seq_item(l)) return parse_sequence(p, indent);
-    if (key_end(l)) return parse_mapping(p, indent);
-
-    /* A bare scalar document. */
-    return parse_value_from(p, at, 0, indent == 0 ? 0 : indent - 1);
+    p->depth--;
+    return result;
 }
 
 /* ---- the stream --------------------------------------------------------------- */
@@ -1248,7 +1279,10 @@ static void json_string(mdy_buf *b, const char *s, size_t len) {
 static void json_number(mdy_buf *b, double v) {
     if (isnan(v) || isinf(v)) { mdy_buf_put(b, "null", 4); return; }
     char tmp[40];
-    if (v == (double)(long long)v && v < 9.2e18 && v > -9.2e18) {
+    /* Range test BEFORE the cast: `(long long)v` is undefined for a v outside
+     * long long's range, so the `< 9.2e18` guards must short-circuit ahead of
+     * it (ast.c and html.c order it this way too). */
+    if (v > -9.2e18 && v < 9.2e18 && v == (double)(long long)v) {
         snprintf(tmp, sizeof tmp, "%lld", (long long)v);
     } else {
         for (int digits = 15; digits <= 17; digits++) {

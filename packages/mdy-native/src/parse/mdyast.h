@@ -34,6 +34,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,6 +87,7 @@ typedef struct mdy_prop {
     } as;
     const char **list;       /* MDY_PROP_LIST: arena-owned, list_len entries */
     size_t list_len;
+    size_t list_cap;         /* allocated slots; grows amortised in mdy_add_token */
     struct mdy_prop *next;   /* insertion order, which the emitter preserves */
 } mdy_prop;
 
@@ -109,7 +111,8 @@ typedef struct mdy_prop {
 typedef struct mdy_node {
     mdy_node_type type;
     const char *tag;         /* MDY_ELEMENT: interned tag name */
-    const char *text;        /* MDY_TEXT: arena-owned value */
+    const char *text;        /* MDY_TEXT: arena-owned value (may hold a NUL byte) */
+    size_t text_len;         /* its byte length; 0 means "use strlen(text)" — see mdy_text_len */
     mdy_prop *props;         /* MDY_ELEMENT: first property, or NULL */
     mdy_prop *props_tail;    /* so appending stays O(1) */
     struct mdy_node *first;  /* first child */
@@ -131,6 +134,18 @@ typedef struct mdy_node {
     uint32_t end_line;
     uint32_t end_column;
 } mdy_node;
+
+/*
+ * A text node's byte length. `text_len` is authoritative when set — it may span
+ * an embedded NUL, which `.mdy` source can carry and which the parser records.
+ * A tree built by hand through these public types sets only `text` and leaves
+ * `text_len` zero, so zero means "measure it with strlen". An empty text node
+ * lands the same either way. Every reader of a text node's length goes through
+ * here so the two kinds of tree behave alike.
+ */
+static inline size_t mdy_text_len(const mdy_node *n) {
+    return n->text ? (n->text_len ? n->text_len : strlen(n->text)) : 0;
+}
 
 /* ---- parsing ------------------------------------------------------------- */
 
@@ -155,6 +170,13 @@ typedef int (*mdy_highlight_fn)(void *ud, struct mdy_doc *doc, struct mdy_node *
                                 const char *value, size_t value_len,
                                 const char *language, size_t language_len);
 
+/*
+ * Parse options, passed by value. The pointer members — `document_wrapper`,
+ * `frontmatter_fence`, `highlight_ud`, `line_map` — are BORROWED: the parser
+ * reads through them and copies nothing, so the caller must keep each alive for
+ * the duration of the parse call it is passed to. They are not freed by
+ * mdy_free.
+ */
 typedef struct {
     int documents;      /* a line of exactly `---` starts a new document */
     /*

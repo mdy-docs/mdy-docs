@@ -25,9 +25,7 @@ static const char *lookup(const MdyEmoji *table, size_t count, const char *key, 
     size_t lo = 0, hi = count;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        size_t klen = strlen(table[mid].key);
-        int cmp = memcmp(table[mid].key, key, klen < len ? klen : len);
-        if (cmp == 0) cmp = klen < len ? -1 : klen > len ? 1 : 0;
+        int cmp = mdy_strkey_cmp(table[mid].key, strlen(table[mid].key), key, len);
         if (cmp == 0) return table[mid].emoji;
         if (cmp < 0) lo = mid + 1;
         else hi = mid;

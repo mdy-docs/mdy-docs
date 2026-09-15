@@ -101,26 +101,34 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
     if (!text) return NULL;
     if (len == 0) len = strlen(text);
 
+    /*
+     * One cleanup path. Everything that can fail is allocated with its owner
+     * pointer already declared and NULL, so a failure at any step jumps to
+     * `fail`, which frees each once — no per-step free chains, and no way for a
+     * failed realloc to free a buffer that `fail` then frees again (the earlier
+     * `free(go ? go : offsets)` did exactly that on an offsets realloc). On
+     * success, `fences`/`sources`/`body`/`body_lines` are handed to `out` and
+     * the scratch (`offsets`/`drop`/`lines`) is freed.
+     */
     mdy_data *out = calloc(1, sizeof *out);
-    if (!out) return NULL;
-
     Line *lines = NULL;
-    size_t count = split(text, len, &lines);
-    if (!lines) { free(out); return NULL; }
-
-    unsigned char *drop = calloc(count ? count : 1, 1);
-    if (!drop) { free(lines); free(out); return NULL; }
-
-    size_t cap = 4;
-    mdy_data_fence *fences = malloc(cap * sizeof *fences);
+    unsigned char *drop = NULL;
+    mdy_data_fence *fences = NULL;
+    size_t *offsets = NULL;   /* where each fence's YAML starts in `sources` */
+    uint32_t *body_lines = NULL;
     mdy_buf sources = { .ok = 1, .seed = 1024 };
-    size_t nfences = 0;
-    if (!fences) { free(drop); free(lines); free(out); return NULL; }
+    mdy_buf body = { .ok = 1, .seed = 1024 };
+    size_t count = 0, cap = 4, nfences = 0, written = 0;
 
-    /* Where each fence's YAML starts in `sources`, fixed up once the buffer
-     * has stopped moving. */
-    size_t *offsets = malloc(cap * sizeof *offsets);
-    if (!offsets) { free(fences); free(drop); free(lines); free(out); return NULL; }
+    if (!out) goto fail;
+    count = split(text, len, &lines);
+    if (!lines) goto fail;
+    drop = calloc(count ? count : 1, 1);
+    if (!drop) goto fail;
+    fences = malloc(cap * sizeof *fences);
+    if (!fences) goto fail;
+    offsets = malloc(cap * sizeof *offsets);
+    if (!offsets) goto fail;
 
     for (size_t i = 0; i < count; i++) {
         char marker = 0;
@@ -139,11 +147,14 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
 
         if (is_data(first, first_len) && !extra) {
             if (nfences == cap) {
-                cap *= 2;
-                mdy_data_fence *g = realloc(fences, cap * sizeof *g);
-                size_t *go = realloc(offsets, cap * sizeof *go);
-                if (!g || !go) { free(g ? g : fences); free(go ? go : offsets); goto fail; }
-                fences = g; offsets = go;
+                size_t ncap = cap * 2;
+                mdy_data_fence *g = realloc(fences, ncap * sizeof *g);
+                if (!g) goto fail;
+                fences = g;
+                size_t *go = realloc(offsets, ncap * sizeof *go);
+                if (!go) goto fail;
+                offsets = go;
+                cap = ncap;
             }
             offsets[nfences] = sources.len;
             for (size_t k = i + 1; k < (close < count ? close : count); k++) {
@@ -165,23 +176,20 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
     /* The body without them, rejoined exactly as it was split — and, for
      * each line kept, which line it was, since a fence taken out moves every
      * line under it and a position has to know by how much. */
-    mdy_buf body = { .ok = 1, .seed = 1024 };
-    uint32_t *body_lines = malloc((count ? count : 1) * sizeof *body_lines);
-    size_t written = 0;
-    if (!body_lines) { free(body.s); goto fail; }
+    body_lines = malloc((count ? count : 1) * sizeof *body_lines);
+    if (!body_lines) goto fail;
     for (size_t i = 0; i < count; i++) {
         if (drop[i]) continue;
         if (written) mdy_buf_put(&body, "\n", 1);
         mdy_buf_put(&body, lines[i].s, lines[i].len);
         body_lines[written++] = (uint32_t)i;
     }
-    if (!body.ok || !sources.ok) { free(body.s); free(body_lines); goto fail; }
+    if (!body.ok || !sources.ok) goto fail;
+
     out->body_lines = body_lines;
     out->body_line_count = written;
-
     for (size_t i = 0; i < nfences; i++)
         fences[i].source = (sources.s ? sources.s : "") + offsets[i];
-
     out->fences = fences;
     out->count = nfences;
     out->sources = sources.s;
@@ -193,8 +201,11 @@ mdy_data *mdy_data_extract(const char *text, size_t len) {
     return out;
 
 fail:
+    free(body.s);
+    free(body_lines);
     free(sources.s);
     free(offsets);
+    free(fences);
     free(drop);
     free(lines);
     free(out);

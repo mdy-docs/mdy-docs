@@ -29,10 +29,16 @@ int mdy_footnote_reference(mdy_doc *doc, mdy_footnote *note) {
 /** `prefix` + id, and `-n` when n > 1 — the id scheme above. */
 static const char *ref_id(mdy_doc *doc, const char *kind, const char *id, int n) {
     const char *prefix = doc->note_prefix ? doc->note_prefix : "user-content-";
-    char buf[256];
-    if (n > 1) snprintf(buf, sizeof buf, "%s%s%s-%d", prefix, kind, id, n);
-    else snprintf(buf, sizeof buf, "%s%s%s", prefix, kind, id);
-    return mdy_strdup_n(&doc->arena, buf, strlen(buf));
+    /* Sized to the id, not a fixed 256: a long label made the `href` (which
+     * carries a leading `#`) truncate one byte earlier than the matching
+     * `id`, so a back-reference pointed at an anchor that did not exist. The
+     * result is arena-owned, so it is built there directly. */
+    size_t cap = strlen(prefix) + strlen(kind) + strlen(id) + 24;
+    char *buf = mdy_alloc(&doc->arena, cap);
+    if (!buf) return "";
+    if (n > 1) snprintf(buf, cap, "%s%s%s-%d", prefix, kind, id, n);
+    else snprintf(buf, cap, "%s%s%s", prefix, kind, id);
+    return buf;
 }
 
 void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {

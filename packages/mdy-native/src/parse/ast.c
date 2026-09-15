@@ -42,7 +42,7 @@ mdy_node *mdy_new_element(mdy_doc *doc, const char *tag, size_t tag_len) {
 
 mdy_node *mdy_new_text(mdy_doc *doc, const char *text, size_t len) {
     mdy_node *n = new_node(doc, MDY_TEXT);
-    if (n) n->text = mdy_strdup_n(&doc->arena, text, len);
+    if (n) { n->text = mdy_strdup_n(&doc->arena, text, len); n->text_len = len; }
     return n;
 }
 
@@ -59,7 +59,7 @@ static mdy_prop *new_prop(mdy_doc *doc, mdy_node *el, const char *name) {
      * not the same thing at all. */
     const char *interned = mdy_intern(&doc->arena, &doc->names, name, strlen(name));
     for (mdy_prop *q = el->props; q; q = q->next) {
-        if (q->name == interned) { q->list = NULL; q->list_len = 0; return q; }
+        if (q->name == interned) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return q; }
     }
 
     mdy_prop *p = mdy_alloc(&doc->arena, sizeof *p);
@@ -109,19 +109,30 @@ void mdy_add_token(mdy_doc *doc, mdy_node *el, const char *name, const char *tok
     for (mdy_prop *q = el->props; q; q = q->next) {
         if (strcmp(q->name, name) == 0) { p = q; break; }
     }
-    if (!p) {
-        p = new_prop(doc, el, name);
-        if (!p) return;
-        p->type = MDY_PROP_LIST;
-        p->list = NULL;
-        p->list_len = 0;
+    if (!p) { p = new_prop(doc, el, name); if (!p) return; }
+    /*
+     * A token list — whether the property is new, or a same-named non-list
+     * value being turned into one. Appending without setting the type left a
+     * STRING property carrying a `list` its readers would never look at, since
+     * they branch on `type` first. New properties arrive as STRING (enum 0), so
+     * this initialises them too.
+     */
+    if (p->type != MDY_PROP_LIST) { p->type = MDY_PROP_LIST; p->list = NULL; p->list_len = 0; p->list_cap = 0; }
+    if (p->list_len == p->list_cap) {
+        /*
+         * Amortised doubling. The arena never frees, so reallocating the whole
+         * list on every token made k tokens cost O(k^2) arena memory — a raw
+         * `<div class="a a a …">` with 150k words reached ~8 GB and an OOM
+         * exit. Doubling leaves the abandoned arrays summing to O(k) instead.
+         */
+        size_t cap = p->list_cap ? p->list_cap * 2 : 4;
+        const char **grown = mdy_alloc(&doc->arena, sizeof(char *) * cap);
+        if (!grown) return;
+        for (size_t i = 0; i < p->list_len; i++) grown[i] = p->list[i];
+        p->list = grown;
+        p->list_cap = cap;
     }
-    const char **grown = mdy_alloc(&doc->arena, sizeof(char *) * (p->list_len + 1));
-    if (!grown) return;
-    for (size_t i = 0; i < p->list_len; i++) grown[i] = p->list[i];
-    grown[p->list_len] = mdy_strdup_n(&doc->arena, token, strlen(token));
-    p->list = grown;
-    p->list_len++;
+    p->list[p->list_len++] = mdy_strdup_n(&doc->arena, token, strlen(token));
 }
 
 void mdy_add_class(mdy_doc *doc, mdy_node *el, const char *class_name) {
@@ -143,8 +154,7 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
 
     mdy_node *copy = NULL;
     if (node->type == MDY_TEXT) {
-        copy = mdy_new_text(into, node->text ? node->text : "",
-                            node->text ? strlen(node->text) : 0);
+        copy = mdy_new_text(into, node->text ? node->text : "", mdy_text_len(node));
     } else if (node->type == MDY_ELEMENT) {
         copy = mdy_new_element(into, node->tag ? node->tag : "div",
                                node->tag ? strlen(node->tag) : 3);
@@ -154,7 +164,7 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
         if (!copy) return NULL;
         memset(copy, 0, sizeof *copy);
         copy->type = node->type;
-        if (node->text) copy->text = mdy_strdup_n(&into->arena, node->text, strlen(node->text));
+        if (node->text) { copy->text_len = mdy_text_len(node); copy->text = mdy_strdup_n(&into->arena, node->text, copy->text_len); }
     }
     if (!copy) return NULL;
 
@@ -177,6 +187,7 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
             q->type = MDY_PROP_LIST;
             q->list_len = 0;
             q->list = NULL;
+            q->list_cap = 0;
             if (p->list_len) {
                 const char **items = mdy_alloc(&into->arena, sizeof(char *) * p->list_len);
                 if (!items) break;
@@ -184,6 +195,7 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
                     items[i] = mdy_strdup_n(&into->arena, p->list[i], strlen(p->list[i]));
                 q->list = items;
                 q->list_len = p->list_len;
+                q->list_cap = p->list_len;
             }
             break;
         }
@@ -213,7 +225,7 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
 void mdy_clear_class(mdy_doc *doc, mdy_node *el) {
     (void)doc;
     for (mdy_prop *q = el->props; q; q = q->next) {
-        if (strcmp(q->name, "className") == 0) { q->list = NULL; q->list_len = 0; return; }
+        if (strcmp(q->name, "className") == 0) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return; }
     }
 }
 
@@ -240,10 +252,13 @@ static int out_str(Out *o, const char *s) { return out_put(o, s, strlen(s)); }
  * including all of UTF-8 — passed through as its own bytes. Matching this
  * exactly is what lets the comparison be a byte diff.
  */
-static int out_json_string(Out *o, const char *s) {
+/* By explicit length, so a text node's embedded NUL is escaped as \u0000
+ * rather than ending the string one byte in. */
+static int out_json_string_n(Out *o, const char *s, size_t len) {
     if (out_put(o, "\"", 1) < 0) return -1;
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        switch (*p) {
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
             case '"':  if (out_put(o, "\\\"", 2) < 0) return -1; break;
             case '\\': if (out_put(o, "\\\\", 2) < 0) return -1; break;
             case '\b': if (out_put(o, "\\b", 2) < 0) return -1; break;
@@ -252,14 +267,18 @@ static int out_json_string(Out *o, const char *s) {
             case '\r': if (out_put(o, "\\r", 2) < 0) return -1; break;
             case '\t': if (out_put(o, "\\t", 2) < 0) return -1; break;
             default:
-                if (*p < 0x20) {
+                if (c < 0x20) {
                     char buf[8];
-                    snprintf(buf, sizeof buf, "\\u%04x", *p);
+                    snprintf(buf, sizeof buf, "\\u%04x", c);
                     if (out_str(o, buf) < 0) return -1;
-                } else if (out_put(o, (const char *)p, 1) < 0) return -1;
+                } else if (out_put(o, (const char *)&s[i], 1) < 0) return -1;
         }
     }
     return out_put(o, "\"", 1);
+}
+/* For interned names and property strings, which never carry a NUL. */
+static int out_json_string(Out *o, const char *s) {
+    return out_json_string_n(o, s, strlen(s));
 }
 
 /** A number the way JSON.stringify writes one: an integer with no `.0`. */
@@ -280,7 +299,7 @@ static int emit(Out *o, const mdy_node *n) {
     switch (n->type) {
         case MDY_TEXT:
             if (out_str(o, "{\"type\":\"text\",\"value\":") < 0) return -1;
-            if (out_json_string(o, n->text ? n->text : "") < 0) return -1;
+            if (out_json_string_n(o, n->text ? n->text : "", mdy_text_len(n)) < 0) return -1;
             return out_put(o, "}", 1);
 
         case MDY_DOCTYPE:
@@ -291,12 +310,12 @@ static int emit(Out *o, const mdy_node *n) {
          * them or a tree that round-trips through JSON would lose them. */
         case MDY_COMMENT:
             if (out_str(o, "{\"type\":\"comment\",\"value\":") < 0) return -1;
-            if (out_json_string(o, n->text ? n->text : "") < 0) return -1;
+            if (out_json_string_n(o, n->text ? n->text : "", mdy_text_len(n)) < 0) return -1;
             return out_put(o, "}", 1);
 
         case MDY_RAW:
             if (out_str(o, "{\"type\":\"raw\",\"value\":") < 0) return -1;
-            if (out_json_string(o, n->text ? n->text : "") < 0) return -1;
+            if (out_json_string_n(o, n->text ? n->text : "", mdy_text_len(n)) < 0) return -1;
             return out_put(o, "}", 1);
 
         case MDY_ROOT:

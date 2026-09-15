@@ -6,8 +6,41 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "mdyast.h"
+
+/*
+ * Order two byte strings the way the sorted lookup tables here are keyed:
+ * by shared bytes first, then the SHORTER one before the longer. Returns
+ * <0 / 0 / >0. The generated `*_table.h` tables are sorted this way, so a
+ * binary search over any of them compares with this; five copies of exactly
+ * this three-line tiebreak had grown up across attrs/emoji/html/raw.
+ */
+static inline int mdy_strkey_cmp(const char *a, size_t alen, const char *b, size_t blen) {
+    size_t n = alen < blen ? alen : blen;
+    int cmp = memcmp(a, b, n);
+    if (cmp == 0) cmp = alen < blen ? -1 : (alen > blen ? 1 : 0);
+    return cmp;
+}
+
+/*
+ * `/^data[-\w.:]+$/i` on a property name — true when there is a non-empty tail
+ * after `data` and it is all [A-Za-z0-9_.:-]. The `data` prefix itself is the
+ * caller's to check (the two callers spell that test differently: one on the
+ * lowercased normal name, one on the original). Shared because both the schema
+ * side (attrs.c) and the writer (html.c) had a byte-for-byte copy.
+ */
+static inline int mdy_data_shaped(const char *s, size_t len) {
+    if (len <= 4) return 0;
+    for (size_t i = 4; i < len; i++) {
+        char c = s[i];
+        int ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                 (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' || c == ':';
+        if (!ok) return 0;
+    }
+    return 1;
+}
 
 /* ---- the arena ----------------------------------------------------------- */
 

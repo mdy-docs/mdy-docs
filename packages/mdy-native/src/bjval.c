@@ -26,11 +26,27 @@ static void attach(Builder *b, bjv *v) {
     if (b->depth == 0) { b->root = v; return; }
     bjv *parent = b->stack[b->depth - 1];
     if (parent->count == parent->cap) {
-        parent->cap = parent->cap ? parent->cap * 2 : 8;
-        parent->items = realloc(parent->items, parent->cap * sizeof *parent->items);
-        if (parent->type == BJV_OBJECT) parent->keys = realloc(parent->keys, parent->cap * sizeof *parent->keys);
+        /* `cap` is committed only once the allocation is real: an unchecked
+         * realloc left `items`/`keys` NULL for the writes below, and doubling
+         * cap first would have told the next attach there was room that a
+         * failed realloc never made. Failure sets `failed`, which bjv_decode
+         * turns into a NULL return. */
+        size_t ncap = parent->cap ? parent->cap * 2 : 8;
+        bjv **items = realloc(parent->items, ncap * sizeof *items);
+        if (!items) { b->failed = 1; return; }
+        parent->items = items;
+        if (parent->type == BJV_OBJECT) {
+            char **keys = realloc(parent->keys, ncap * sizeof *keys);
+            if (!keys) { b->failed = 1; return; }
+            parent->keys = keys;
+        }
+        parent->cap = ncap;
     }
-    if (parent->type == BJV_OBJECT) parent->keys[parent->count] = b->pending_key ? b->pending_key : strdup("");
+    if (parent->type == BJV_OBJECT) {
+        char *k = b->pending_key ? b->pending_key : strdup("");
+        if (!k) { b->failed = 1; return; }
+        parent->keys[parent->count] = k;
+    }
     b->pending_key = NULL;
     parent->items[parent->count++] = v;
 }
@@ -47,12 +63,20 @@ static void on_bool(void *c, int t) { bjv *v = node(BJV_BOOL); if (v) v->number 
 static void on_num(void *c, double d) { bjv *v = node(BJV_NUMBER); if (v) v->number = d; attach(c, v); }
 static void on_string(void *c, const uint8_t *s, uint32_t n) {
     bjv *v = node(BJV_STRING);
-    if (v) { v->string = malloc(n + 1); memcpy(v->string, s, n); v->string[n] = 0; v->len = n; }
+    if (v) {
+        v->string = malloc(n + 1);
+        if (!v->string) { free(v); ((Builder *)c)->failed = 1; return; }
+        memcpy(v->string, s, n); v->string[n] = 0; v->len = n;
+    }
     attach(c, v);
 }
 static void on_binary(void *c, const uint8_t *s, uint32_t n) {
     bjv *v = node(BJV_BINARY);
-    if (v) { v->bytes = malloc(n + 1); memcpy(v->bytes, s, n); v->bytes[n] = 0; v->len = n; }
+    if (v) {
+        v->bytes = malloc(n + 1);
+        if (!v->bytes) { free(v); ((Builder *)c)->failed = 1; return; }
+        memcpy(v->bytes, s, n); v->bytes[n] = 0; v->len = n;
+    }
     attach(c, v);
 }
 static void on_oid(void *c, const uint8_t *b12) { on_binary(c, b12, 12); }
@@ -63,6 +87,7 @@ static void on_key(void *c, const uint8_t *s, uint32_t n) {
     Builder *b = c;
     free(b->pending_key);
     b->pending_key = malloc(n + 1);
+    if (!b->pending_key) { b->failed = 1; return; }
     memcpy(b->pending_key, s, n);
     b->pending_key[n] = 0;
 }

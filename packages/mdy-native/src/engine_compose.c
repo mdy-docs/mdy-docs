@@ -145,7 +145,7 @@ void release_held(mdy_engine *e) {
 }
 
 /* Whitespace, and nothing else. */
-int only_space(const char *s, size_t len) {
+static int only_space(const char *s, size_t len) {
     for (size_t i = 0; i < len; i++)
         if (s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r') return 0;
     return 1;
@@ -168,7 +168,7 @@ int only_tokens(const char *s, size_t len) {
 
 /* Elements that hold a line of their own, and so cannot hold one of somebody
  * else's — the ones a nested render is likely to produce at its top level. */
-int is_block_tag(const char *tag) {
+static int is_block_tag(const char *tag) {
     static const char *const BLOCK[] = { "p", "div", "section", "article", "main", "header", "footer" };
     for (size_t i = 0; i < sizeof BLOCK / sizeof BLOCK[0]; i++)
         if (strcmp(BLOCK[i], tag) == 0) return 1;
@@ -186,7 +186,7 @@ static void unwrap_into(mdy_node *dest, mdy_node *source) {
         mdy_node *next = c->next;
         c->next = NULL;
         if (c->type == MDY_ELEMENT && is_block_tag(c->tag)) unwrap_into(dest, c);
-        else if (c->type == MDY_TEXT && only_space(c->text ? c->text : "", c->text ? strlen(c->text) : 0)) ;
+        else if (c->type == MDY_TEXT && only_space(c->text ? c->text : "", mdy_text_len(c))) ;
         else mdy_append(dest, c);
         c = next;
     }
@@ -243,10 +243,10 @@ static void inline_content(mdy_engine *e, mdy_doc *doc, mdy_node *dest,
 /* The text of a node that is a `<p>` holding one text child, or a text node —
  * which is what `onlyTokens` asks about. */
 const char *sole_text(const mdy_node *n, size_t *len) {
-    if (n->type == MDY_TEXT) { *len = n->text ? strlen(n->text) : 0; return n->text; }
+    if (n->type == MDY_TEXT) { *len = mdy_text_len(n); return n->text; }
     if (n->type == MDY_ELEMENT && strcmp(n->tag, "p") == 0 && n->first &&
         n->first == n->last && n->first->type == MDY_TEXT) {
-        *len = n->first->text ? strlen(n->first->text) : 0;
+        *len = mdy_text_len(n->first);
         return n->first->text;
     }
     return NULL;
@@ -285,7 +285,7 @@ void splice_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent) {
         }
 
         if (child->type == MDY_TEXT && child->text && strstr(child->text, TOKEN_OPEN)) {
-            inline_content(e, doc, parent, child->text, strlen(child->text));
+            inline_content(e, doc, parent, child->text, mdy_text_len(child));
             child = next;
             continue;
         }

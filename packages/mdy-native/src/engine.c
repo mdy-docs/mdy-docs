@@ -2,6 +2,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include "engine_internal.h"
+#include "nis.h"
 #include "xalloc.h"
 
 /*
@@ -312,7 +313,7 @@ static bool render_native(JsContext *ctx, JsValue this_val, const JsValue *args,
  * token. What a document's own code wrote, with no markup around it. */
 static void collect_text_into(const mdy_node *n, char **out, size_t *len, size_t *cap) {
     if (n->type == MDY_TEXT && n->text) {
-        size_t add = strlen(n->text);
+        size_t add = mdy_text_len(n);
         if (*len + add + 1 > *cap) {
             /*
              * `*cap` moved BEFORE the allocation was known to have succeeded,
@@ -422,14 +423,8 @@ static bool emit_native(JsContext *ctx, JsValue this_val, const JsValue *args,
 
 /* nisaba keys its primary tree on OID bytes. Its storage is four callbacks
  * (see nis.c), and here they are a buffer: a document set lives as long as the
- * engine that opened it and never wanted a file. */
-extern int nis_open(void);
-extern int nis_insert(int handle, const uint8_t *doc, uint32_t len);
-extern int nis_find(int handle, const uint8_t *filter, uint32_t filter_len,
-                    uint8_t **out, size_t *out_len);
-extern int nis_create_index(int handle, const char *name, const uint8_t *fields,
-                            uint32_t fields_len, int unique, int sparse);
-extern void nis_close(int handle);
+ * engine that opened it and never wanted a file. The nis_* prototypes are
+ * nis.h's, included at the top rather than hand-declared here. */
 
 static void close_set(mdy_engine *e) {
     for (size_t i = 0; i < e->set.count; i++) mdy_data_free(e->set.docs[i].fences);
@@ -750,21 +745,22 @@ int mdy_engine_set_scope_json(mdy_engine *e, const char *name, const char *json)
     }
     static const char *const taken[] = { "transform", "visit", "h", "toText", "slug", "req", "res", "$", "$$", NULL };
     for (int i = 0; taken[i]; i++) if (strcmp(name, taken[i]) == 0) return -1;
-    char **names = realloc(e->knobs.scope_names, (e->knobs.scope_count + 1) * sizeof *names);
-    if (names) e->knobs.scope_names = names;
-    char **texts = realloc(e->knobs.scope_json, (e->knobs.scope_count + 1) * sizeof *texts);
-    if (texts) e->knobs.scope_json = texts;
-    if (!names || !texts) return -1;
+    /* Through xalloc, as mdy_engine_set_context_json does: the -1 this returns
+     * means "not a valid variable", not "out of memory", and an unchecked
+     * realloc/strdup here left a NULL that document_fingerprint later fed to
+     * strlen. See xalloc.h. */
+    e->knobs.scope_names = mdy_xrealloc(e->knobs.scope_names, (e->knobs.scope_count + 1) * sizeof *e->knobs.scope_names);
+    e->knobs.scope_json  = mdy_xrealloc(e->knobs.scope_json, (e->knobs.scope_count + 1) * sizeof *e->knobs.scope_json);
     /* the same name again replaces the value */
     for (size_t i = 0; i < e->knobs.scope_count; i++) {
         if (strcmp(e->knobs.scope_names[i], name) == 0) {
             free(e->knobs.scope_json[i]);
-            e->knobs.scope_json[i] = strdup(json);
+            e->knobs.scope_json[i] = mdy_xstrdup(json);
             return 0;
         }
     }
-    e->knobs.scope_names[e->knobs.scope_count] = strdup(name);
-    e->knobs.scope_json[e->knobs.scope_count] = strdup(json);
+    e->knobs.scope_names[e->knobs.scope_count] = mdy_xstrdup(name);
+    e->knobs.scope_json[e->knobs.scope_count] = mdy_xstrdup(json);
     e->knobs.scope_count++;
     return 0;
 }
@@ -804,7 +800,9 @@ int mdy_engine_encode_json(mdy_engine *e, const char *json, uint8_t **out, size_
     if (rc == 0 && !bj_builder_error(b)) {
         size_t n = 0;
         const uint8_t *data = bj_builder_data(b, &n);
-        *out = malloc(n + 1);
+        /* Through xalloc: the -1 channel here means "not JSON", and a NULL from
+         * a bare malloc reached memcpy as a crash rather than that. See xalloc.h. */
+        *out = mdy_xmalloc(n + 1);
         memcpy(*out, data, n);
         (*out)[n] = 0;
         *out_len = n;
@@ -1057,13 +1055,22 @@ static bool find_one_native(JsContext *ctx, JsValue this_val, const JsValue *arg
  * JsValue that means "could not read the store", and nine callers, so the
  * failures that are allocations end the run. See xalloc.h.
  */
-static JsValue document_record(mdy_engine *e, size_t at) {
-    if (at >= e->set.count) return js_object_new(e->ctx);
+/*
+ * The stored record for the document at index `idx`, as a guest value — the
+ * "{_id: ids[idx]} filter -> nis_find -> decode -> first hit" that three
+ * readers (document_record, data_native, lookup_import) each spelled out. It
+ * returns js_undefined() for any failure, and each caller decides what that
+ * means: fatal, null, or nothing. There is no GC safe point between the decode
+ * and the return, so the value is meant to be used immediately, which is the
+ * same discipline the inline copies relied on.
+ */
+static JsValue record_by_index(mdy_engine *e, size_t idx) {
+    if (idx >= e->set.count) return js_undefined();
     bj_builder *b = bj_builder_new();
-    if (!b) mdy_fatal("out of memory looking a document up");
+    if (!b) return js_undefined();
     bj_begin_object(b);
     bj_put_key(b, (const uint8_t *)"_id", 3);
-    bj_put_oid(b, e->set.ids[at]);
+    bj_put_oid(b, e->set.ids[idx]);
     bj_end_object(b);
     size_t flen = 0;
     const uint8_t *filter = bj_builder_data(b, &flen);
@@ -1071,12 +1078,18 @@ static JsValue document_record(mdy_engine *e, size_t at) {
     size_t out_len = 0;
     int rc = nis_find(e->set.handle, filter, (uint32_t)flen, &out, &out_len);
     bj_builder_free(b);
-    if (rc != 0 || !out) mdy_fatal("the document store could not return a document");
+    if (rc != 0 || !out) return js_undefined();
     JsValue hits = binjson_to_js(e, out, out_len, NULL);
     free(out);
-    if (!js_is_array(hits) || js_array_length(hits) == 0)
-        mdy_fatal("a document came back from the store unreadable");
+    if (!js_is_array(hits) || js_array_length(hits) == 0) return js_undefined();
     return js_array_get(hits, 0);
+}
+
+static JsValue document_record(mdy_engine *e, size_t at) {
+    if (at >= e->set.count) return js_object_new(e->ctx);
+    JsValue r = record_by_index(e, at);
+    if (js_is_undefined(r)) mdy_fatal("the document store could not return a document");
+    return r;
 }
 
 /*
@@ -1122,23 +1135,8 @@ static bool data_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     double at = js_get_number(args[0]);
     if (at < 0 || at >= (double)e->set.count) { *result = js_null(); return true; }
 
-    bj_builder *b = bj_builder_new();
-    if (!b) { *result = js_null(); return true; }
-    bj_begin_object(b);
-    bj_put_key(b, (const uint8_t *)"_id", 3);
-    bj_put_oid(b, e->set.ids[(size_t)at]);
-    bj_end_object(b);
-    size_t flen = 0;
-    const uint8_t *filter = bj_builder_data(b, &flen);
-    uint8_t *out = NULL;
-    size_t out_len = 0;
-    int rc = nis_find(e->set.handle, filter, (uint32_t)flen, &out, &out_len);
-    bj_builder_free(b);
-    if (rc != 0 || !out) { *result = js_null(); return true; }
-    JsValue hits = binjson_to_js(e, out, out_len, NULL);
-    free(out);
-    *result = js_is_array(hits) && js_array_length(hits) > 0
-                  ? record_without_id(e, js_array_get(hits, 0)) : js_null();
+    JsValue r = record_by_index(e, (size_t)at);
+    *result = js_is_undefined(r) ? js_null() : record_without_id(e, r);
     return true;
 }
 
@@ -1199,28 +1197,11 @@ static void register_one(mdy_engine *e, const char *name, JsNativeFn fn) {
 static mdy_engine *lookup_import(mdy_engine *e, const char *spec, const char **why) {
     static char path[1024];
     path[0] = '\0';
-    if (e->graph.current < e->set.count) {
-        /* The record for THIS document, by its own id. */
-        bj_builder *b = bj_builder_new();
-        if (b) {
-            bj_begin_object(b);
-            bj_put_key(b, (const uint8_t *)"_id", 3);
-            bj_put_oid(b, e->set.ids[e->graph.current]);
-            bj_end_object(b);
-            size_t flen = 0;
-            const uint8_t *filter = bj_builder_data(b, &flen);
-            uint8_t *out = NULL;
-            size_t out_len = 0;
-            if (nis_find(e->set.handle, filter, (uint32_t)flen, &out, &out_len) == 0 && out) {
-                JsValue hits = binjson_to_js(e, out, out_len, NULL);
-                free(out);
-                if (js_is_array(hits) && js_array_length(hits) > 0) {
-                    char *p = js_string_utf8(get_val(e, js_array_get(hits, 0), "path"));
-                    if (p) { snprintf(path, sizeof path, "%s", p); free(p); }
-                }
-            }
-            bj_builder_free(b);
-        }
+    /* The record for THIS document, by its own id. */
+    JsValue r = record_by_index(e, e->graph.current);
+    if (!js_is_undefined(r)) {
+        char *p = js_string_utf8(get_val(e, r, "path"));
+        if (p) { snprintf(path, sizeof path, "%s", p); free(p); }
     }
     if (!path[0]) { *why = "a document with no path"; return NULL; }
     for (size_t i = 0; i < e->graph.import_count; i++) {
@@ -1471,10 +1452,12 @@ static bool markdown_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *text = argc > 0 ? js_string_utf8(args[0]) : NULL;
-    mdy_doc *doc = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
+    const char *why = NULL;
+    mdy_doc *doc = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0, &why);
     free(text);
     if (!doc) {
-        const char *msg = "mdy-engine: $.markdown could not read that as Markdown";
+        char msg[160];
+        snprintf(msg, sizeof msg, "mdy-engine: $.markdown: %s", why ? why : "could not read that as Markdown");
         *result = str(e->vm, msg, strlen(msg));
         return false;
     }
@@ -1539,7 +1522,18 @@ static bool html_native(JsContext *ctx, JsValue this_val, const JsValue *args,
         /* Tokens in a string become the HTML of what they hold. */
         char *s = js_string_utf8(args[0]);
         char *filled = s ? fill_tokens(e, s, strlen(s)) : NULL;
+        /* fill_tokens returns NULL only when it could not build the string —
+         * an OOM. Returning "" made that a normal empty result, dropping the
+         * composed pieces silently; emit_native fails on the same NULL, so
+         * this does too rather than answer with a different string. */
+        int failed = s && !filled;
         free(s);
+        if (failed) {
+            const char *msg = "mdy-engine: $.html could not build the string";
+            free(filled);
+            *result = str(e->vm, msg, strlen(msg));
+            return false;
+        }
         *result = str(e->vm, filled ? filled : "", filled ? strlen(filled) : 0);
         free(filled);
         return true;
@@ -3249,10 +3243,11 @@ static mdy_doc *render_markdown_document(mdy_engine *e, size_t index, uint64_t m
     js_gc_protect(e->vm, &record);
     char *text = js_string_utf8(get_val(e, record, "body"));
     js_gc_unprotect(e->vm, &record);
-    mdy_doc *out = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0);
+    const char *why = NULL;
+    mdy_doc *out = mdy_markdown_parse(text ? text : "", text ? strlen(text) : 0, &why);
     if (!out) {
         free(text);
-        if (error && error_len) snprintf(error, error_len, "the markdown document could not be read");
+        if (error && error_len) snprintf(error, error_len, "%s", why ? why : "the markdown document could not be read");
         return NULL;
     }
     /* Pure by construction — no code ran — so kept, as mdy-docs keeps it. */
@@ -3482,10 +3477,19 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
     if (error && error_len) error[0] = '\0';
     if (wrote) *wrote = NULL;
 
-    /* The memo, first: a hit is a render that does not happen. */
+    /* The memo, first: a hit is a render that does not happen.
+     *
+     * With one exception: the ENTRY render when `--response` is wanted. The
+     * response is produced by take_response AFTER a full render (below), and a
+     * memo hit returns before it — so a hit would leave `last_response` at
+     * whatever the previous render set it to, which in watch mode is a fresh
+     * engine's NULL, and `--response` would write `null`. compose.depth is 0
+     * only for the outermost render, so nested composition renders still
+     * memoise exactly as before and their token ids do not move. */
     if (!e->session->now) mdy_session_rotate_memo(e->session);
     uint64_t mkey = index < e->set.count ? memo_key(e, index, request) : 0;
-    MemoEntry *hit = memo_take(e, index, mkey);
+    int response_entry = e->knobs.want_response && e->compose.depth == 0;
+    MemoEntry *hit = response_entry ? NULL : memo_take(e, index, mkey);
     if (hit) {
         key_base36(mkey, e->compose.last_render_key);
         if (wrote) *wrote = mdy_xstrdup(hit->text);
@@ -3564,7 +3568,7 @@ static mdy_doc *render_tree_out(mdy_engine *e, size_t index, JsValue request,
      * the document ended up with, including ones written below it. */
     fill_toc(e, out);
     if (e->knobs.want_response) take_response(e, &r);
-    if (!e->compose.taint && mkey) memo_keep(e, mkey, out, &r, transformed, wrote);
+    if (!e->compose.taint && !response_entry && mkey) memo_keep(e, mkey, out, &r, transformed, wrote);
     if (memo_debug()) fprintf(stderr, "memo %s #%zu\n", e->compose.taint ? "impure" : "kept", index);
 
 done:

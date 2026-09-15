@@ -8,6 +8,7 @@
  * formats stb does know are done here too and stb is left for the one job that
  * genuinely needs a decoder.
  */
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -88,9 +89,18 @@ static int bmp_size(const uint8_t *b, size_t n, int *w, int *h) {
     if (n < 26 || b[0] != 'B' || b[1] != 'M') return -1;
     int32_t width = (int32_t)le32(b + 18);
     int32_t height = (int32_t)le32(b + 22);
-    *w = width < 0 ? -width : width;
-    /* A negative height means the rows are stored top-down. */
-    *h = height < 0 ? -height : height;
+    /*
+     * Magnitude taken in UNSIGNED. `-width` on a signed int is undefined for
+     * INT32_MIN — a 26-byte crafted `.bmp` anywhere under a site was enough to
+     * hit it — and the negation is well defined modulo 2^32 in unsigned. A
+     * negative height just means the rows are stored top-down. The clamp is for
+     * the one magnitude (2^31) that does not fit a signed int; a real image is
+     * nowhere near it.
+     */
+    uint32_t uw = width < 0 ? -(uint32_t)width : (uint32_t)width;
+    uint32_t uh = height < 0 ? -(uint32_t)height : (uint32_t)height;
+    *w = uw > (uint32_t)INT_MAX ? INT_MAX : (int)uw;
+    *h = uh > (uint32_t)INT_MAX ? INT_MAX : (int)uh;
     return 0;
 }
 

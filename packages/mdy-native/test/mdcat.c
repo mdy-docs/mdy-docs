@@ -15,8 +15,9 @@ int main(void) {
         if (n < 65536) break;
     }
     buf[len] = '\0';
-    mdy_doc *doc = mdy_markdown_parse(buf, len);
-    if (!doc) { fprintf(stderr, "md4c refused this document\n"); return 1; }
+    const char *why = NULL;
+    mdy_doc *doc = mdy_markdown_parse(buf, len, &why);
+    if (!doc) { fprintf(stderr, "md4c refused this document: %s\n", why ? why : "unknown"); return 1; }
     char *json = mdy_to_json_bare(mdy_root(doc));
     if (json) { fputs(json, stdout); fputc('\n', stdout); free(json); }
     mdy_free(doc);

@@ -227,13 +227,17 @@ static void put_tag_list(char **buf, size_t *len, size_t *cap,
 
 static void put_block_scalar(char **buf, size_t *len, size_t *cap,
                              const char *keyname, const char *text, size_t tlen) {
-    size_t need = *len + tlen * 2 + strlen(keyname) + 64;
-    if (need > *cap) {
-        while (need > *cap) *cap *= 2;
-        char *grown = realloc(*buf, *cap);
-        if (!grown) return;
-        *buf = grown;
-    }
+    /*
+     * The whole scalar is written after this one reservation, so the room has
+     * to cover the worst case up front: two indent bytes and a newline per
+     * line (bounded by `tlen * 2`), the `key: |2±\n` header, and the trailing
+     * newlines a `+` chomp keeps. Through `put_room` like every other writer
+     * here — it grows a local `want` and only commits `*cap` once the
+     * allocation is real, where this hand-rolled its own `*cap *= 2` before the
+     * `realloc` and returned silently on failure, leaving `*cap` claiming space
+     * that was never allocated for the next writer to overrun. See xalloc.h.
+     */
+    put_room(buf, len, cap, tlen * 2 + strlen(keyname) + 64);
     if (tlen == 0) {
         *len += (size_t)snprintf(*buf + *len, *cap - *len, "%s: \"\"\n", keyname);
         return;
@@ -809,7 +813,7 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
         while (need > want) want *= 2;
         st->cap = want;
         char *grown = realloc(st->source, st->cap);
-        if (!grown) { mdy_yaml_free(ident); free(bytes); return -1; }
+        if (!grown) { if (error && error_len) snprintf(error, error_len, "out of memory"); mdy_yaml_free(ident); free(bytes); return -1; }
         st->source = grown;
     }
     size_t file_start = st->len;
@@ -852,8 +856,7 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
             while (need2 > want2) want2 *= 2;
             st->cap = want2;
             char *grown = realloc(st->source, st->cap);
-            if (!grown) { if (rewritten) free(rewritten); mdy_yaml_free(ident);
-                          free(bytes); return -1; }
+            if (!grown) { if (error && error_len) snprintf(error, error_len, "out of memory"); if (rewritten) free(rewritten); mdy_yaml_free(ident); free(bytes); return -1; }
             st->source = grown;
         }
         memcpy(st->source + st->len, body, blen);
@@ -908,7 +911,7 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
     if (st->count == st->cap_files) {
         size_t want = st->cap_files ? st->cap_files * 2 : 16;
         WalkedFile *grown = realloc(st->files, want * sizeof *grown);
-        if (!grown) { mdy_yaml_free(own); mdy_yaml_free(ident); free(bytes); return -1; }
+        if (!grown) { if (error && error_len) snprintf(error, error_len, "out of memory"); mdy_yaml_free(own); mdy_yaml_free(ident); free(bytes); return -1; }
         st->files = grown;
         st->cap_files = want;
     }

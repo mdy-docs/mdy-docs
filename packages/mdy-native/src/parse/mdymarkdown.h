@@ -30,9 +30,14 @@
 extern "C" {
 #endif
 
-/* `len` may be 0 for a NUL-terminated string. NULL only if md4c refuses the
- * document or an allocation fails. */
-mdy_doc *mdy_markdown_parse(const char *text, size_t len);
+/*
+ * `len` may be 0 for a NUL-terminated string. NULL only if md4c refuses the
+ * document, it nests past MDY_MAX_DEPTH, or an allocation fails. `why`, if not
+ * NULL, receives a static reason string on failure (and NULL on success) — so
+ * a caller can tell "nests too deeply" from "could not be read" rather than
+ * reporting every NULL the same way.
+ */
+mdy_doc *mdy_markdown_parse(const char *text, size_t len, const char **why);
 
 #ifdef __cplusplus
 }

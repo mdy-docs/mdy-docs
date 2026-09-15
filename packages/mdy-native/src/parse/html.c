@@ -44,7 +44,11 @@ static void escape(mdy_buf *b, const char *s, size_t len, const char *subset) {
     size_t run = 0;   /* bytes since the last reference, written in one go */
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
-        if (c != 0 && c < 0x80 && strchr(subset, (char)c)) {
+        /* A NUL cannot be matched with strchr (it is the subset string's own
+         * terminator), so it is named explicitly. `.mdy` source can carry one
+         * — the tree holds its length, not a C string — and a raw NUL in the
+         * output is never wanted; `&#x0;` is what stringify-entities writes. */
+        if (c == 0 || (c < 0x80 && strchr(subset, (char)c))) {
             mdy_buf_put(b, s + i - run, run);
             run = 0;
             char ref[16];
@@ -61,8 +65,9 @@ static void escape(mdy_buf *b, const char *s, size_t len, const char *subset) {
  * The three subsets, from hast-util-to-html's `constants`, at [1][1] — the
  * safe, no-parse-errors corner, which is where the default options land.
  *
- * NUL is in two of the original's subsets and is left out of all three here:
- * it cannot appear in a NUL-terminated string, which is what this tree holds.
+ * NUL is left out of all three subset strings because it cannot be stored in
+ * one (it would terminate the string) — `escape` names it directly instead,
+ * since a text node's value is now a length-bearing buffer that may hold one.
  */
 static const char SUBSET_TEXT[]  = "<&";
 static const char SUBSET_NAME[]  = "\t\n\f\r \"&'/<=>`";
@@ -76,18 +81,6 @@ typedef struct {
     unsigned flags;
     char buf[128];      /* for a `data-*` name, which is computed */
 } AttrInfo;
-
-/** `/^data[-\w.:]+$/i` on the property name. */
-static int data_shaped(const char *s, size_t len) {
-    if (len <= 4) return 0;
-    for (size_t i = 4; i < len; i++) {
-        char c = s[i];
-        int ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                 (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' || c == ':';
-        if (!ok) return 0;
-    }
-    return 1;
-}
 
 /**
  * `find(html, property).attribute`, for the direction this file needs.
@@ -108,10 +101,7 @@ static void attr_info(const char *property, size_t len, AttrInfo *out) {
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
         const char *cand = MDY_PROP_INFO[mid].property;
-        size_t clen = strlen(cand);
-        size_t n = clen < len ? clen : len;
-        int cmp = memcmp(cand, property, n);
-        if (cmp == 0) cmp = clen < len ? -1 : (clen > len ? 1 : 0);
+        int cmp = mdy_strkey_cmp(cand, strlen(cand), property, len);
         if (cmp == 0) {
             out->attribute = MDY_PROP_INFO[mid].attribute;
             out->attribute_len = strlen(out->attribute);
@@ -129,7 +119,7 @@ static void attr_info(const char *property, size_t len, AttrInfo *out) {
         (property[2] == 't' || property[2] == 'T') &&
         (property[3] == 'a' || property[3] == 'A');
 
-    if (is_data && property[4] != '-' && data_shaped(property, len) &&
+    if (is_data && property[4] != '-' && mdy_data_shaped(property, len) &&
         len * 2 + 8 < sizeof out->buf) {
         /*
          * `rest.replace(/[A-Z]/g, c => '-' + c.toLowerCase())`, then a leading
@@ -315,16 +305,16 @@ static void write_node(mdy_buf *b, const mdy_node *n, const mdy_node *parent,
              */
             if (parent && parent->type == MDY_ELEMENT &&
                 (strcmp(parent->tag, "script") == 0 || strcmp(parent->tag, "style") == 0)) {
-                puts_(b, n->text ? n->text : "");
+                if (n->text) mdy_buf_put(b, n->text, mdy_text_len(n));
             } else if (n->text) {
-                escape(b, n->text, strlen(n->text), SUBSET_TEXT);
+                escape(b, n->text, mdy_text_len(n), SUBSET_TEXT);
             }
             return;
 
         case MDY_RAW:
             /* Written through, or escaped like text when that is refused. */
-            if (o->allow_dangerous_html) puts_(b, n->text ? n->text : "");
-            else if (n->text) escape(b, n->text, strlen(n->text), SUBSET_TEXT);
+            if (o->allow_dangerous_html) { if (n->text) mdy_buf_put(b, n->text, mdy_text_len(n)); }
+            else if (n->text) escape(b, n->text, mdy_text_len(n), SUBSET_TEXT);
             return;
 
         case MDY_COMMENT:
@@ -332,7 +322,7 @@ static void write_node(mdy_buf *b, const mdy_node *n, const mdy_node *parent,
              * escapes nothing inside; a comment holding `-->` is the author's
              * problem, as it is in the JavaScript. */
             puts_(b, "<!--");
-            puts_(b, n->text ? n->text : "");
+            if (n->text) mdy_buf_put(b, n->text, mdy_text_len(n));
             puts_(b, "-->");
             return;
 

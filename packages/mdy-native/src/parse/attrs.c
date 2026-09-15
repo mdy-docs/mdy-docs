@@ -51,25 +51,11 @@ static const char *schema_lookup(const char *normal, size_t len) {
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
         const char *cand = MDY_PROPS[mid].normal;
-        size_t clen = strlen(cand);
-        size_t n = clen < len ? clen : len;
-        int cmp = memcmp(cand, normal, n);
-        if (cmp == 0) cmp = clen < len ? -1 : (clen > len ? 1 : 0);
+        int cmp = mdy_strkey_cmp(cand, strlen(cand), normal, len);
         if (cmp == 0) return MDY_PROPS[mid].property;
         if (cmp < 0) lo = mid + 1; else hi = mid;
     }
     return NULL;
-}
-
-/** `/^data[-\w.:]+$/` on the ORIGINAL spelling, as the library tests it. */
-static int data_shaped(const char *name, size_t len) {
-    for (size_t i = 4; i < len; i++) {
-        char c = name[i];
-        int ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                 (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' || c == ':';
-        if (!ok) return 0;
-    }
-    return len > 4;
 }
 
 /**
@@ -109,7 +95,7 @@ const char *mdy_hast_name(mdy_doc *doc, const char *name, size_t len) {
         const char *found = schema_lookup(normal, len);
         if (found) return mdy_intern(&doc->arena, &doc->names, found, strlen(found));
 
-        if (len > 4 && memcmp(normal, "data", 4) == 0 && data_shaped(name, len) &&
+        if (len > 4 && memcmp(normal, "data", 4) == 0 && mdy_data_shaped(name, len) &&
             name[4] == '-') {
             char buf[256];
             size_t n = data_property(name, len, buf);
@@ -145,10 +131,7 @@ static int in_list(const char *const *list, size_t count, const char *s, size_t 
     size_t lo = 0, hi = count;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        size_t clen = strlen(list[mid]);
-        size_t n = clen < len ? clen : len;
-        int cmp = memcmp(list[mid], s, n);
-        if (cmp == 0) cmp = clen < len ? -1 : (clen > len ? 1 : 0);
+        int cmp = mdy_strkey_cmp(list[mid], strlen(list[mid]), s, len);
         if (cmp == 0) return 1;
         if (cmp < 0) lo = mid + 1; else hi = mid;
     }
