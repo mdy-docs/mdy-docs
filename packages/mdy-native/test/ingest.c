@@ -21,6 +21,7 @@
 #include "db.h"
 #include "bplustree.h"
 #include "ingest.h"
+#include "bjval.h"
 #include "mdydata.h"
 #include "mdyyaml.h"
 
@@ -130,10 +131,24 @@ int main(void) {
      * overrode the front matter — and the body must be nowhere in it.
      */
     if (found) {
-        int has_nine = 0;
-        for (size_t i = 0; i + 1 < found_len; i++)
-            if (found[i] == 9 && found[i + 1] == 0) { has_nine = 1; break; }
-        ok("the fence's value won the merge (size: 9)", has_nine);
+        /* Decoded, and read by name: a key keeps the position of its FIRST
+         * appearance and the value of its LAST, and `_id` is written last. */
+        bjv *hits = bjv_decode(found, found_len);   /* the query's hits, one here */
+        bjv *doc = hits && hits->type == BJV_ARRAY && hits->count ? hits->items[0] : hits;
+        size_t at_size = 0, at_founded = 0, at_title = 0;
+        if (doc && doc->type == BJV_OBJECT) {
+            for (size_t i = 0; i < doc->count; i++) {
+                if (strcmp(doc->keys[i], "size") == 0) at_size = i + 1;
+                if (strcmp(doc->keys[i], "founded") == 0) at_founded = i + 1;
+                if (strcmp(doc->keys[i], "title") == 0) at_title = i + 1;
+            }
+        }
+        ok("the fence's value won the merge (size: 9)", doc && bjv_number(doc, "size", -1) == 9);
+        ok("...in the front matter's place, before the key only the fence declared",
+           at_title == 1 && at_size && at_founded && at_size < at_founded);
+        ok("...and `_id` is the last key",
+           doc && doc->type == BJV_OBJECT && doc->count && strcmp(doc->keys[doc->count - 1], "_id") == 0);
+        bjv_free(hits);
         ok("the body text is not in the database",
            find_bytes(found, found_len, "More body", 9) == NULL &&
            find_bytes(found, found_len, "must NOT reach", 14) == NULL);
