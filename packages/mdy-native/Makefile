@@ -12,7 +12,7 @@
 #   make check-alloc              a build with each allocation refused in turn
 #   make check-alloc-all          every sweep a native build can run (~8 min)
 #   make check-alloc-doc          document mode; check-alloc-dev the server
-#   make check-generated          the four generated headers, against their generators
+#   make check-generated          the five generated headers, against their generators
 #   make check-alloc-wasm         and through the wasm engine
 #   make wasm                     the same engine as WebAssembly (needs emcc)
 #   make check-wasm               the golden sites through it, under node

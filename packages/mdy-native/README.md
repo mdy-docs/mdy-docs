@@ -27,7 +27,7 @@ and stb are vendored.
 ## How it is tested
 
 By building real sites both ways and diffing every byte. `make check-sites`
-does that for the five in this repository, and it is the suite — not a
+does that for the six in this repository, and it is the suite — not a
 supplement to one.
 
 That is a deliberate replacement. There used to be a second binary here that
@@ -35,7 +35,7 @@ ran mdy-docs' own JavaScript in an embedded interpreter, and `make test` ran
 mdy-docs' 684 test files against it. It proved a claim about that binary —
 "mdy-docs runs unchanged on it" — and that binary is gone. What matters now is
 whether the C engine and mdy-docs agree on real input, which is a question only
-a differential test can answer. Pointing it at those five sites found eight
+a differential test can answer. Pointing it at those sites found eight
 bugs in an engine that already built a 93-page site identically, and **not one
 of them failed a unit test**: a `.yaml` file's own fields losing to derived
 identity, `mtime` as a number where mdy-docs has an ISO string, `.md` files not
@@ -135,11 +135,11 @@ The comparison that matters is not the clock, though — it is that the output
 does not move, and that is measured rather than trusted:
 
 ```
-make compare        87/87 documents byte-identical, 284,872 nodes, 20,681 positions
-make check-html     290/290 documents identical end to end, 26 MB of HTML
-make check-script   145/145 documents compiled identically, 14 MB of JavaScript
-make check-yaml     179/179 YAML blocks read identically
-make check-links    10514/10514 URL inputs agree with linkify-it
+make compare        154/154 documents byte-identical, 394,877 nodes, 27,851 positions
+make check-html     642/642 documents identical end to end (321 documents, two modes), 45 MB of HTML
+make check-script   321/321 documents compiled identically, 25 MB of JavaScript
+make check-yaml     440/440 YAML blocks read identically
+make check-links    14896/14896 URL inputs agree with linkify-it
 make check-parse    the C checks alone, no node needed — what CI runs
 ```
 
@@ -160,8 +160,9 @@ highlight.js and lowlight's emitter in lamassu's subset of JavaScript, bundled
 into one script the engine embeds and loads as the ES module
 `mdy-docs/highlight` the first time a fence asks — a document can
 `await import("mdy-docs/highlight")` itself. `make check-highlight` holds it
-to lowlight over every source file in this repository, under node and under
-lamassu, and the fixture site carries a fence so the golden checks and
+to lowlight over a sample of this repository's source files (up to 25 per
+language, 48 KB each), under node and under lamassu, and the fixture site
+carries a fence so the golden checks and
 `check-sites` hold the engine to it too. It took two fixes in lamassu, both
 found by this: a stale cap on live regular expressions, and a module specifier
 left unrooted across an allocation, which AddressSanitizer and `MDY_GC_STRESS`
@@ -293,7 +294,7 @@ The statements are wrapped as `(async (req, res, $$) => { … })`, so `req` and
 the whole reason the script layer produces statements that never mention the
 request.
 
-**`$` is complete but for one native.** `find`, `findOne`, `withTag`, `data`,
+**`$` is complete.** `find`, `findOne`, `withTag`, `data`,
 `render`, `text`, `emit`, `compose`, `parse`, `markdown`, `node`, `html`,
 `table`, `toc`, `publish`, `tokenize` and `rfc822` all work, and each was
 checked against `node bin/mdy.js build` on the same source rather than against
@@ -408,12 +409,9 @@ element written `href class rel title` comes back `href title class rel` after
 a transform — and mdy-docs does the same under node. `check-engine` pins the
 order against what `node bin/mdy.js build` produces.
 
-Two gaps remain. There is no `js_function_new`, only `js_register_native` for
+One gap remains. There is no `js_function_new`, only `js_register_native` for
 globals — so `$` is built in the wrapper source over one global native rather
-than as an object of native function values. And a render's positions point at
-the GENERATED lines rather than the source ones: mdy-docs carries a line map
-from the script layer into the parser and this does not yet, which changes no
-HTML, only where a warning would say it came from.
+than as an object of native function values.
 
 ## What is in the binary
 
@@ -432,7 +430,7 @@ left behind.
 | --- | --- | --- |
 | **md4c** | CommonMark and GFM, the `.md` front end. `MD_DIALECT_GITHUB`: tables, task lists, strikethrough, autolinks, admonitions, footnotes. One local patch, listed in its README. | MIT |
 | **lexbor** | HTML5 tokenizer and tree construction, five of its modules. The `rehype-raw` stage of the `.md` pipeline: raw HTML into real elements, and repairing what a document got wrong. | Apache-2.0 |
-| **stb** | `stb_image`, `stb_image_write`, `stb_image_resize2` — three headers. Image dimensions for a document's records, and the resizing `$.image` does. | MIT / public domain |
+| **stb** | `stb_image`, `stb_image_write`, `stb_image_resize2` — three headers. Image dimensions for a document's records, and the resizing `$.resize` does. | MIT / public domain |
 | **highlight.js** | A fork of highlight.js 11.11.2 and lowlight 3.3.0's emitter, rewritten into lamassu's subset of JavaScript so fenced code is coloured by the real grammars inside the engine this binary already embeds, not by a second implementation of 37 languages in C. | BSD-3-Clause (highlight.js) and MIT (lowlight), both in its `LICENSE` |
 
 **Submodules**, because they are this project's own and change with it:
@@ -455,15 +453,13 @@ ones are, and BSD-3-Clause requires the notice to travel with the source.
 
 ## Next
 
-The backend builds. What it does not yet do is *serve*, and the plan's Phase 1c
+The backend builds, serves (`mdy dev`, `mdy [path] --watch`) and watches
+(`src/watch.c`, one snapshot walker on every platform). The plan's Phase 1c
 is the next thing: one narrow protocol — `open` / `build` / `outputs` / the
 provider's nine / `watch` — specified once and implemented twice, over Tauri
 commands here and over a Worker on the web. That is what makes the editor and
 the preview one implementation for five targets instead of two applications
 that share a renderer.
-
-Watching (Phase 3) is where the missing `watch` method belongs, along with the
-three platform watchers it needs.
 
 `createIndex` used to be a no-op here and is now real —
 `dc_collection_add_index` with a B+tree of its own, backfilled from what is
