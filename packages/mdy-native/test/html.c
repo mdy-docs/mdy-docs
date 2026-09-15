@@ -4,7 +4,7 @@
  * Not one of these cases parses anything. That is the point: src/html.c takes
  * a tree and returns a string, and nothing about it needs the parser to exist
  * — so the trees here are plain C structs, assembled from the public types in
- * include/mdyast.h with no arena, no document and no source text anywhere.
+ * src/parse/mdyast.h with no arena, no document and no source text anywhere.
  *
  * Every expectation was taken FROM `hast-util-to-html` rather than reasoned
  * out, by building the same tree in JavaScript and printing what it produced.

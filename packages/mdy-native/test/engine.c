@@ -1354,6 +1354,90 @@ static void session_checks(void) {
 /* A knob set between two renders on ONE engine changes what the memo may
  * answer with: the fingerprint carries the knobs, so it is forgotten when
  * one of them moves. */
+/*
+ * Composition's two halves, as compose.js splices: a paragraph of nothing
+ * but tokens is REPLACED by what they hold, a token inside a sentence gives
+ * up its blocks, and a token forged by the document names nothing and is
+ * left as the characters it was. Every expected line is node's.
+ */
+static void splice_checks(void) {
+    printf("\n--- engine: splicing, both halves ---\n");
+    check("a render inside a sentence gives up every block it holds, and one on its own line is that document",
+          "% const t = $.render(1)\nSee {{ t }} here.\n\n{{ t }}\n{{ t }}\n\n"
+          "forged: \xee\x80\x80zz\xee\x80\x81 and \xee\x80\x80" "999\xee\x80\x81 end\n"
+          "---\n= Title\n\npara one\n\n- a\n- b\n",
+          "<p>See <h1 id=\"title\">Title</h1>para one<ul>\n<li>a</li>\n<li>b</li>\n</ul> here.</p>"
+          "<h1 id=\"title\">Title</h1><p>para one</p><ul>\n<li>a</li>\n<li>b</li>\n</ul>"
+          "<h1 id=\"title\">Title</h1><p>para one</p><ul>\n<li>a</li>\n<li>b</li>\n</ul>"
+          "<p>forged: \xee\x80\x80zz\xee\x80\x81 and \xee\x80\x80" "999\xee\x80\x81 end</p>");
+    check("$.withTag matches a declared tag and a mentioned one, whatever its case",
+          "+++\ntags: [city]\n+++\n% const hits = $.withTag(\"City\")\n"
+          "tagged: {{ hits.map(d => d.path).sort().join(\",\") }} / {{ $.withTag(\"nope\").length }}\n"
+          "---\n+++\npath: b.mdy\ntags: [City, town]\n+++\nb\n---\n+++\npath: c.mdy\n+++\nc #city\n",
+          "<p>tagged: b.mdy,c.mdy, / 0</p>");
+}
+
+/* The entry's `req`: a field set as JSON, forgotten by clear_context, and
+ * `today`, which MDY_TODAY pins so a build is repeatable. */
+static void context_checks(void) {
+    printf("\n--- engine: the entry's request ---\n");
+    const char *source = "{{ req.who }}/{{ req.n }}/{{ typeof req.gone }}\n";
+    mdy_engine *e = mdy_engine_new(S);
+    char err[256];
+    char *first = NULL, *second = NULL, *today = NULL;
+    if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0) {
+        mdy_engine_set_context_json(e, "who", "\"ada\"", 1);
+        mdy_engine_set_context_json(e, "n", "ada", 0);       /* not JSON: the string it is */
+        mdy_engine_set_context_json(e, "gone", "1", 1);
+        first = mdy_engine_render(e, 0, err, sizeof err);
+        mdy_engine_clear_context(e);
+        mdy_engine_set_context_json(e, "who", "\"bel\"", 1);
+        second = mdy_engine_render(e, 0, err, sizeof err);
+    }
+    ok_("a context field arrives as the JSON says, or as the text it is",
+        first && strcmp(first, "<p>ada/ada/number</p>") == 0, first ? first : err);
+    ok_("...and clear_context forgets every field set so far",
+        second && strcmp(second, "<p>bel/undefined/undefined</p>") == 0, second ? second : err);
+    free(first); free(second);
+    mdy_engine_free(e);
+#ifndef _WIN32
+    setenv("MDY_TODAY", "2021-03-04", 1);
+    e = mdy_engine_new(S);
+    const char *src2 = "{{ req.today }}\n";
+    if (mdy_engine_open(e, src2, strlen(src2), err, sizeof err) == 0) today = mdy_engine_render(e, 0, err, sizeof err);
+    unsetenv("MDY_TODAY");
+    ok_("MDY_TODAY pins req.today", today && strcmp(today, "<p>2021-03-04</p>") == 0, today ? today : err);
+    free(today);
+    mdy_engine_free(e);
+#endif
+}
+
+/* bjval, the small decoder the command reads a broker's answers with. */
+static void bjval_checks(void) {
+    printf("\n--- engine: bjval reads what binjson wrote ---\n");
+    bj_builder *b = bj_builder_new();
+    bj_begin_object(b);
+    bj_put_key(b, (const uint8_t *)"a", 1); bj_put_int(b, 1);
+    bj_put_key(b, (const uint8_t *)"b", 1); bj_put_float(b, 2.5);
+    bj_put_key(b, (const uint8_t *)"s", 1); bj_put_string(b, (const uint8_t *)"x\"y", 3);
+    bj_put_key(b, (const uint8_t *)"arr", 3); bj_begin_array(b); bj_put_bool(b, 1); bj_put_null(b); bj_end_array(b);
+    bj_put_key(b, (const uint8_t *)"nested", 6); bj_begin_object(b); bj_put_key(b, (const uint8_t *)"k", 1);
+    bj_begin_array(b); bj_put_int(b, -7); bj_end_array(b); bj_end_object(b);
+    bj_put_key(b, (const uint8_t *)"inf", 3); bj_put_float(b, 1.0 / 0.0);
+    bj_end_object(b);
+    size_t n = 0;
+    const uint8_t *bytes = bj_builder_data(b, &n);
+    bjv *v = bjv_decode(bytes, n);
+    char *json = v ? bjv_to_json(v) : NULL;
+    ok_("every kind of value comes back, spelled as JSON",
+        json && strcmp(json, "{\"a\":1,\"b\":2.5,\"s\":\"x\\\"y\",\"arr\":[true,null],\"nested\":{\"k\":[-7]},\"inf\":null}") == 0,
+        json);
+    ok_("...and a field is read by name", v && bjv_number(v, "b", 0) == 2.5 && bjv_string(v, "s") &&
+        strcmp(bjv_string(v, "s"), "x\"y") == 0 && bjv_number(v, "missing", -1) == -1, json);
+    free(json); bjv_free(v); bj_builder_free(b);
+    ok_("bytes that are not binjson decode to nothing", bjv_decode((const uint8_t *)"nope", 4) == NULL, NULL);
+}
+
 static void knob_memo_checks(void) {
     printf("\n--- engine: a knob changed between renders ---\n");
     const char *source = "<script\n  alert(1)\n";
@@ -3908,6 +3992,9 @@ int main(void) {
     session_checks();
     memo_key_checks();
     knob_memo_checks();
+    splice_checks();
+    context_checks();
+    bjval_checks();
     count_checks();
     import_checks();
 #ifndef _WIN32
