@@ -265,18 +265,36 @@ static int svg_number(const uint8_t *b, size_t n, const char *attr, double *out)
     return -1;
 }
 
+/* A dimension as an int, refusing what an int cannot hold. */
+static int svg_dimension(double d, int *out) {
+    if (!(d > 0) || d >= 1e9) return -1;
+    *out = (int)(d + 0.5);
+    return 0;
+}
+
 static int svg_size(const uint8_t *b, size_t n, int *w, int *h) {
-    /* Only look at the head: a `width=` inside the drawing is not the root's. */
-    size_t head = n < 4096 ? n : 4096;
-    if (!memchr(b, '<', head)) return -1;
+    /*
+     * Only the root element's start tag is read: a `width=` on a shape inside
+     * the drawing is that shape's, not the picture's. The tag is `<svg`
+     * followed by whitespace or `>`, and it ends at the first `>` after it.
+     */
+    size_t head = n < 65536 ? n : 65536;
+    size_t open = 0;
+    for (open = 0; open + 4 < head; open++) {
+        if (memcmp(b + open, "<svg", 4) != 0) continue;
+        uint8_t next = b[open + 4];
+        if (next == ' ' || next == '\t' || next == '\n' || next == '\r' || next == '>' || next == '/') break;
+    }
+    if (open + 4 >= head) return -1;
+    const uint8_t *close = memchr(b + open, '>', head - open);
+    if (!close) return -1;
+    b += open;
+    head = (size_t)(close - b) + 1;
 
     double dw = 0, dh = 0;
     if (svg_number(b, head, "width", &dw) == 0 && svg_number(b, head, "height", &dh) == 0 &&
-        dw > 0 && dh > 0) {
-        *w = (int)(dw + 0.5);
-        *h = (int)(dh + 0.5);
+        svg_dimension(dw, w) == 0 && svg_dimension(dh, h) == 0)
         return 0;
-    }
     for (size_t i = 0; i + 8 < head; i++) {
         if (memcmp(b + i, "viewBox", 7) != 0) continue;
         size_t j = i + 7;
@@ -293,9 +311,7 @@ static int svg_size(const uint8_t *b, size_t n, int *w, int *h) {
             buf[m] = '\0';
             v[k] = atof(buf);
         }
-        if (v[2] <= 0 || v[3] <= 0) return -1;
-        *w = (int)(v[2] + 0.5);
-        *h = (int)(v[3] + 0.5);
+        if (svg_dimension(v[2], w) != 0 || svg_dimension(v[3], h) != 0) return -1;
         return 0;
     }
     return -1;

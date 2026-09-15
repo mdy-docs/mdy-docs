@@ -2363,10 +2363,19 @@ static void bad_image_checks(void) {
     write_bytes(root, "f-empty.tif", cut, 0);
     /* A real one beside them, so the reader is not merely refusing everything. */
     write_png(root, "g-good.png", 9, 4);
+    /* An SVG's size is its root element's: a shape inside it with a width of
+     * its own is not the picture, and the root may say it only as a viewBox. */
+    write_file(root, "h-icon.svg",
+        "<?xml version=\"1.0\"?>\n<!-- width=\"7\" height=\"7\" -->\n"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 50\">"
+        "<rect width=\"10\" height=\"10\"/></svg>\n");
+    write_file(root, "i-sized.svg",
+        "<svg width=\"30\" height=\"20\" viewBox=\"0 0 100 50\"><rect width=\"1\" height=\"1\"/></svg>\n");
+    write_file(root, "j-unit.svg", "<svg width=\"3em\" height=\"2em\"><rect width=\"5\" height=\"5\"/></svg>\n");
 
     write_file(root, "main.mdy",
         "% $.emit('roll.txt', $.find({ ext: { $exists: true } })\n"
-        "%   .filter((x) => x.ext === '.tif' || x.ext === '.png')\n"
+        "%   .filter((x) => x.ext === '.tif' || x.ext === '.png' || x.ext === '.svg')\n"
         "%   .map((x) => x.name + '=' + (x.width ?? '-') + 'x' + (x.height ?? '-')).join(','))\n");
 
     mdy_engine *e = mdy_engine_new(S);
@@ -2397,7 +2406,7 @@ static void bad_image_checks(void) {
             strcmp(emitted("roll.txt"),
                    "a-wrap.tif=-x-,b-wrap.tif=-x-,c-past.tif=-x-,"
                    "d-count.tif=-x-,e-cut.tif=-x-,f-empty.tif=-x-,"
-                   "g-good.png=9x4") == 0,
+                   "g-good.png=9x4,h-icon.svg=100x50,i-sized.svg=30x20,j-unit.svg=-x-") == 0,
         emitted("roll.txt"));
 
     mdy_engine_free(e);
