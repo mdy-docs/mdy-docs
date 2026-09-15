@@ -327,6 +327,20 @@ static void definition_checks(const mdy_options *o) {
           ROOT(EL("h1", "\"id\":\"para\"", TX("para"))), o);
 }
 
+/* A fence's or a raw-text element's lines keep what they hold past the
+ * indentation taken off them, tabs included — fence.js's dedent. */
+static void dedent_checks(const mdy_options *o) {
+    printf("--- mdyast: dedent keeps the characters, not the columns ---\n");
+    check("a tab inside a fence is a tab", "```\n\tcode\n```",
+          ROOT(EL("pre", "", EL("code", "", TX("\\tcode\\n")))), o);
+    check("...and an indented fence takes only its own columns off", "  ```\n  \tx\n   y\n  ```",
+          ROOT(EL("div", "", TX("\\n") "," EL("pre", "", EL("code", "", TX("\\tx\\n y\\n"))) "," TX("\\n"))), o);
+    check("a raw-text element's tab survives two columns of stripping", "<pre\n\t\tcode",
+          ROOT(EL("pre", "", TX("\\tcode"))), o);
+    check("...and a line of only spaces past the strip is kept", "<pre\n  a\n    \n  b",
+          ROOT(EL("pre", "", TX("a\\n  \\nb"))), o);
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -496,6 +510,7 @@ int main(void) {
     footnote_scale_checks(&o);
     intern_checks();
     definition_checks(&o);
+    dedent_checks(&o);
     markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");

@@ -854,6 +854,26 @@ static int is_raw_text(const char *tag) {
 }
 
 /*
+ * fence.js's dedent(line, width): the line with up to `width` columns of its
+ * indentation taken off and everything past that as written — a tab that
+ * survives is a tab, and a tab counts to the next four-column stop. Written
+ * into `out`, which needs the line's whole raw length; returns the length.
+ */
+static size_t dedent_line(const mdy_line *l, size_t width, char *out) {
+    const char *raw = l->text - l->indent_chars;
+    size_t raw_len = l->indent_chars + l->len;
+    size_t i = 0, column = 0;
+    while (i < raw_len && column < width) {
+        if (raw[i] == ' ') column += 1;
+        else if (raw[i] == '\t') column += 4 - (column % 4);
+        else break;
+        i++;
+    }
+    memcpy(out, raw + i, raw_len - i);
+    return raw_len - i;
+}
+
+/*
  * An element whose content is TEXT and nothing else: pre, script, style,
  * textarea, title. Markup inside a <script> is not markup, and parsing it as
  * if it were is how a stylesheet ends up with an <em> in it. `el` is the
@@ -867,16 +887,14 @@ static int is_raw_text(const char *tag) {
  */
 static size_t emit_raw_text_element(mdy_doc *doc, mdy_node *parent, mdy_node *el,
                                     const mdy_line *lines, size_t i, size_t end,
-                                    size_t opener_indent, const char *content,
+                                    size_t base, const char *content,
                                     size_t content_len) {
-    size_t strip = opener_indent + 2;
+    /* `dedent(line, base + step)` per line, then `filter(Boolean)`: a line
+     * that is only indentation past the strip keeps what is left of it. */
+    size_t strip = base + 2;
     size_t need = 0;
     if (content) { trim(&content, &content_len); need += content_len + 1; }
-    for (size_t k = i + 1; k < end; k++) {
-        if (lines[k].blank) continue;
-        size_t extra = lines[k].indent > strip ? lines[k].indent - strip : 0;
-        need += extra + lines[k].len + 1;
-    }
+    for (size_t k = i + 1; k < end; k++) need += lines[k].indent_chars + lines[k].len + 1;
     char *text = need ? mdy_alloc(&doc->arena, need + 1) : NULL;
     size_t o = 0;
     if (text) {
@@ -885,12 +903,11 @@ static size_t emit_raw_text_element(mdy_doc *doc, mdy_node *parent, mdy_node *el
             o += content_len;
         }
         for (size_t k = i + 1; k < end; k++) {
-            if (lines[k].blank) continue;
+            size_t at = o ? o + 1 : o;
+            size_t n = dedent_line(&lines[k], strip, text + at);
+            if (n == 0) continue;
             if (o) text[o++] = '\n';
-            size_t extra = lines[k].indent > strip ? lines[k].indent - strip : 0;
-            for (size_t sp = 0; sp < extra; sp++) text[o++] = ' ';
-            memcpy(text + o, lines[k].text, lines[k].len);
-            o += lines[k].len;
+            o += n;
         }
         text[o] = '\0';
     }
@@ -903,7 +920,8 @@ static size_t emit_raw_text_element(mdy_doc *doc, mdy_node *parent, mdy_node *el
 
 /* Consume an element opener at line `i`; returns the next line to read. */
 static size_t parse_element(mdy_doc *doc, mdy_node *parent,
-                            const mdy_line *lines, size_t count, size_t i, size_t nesting) {
+                            const mdy_line *lines, size_t count, size_t i, size_t base,
+                            size_t nesting) {
     const mdy_line *l = &lines[i];
 
     /*
@@ -1011,7 +1029,7 @@ static size_t parse_element(mdy_doc *doc, mdy_node *parent,
     }
 
     if (is_raw_text(build))
-        return emit_raw_text_element(doc, parent, el, lines, i, end, l->indent, content, content_len);
+        return emit_raw_text_element(doc, parent, el, lines, i, end, base, content, content_len);
 
     if (content) {
         /*
@@ -1887,17 +1905,15 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                 size_t start = j;
                 while (j < count && !closes_fence(&lines[j], fence, width)) j++;
 
-                /* The content, verbatim, with its own newlines and the
-                 * original indentation relative to the fence. */
+                /* The content as written, each line with the fence's own
+                 * indentation taken off it and no more: what it keeps beyond
+                 * that, tabs included, is the code's. */
                 size_t total = 0;
-                for (size_t k = start; k < j; k++) total += lines[k].indent + lines[k].len + 1;
+                for (size_t k = start; k < j; k++) total += lines[k].indent_chars + lines[k].len + 1;
                 char *body = mdy_alloc(&doc->arena, total + 1);
                 size_t o = 0;
                 for (size_t k = start; k < j; k++) {
-                    size_t strip = lines[k].indent > l->indent ? l->indent : lines[k].indent;
-                    for (size_t s = strip; s < lines[k].indent; s++) body[o++] = ' ';
-                    memcpy(body + o, lines[k].text, lines[k].len);
-                    o += lines[k].len;
+                    o += dedent_line(&lines[k], l->indent, body + o);
                     body[o++] = '\n';
                 }
                 body[o] = '\0';
@@ -1958,7 +1974,7 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
 
         /* --- an element opener --- */
         if (!at_depth_cap && l->text[0] == '<') {
-            i = parse_element(doc, parent, lines, count, i, nesting);
+            i = parse_element(doc, parent, lines, count, i, base, nesting);
             produced = 1;
             continue;
         }
