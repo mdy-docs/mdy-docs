@@ -68,11 +68,20 @@ static int sockets_ready(void) { signal(SIGPIPE, SIG_IGN); return 1; }
  */
 #define SEND_TIMEOUT_MS 5000
 
+/*
+ * How long a connection may sit without completing a request. A peer that
+ * connects and says nothing, or half a header, would otherwise hold its slot
+ * for ever, and there are MAX_CONNS of them. A kept connection is exempt: it
+ * is a stream, and silence is its normal state.
+ */
+#define IDLE_TIMEOUT_S 10
+
 typedef struct {
     sock_t fd;
     int kept;               /* a stream: written to on broadcast, never read again */
     uint8_t *in;
     size_t in_len, in_cap;
+    time_t opened;          /* when it was accepted, for the idle timeout */
 } Conn;
 
 struct Httpd {
@@ -336,6 +345,12 @@ void httpd_poll(Httpd *s, int timeout_ms) {
     }
     struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
     int n = select((int)maxfd + 1, &readable, NULL, NULL, &tv);
+
+    time_t now = time(NULL);
+    for (int i = 0; i < MAX_CONNS; i++) {
+        Conn *c = &s->conns[i];
+        if (c->fd != BAD_SOCKET && !c->kept && now - c->opened > IDLE_TIMEOUT_S) conn_free(c);
+    }
     if (n <= 0) return;
 
     if (FD_ISSET(s->listener, &readable)) {
@@ -344,7 +359,12 @@ void httpd_poll(Httpd *s, int timeout_ms) {
             int slot = -1;
             for (int i = 0; i < MAX_CONNS; i++) if (s->conns[i].fd == BAD_SOCKET) { slot = i; break; }
             if (slot < 0) close_socket(fd);
-            else { set_write_timeout(fd); s->conns[slot].fd = fd; s->conns[slot].kept = 0; }
+            else {
+                set_write_timeout(fd);
+                s->conns[slot].fd = fd;
+                s->conns[slot].kept = 0;
+                s->conns[slot].opened = time(NULL);
+            }
         }
     }
     for (int i = 0; i < MAX_CONNS; i++) {
