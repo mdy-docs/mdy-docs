@@ -57,18 +57,15 @@ int mdy_footnote_reference(mdy_doc *doc, mdy_footnote *note) {
     return ++note->refs;
 }
 
-/** `prefix` + id, and `-n` when n > 1 — the id scheme above. */
-static const char *ref_id(mdy_doc *doc, const char *kind, const char *id, int n) {
+/** `lead` + prefix + kind + id, and `-n` when n > 1 — the id scheme above.
+ * `lead` is `#` for an href and empty for an id. Built in the arena at the
+ * length the id has, so an anchor and the link to it are always the same. */
+static const char *ref_id(mdy_doc *doc, const char *lead, const char *kind, const char *id, int n) {
     const char *prefix = doc->note_prefix ? doc->note_prefix : "user-content-";
-    /* Sized to the id, not a fixed 256: a long label made the `href` (which
-     * carries a leading `#`) truncate one byte earlier than the matching
-     * `id`, so a back-reference pointed at an anchor that did not exist. The
-     * result is arena-owned, so it is built there directly. */
-    size_t cap = strlen(prefix) + strlen(kind) + strlen(id) + 24;
+    size_t cap = strlen(lead) + strlen(prefix) + strlen(kind) + strlen(id) + 24;
     char *buf = mdy_alloc(&doc->arena, cap);
-    if (!buf) return "";
-    if (n > 1) snprintf(buf, cap, "%s%s%s-%d", prefix, kind, id, n);
-    else snprintf(buf, cap, "%s%s%s", prefix, kind, id);
+    if (n > 1) snprintf(buf, cap, "%s%s%s%s-%d", lead, prefix, kind, id, n);
+    else snprintf(buf, cap, "%s%s%s%s", lead, prefix, kind, id);
     return buf;
 }
 
@@ -103,7 +100,7 @@ void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
         mdy_node *li = mdy_new_element(doc, "li", 2);
         /* Once: ref_id copies into the arena, and calling it for the string
          * and again for its length made two of every footnote's id. */
-        const char *fn = ref_id(doc, "fn-", note->id, 1);
+        const char *fn = ref_id(doc, "", "fn-", note->id, 1);
         mdy_set_string(doc, li, "id", fn, strlen(fn));
         mdy_append(li, mdy_new_text(doc, "\n", 1));
 
@@ -118,8 +115,7 @@ void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
         for (int n = 1; n <= note->refs; n++) {
             mdy_append(p, mdy_new_text(doc, " ", 1));
             mdy_node *back = mdy_new_element(doc, "a", 1);
-            char href[256];
-            snprintf(href, sizeof href, "#%s", ref_id(doc, "fnref-", note->id, n));
+            const char *href = ref_id(doc, "#", "fnref-", note->id, n);
             mdy_set_string(doc, back, "href", href, strlen(href));
             mdy_set_bool(doc, back, "dataFootnoteBackref", 1);
             mdy_set_string(doc, back, "ariaLabel", "Back to content", 15);

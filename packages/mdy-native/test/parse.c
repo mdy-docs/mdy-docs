@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "mdyast.h"
+#include "mdyhtml.h"
 #include "internal.h"
 
 static int failures = 0;
@@ -192,6 +193,25 @@ static void footnote_scale_checks(const mdy_options *o) {
     ok_("…and a reference nothing defines stays text", json && strstr(json, "[[^miss0]]") != NULL, NULL);
     free(json);
     mdy_free(doc);
+
+    /* An anchor and the link back to it are built the same way, so a long
+     * id makes a long anchor and an equally long link, never a shorter one. */
+    {
+        char id[241];
+        memset(id, 'A', 240);
+        id[240] = '\0';
+        char text[1024];
+        snprintf(text, sizeof text, "x [[^%s]] and [[^%s]]\n\n[[^%s]]: note\n", id, id, id);
+        mdy_doc *d = mdy_parse(text, 0, o);
+        char *html = mdy_to_html(mdy_root(d), NULL);
+        char want_id[300], want_href[300];
+        snprintf(want_id, sizeof want_id, "id=\"user-content-fnref-%s-2\"", id);
+        snprintf(want_href, sizeof want_href, "href=\"#user-content-fnref-%s-2\"", id);
+        ok_("a back-reference to a long footnote id points at the whole anchor",
+            html && strstr(html, want_id) && strstr(html, want_href), html);
+        free(html);
+        mdy_free(d);
+    }
 
     /* Three hundred distinct headings, then a repeat of the first. */
     n = 0;
