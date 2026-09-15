@@ -1762,9 +1762,13 @@ static mdy_node *toc_list(mdy_doc *doc, Heading *entries, size_t count) {
         }
         mdy_node *li = mdy_new_element(doc, "li", 2);
         mdy_node *a = mdy_new_element(doc, "a", 1);
-        char href[512];
-        int n = snprintf(href, sizeof href, "#%s", entries[i].id);
-        mdy_set_string(doc, a, "href", href, (size_t)n);
+        /* `#` and the id, at whatever length the heading made the id. */
+        size_t idlen = strlen(entries[i].id);
+        char *href = mdy_xmalloc(idlen + 2);
+        href[0] = '#';
+        memcpy(href + 1, entries[i].id, idlen + 1);
+        mdy_set_string(doc, a, "href", href, idlen + 1);
+        free(href);
         mdy_append(a, mdy_new_text(doc, entries[i].text, strlen(entries[i].text)));
         mdy_append(li, a);
         mdy_append(stack[top].list, li);

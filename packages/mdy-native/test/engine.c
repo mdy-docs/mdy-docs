@@ -2617,6 +2617,20 @@ static void natives_checks(void) {
           "<h2>Raw heading</h2><h1 id=\"real\">Real</h1>");
     check("...and disappears entirely when nothing can be listed",
           "{{ $.toc() }}\n<p>plain\n", "<p>plain</p>");
+    {
+        /* A heading's id is as long as the heading, and the link is as long
+         * as the id: nothing between them is a fixed size. */
+        enum { LONG = 700 };
+        char word[LONG + 1];
+        memset(word, 'x', LONG);
+        word[LONG] = '\0';
+        char source[LONG + 64], expected[4 * LONG + 128];
+        snprintf(source, sizeof source, "{{ $.toc() }}\n= %s\n", word);
+        snprintf(expected, sizeof expected,
+                 "<ul><li><a href=\"#%s\">%s</a></li></ul><h1 id=\"%s\">%s</h1>",
+                 word, word, word, word);
+        check("...and links a heading of seven hundred characters in full", source, expected);
+    }
     check("$.toc(text) is a question, not a token",
           "{{ JSON.stringify($.toc('= One\\n\\n== Two')) }}",
           "<p>[{\"depth\":1,\"text\":\"One\",\"slug\":\"one\"},"
