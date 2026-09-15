@@ -467,6 +467,153 @@ int mdy_engine_open(mdy_engine *e, const char *source, size_t len,
  * were arrived at. One source split here; a file each, split on its own, when
  * a directory is the set (open_dir_inner). Takes ownership of `docs`.
  */
+static int insert_one_document(mdy_engine *e, size_t i, char *error, size_t error_len) {
+    Document *d = &e->set.docs[i];
+    d->chunk = mdy_documents_at(e->set.source_docs, i);
+    mdy_chunk body;
+    mdy_split_frontmatter(d->chunk.text, d->chunk.len, &d->matter, &body);
+    /*
+     * NULL from a non-NULL body means mdy_data_extract could not
+     * allocate, not that the body has no ```data fences -- a body with
+     * none comes back as an empty set. Treating the two alike dropped
+     * every fence the document had, so its data and its tags simply were
+     * not there, on a build that reported success.
+     */
+    d->fences = mdy_data_extract(body.text, body.len);
+    if (!d->fences && body.text) {
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
+    }
+    /* The lines the front matter took, so a position in the body can
+     * step over them — mdy-docs' `lineOffset`. */
+    d->matter_lines = 0;
+    if (body.text >= d->chunk.text && body.text <= d->chunk.text + d->chunk.len)
+        for (const char *p = d->chunk.text; p < body.text; p++)
+            if (*p == '\n') d->matter_lines++;
+    d->is_markdown = e->identity.is_md && i < e->identity.count && e->identity.is_md[i];
+
+    /*
+     * The document's DATA: its front matter, with each ```data fence
+     * merged over it — `Object.assign({}, frontMatter, ...blocks)`. Its
+     * text never goes in, which is what a measured build of mdy-docs
+     * shows it doing.
+     */
+    char err[256] = { 0 };
+    mdy_yaml *matter = NULL;
+    if (d->matter.len) matter = mdy_yaml_parse(d->matter.text, d->matter.len, err, sizeof err);
+    /*
+     * A front matter the parser could not READ is this document's problem
+     * and is left as no data, which is what node does with it too. One it
+     * could not ALLOCATE for is the process's problem, and leaving it as
+     * no data means building the page without its fields and reporting
+     * success. MDY_YAML_OOM exists to tell those apart.
+     */
+    if (!matter && d->matter.len && strcmp(err, MDY_YAML_OOM) == 0) {
+        if (error && error_len) snprintf(error, error_len, "out of memory");
+        return -1;
+    }
+
+    size_t fence_count = d->fences ? mdy_data_count(d->fences) : 0;
+    /* identity-as-default + front matter + fences + tags + data + identity */
+    const mdy_yaml_node **maps = calloc(fence_count + 5, sizeof *maps);
+    mdy_yaml **parsed = calloc(fence_count + 1, sizeof *parsed);
+    if (!maps || !parsed) { free(maps); free(parsed); mdy_yaml_free(matter); return -1; }
+
+    size_t used = 0;
+    /* All four are freed by the cleanup below, which the OOM jumps reach,
+     * so all four are declared before the first of those jumps. */
+    mdy_yaml *tag_map = NULL;
+    int oom = 0;
+    /* Identity is VALUES, built by the walk — no text in between to
+     * parse, so nothing here can fail and nothing needed escaping. */
+    if (e->identity.pre && i < e->identity.count && e->identity.pre[i])
+        maps[used++] = mdy_yaml_root(e->identity.pre[i]);
+    if (matter) maps[used++] = mdy_yaml_root(matter);
+    for (size_t f = 0; f < fence_count; f++) {
+        const mdy_data_fence *fence = mdy_data_at(d->fences, f);
+        err[0] = '\0';
+        mdy_yaml *y = mdy_yaml_parse(fence->source, fence->source_len, err, sizeof err);
+        /* A malformed fence is skipped, as node skips it. One that could
+         * not be allocated for is not the same thing. */
+        if (!y && strcmp(err, MDY_YAML_OOM) == 0) goto docs_oom;
+        if (!y) continue;
+        parsed[f] = y;
+        maps[used++] = mdy_yaml_root(y);
+    }
+
+
+    /*
+     * `tags`, from the parts that declare them plus the hashtags in the
+     * body. A mapping of its own, merged after the parts it was computed
+     * from, because it REPLACES whatever `tags` they held with the merged
+     * list — which is what Object.assign then a single `data.tags = tags`
+     * does on the JavaScript side.
+     */
+    {
+        size_t body_len = 0;
+        const char *body = mdy_data_body(d->fences, &body_len);
+        /* `if (text)` here meant a document silently kept none of its
+         * tags -- and tags decide which indexes it appears in. */
+        int tags_oom = 0;
+        tag_map = document_tags(maps, used, body ? body : "", body_len, &tags_oom);
+        if (tags_oom) goto docs_oom;
+        if (tag_map) maps[used++] = mdy_yaml_root(tag_map);
+    }
+
+    /* A data file's own mapping, after everything the document itself
+     * said and before the one field identity still wins. It is merged
+     * HERE, not as front matter, so `tags` above never saw it: a data
+     * record's `tags` are its own value, not the normalized hashtag list
+     * a document body earns — which is where mdy-docs' `meta` leaves
+     * them too. */
+    if (e->identity.data && i < e->identity.count && e->identity.data[i])
+        maps[used++] = mdy_yaml_root(e->identity.data[i]);
+
+    /* After them, where identity WINS — and, for a data file, the one
+     * field that must be real whatever it declared. */
+    if (e->identity.post && i < e->identity.count && e->identity.post[i])
+        maps[used++] = mdy_yaml_root(e->identity.post[i]);
+
+    mdy_oid_next(d->oid);
+    memcpy(e->set.ids[i], d->oid, 12);
+
+    bj_builder *b = bj_builder_new();
+    int ok = b && mdy_bj_document(b, d->oid, maps, used) == 0 && !bj_builder_error(b);
+    if (ok) {
+        size_t dlen = 0;
+        const uint8_t *bytes = bj_builder_data(b, &dlen);
+        ok = bytes && nis_insert(e->set.handle, bytes, (uint32_t)dlen) == 0;
+    }
+    bj_builder_free(b);
+    if (0) {
+        /*
+         * Every mdy_yaml_parse in this loop can fail two ways, and only
+         * one of them is the document's fault. A malformed part is
+         * skipped -- node skips it too -- but a part that could not be
+         * ALLOCATED for is the process failing, and skipping it builds
+         * the page without its data and calls that a success. The four
+         * call sites above jump here; the cleanup is the loop's own.
+         */
+    docs_oom:
+        ok = 0;
+        oom = 1;
+    }
+    mdy_yaml_free(matter);
+    mdy_yaml_free(tag_map);
+    for (size_t f = 0; f < fence_count; f++) mdy_yaml_free(parsed[f]);
+    free(maps);
+    free(parsed);
+
+    if (!ok) {
+        if (error && error_len) {
+            if (oom) snprintf(error, error_len, "out of memory");
+            else snprintf(error, error_len, "document %zu could not be inserted", i);
+        }
+        return -1;
+    }
+    return 0;
+}
+
 int open_documents(mdy_engine *e, mdy_documents *docs,
                           char *error, size_t error_len) {
     close_set(e);
@@ -534,154 +681,8 @@ int open_documents(mdy_engine *e, mdy_documents *docs,
         }
     }
 
-    for (size_t i = 0; i < n; i++) {
-        Document *d = &e->set.docs[i];
-        d->chunk = mdy_documents_at(e->set.source_docs, i);
-        mdy_chunk body;
-        mdy_split_frontmatter(d->chunk.text, d->chunk.len, &d->matter, &body);
-        /*
-         * NULL from a non-NULL body means mdy_data_extract could not
-         * allocate, not that the body has no ```data fences -- a body with
-         * none comes back as an empty set. Treating the two alike dropped
-         * every fence the document had, so its data and its tags simply were
-         * not there, on a build that reported success.
-         */
-        d->fences = mdy_data_extract(body.text, body.len);
-        if (!d->fences && body.text) {
-            if (error && error_len) snprintf(error, error_len, "out of memory");
-            close_set(e);
-            return -1;
-        }
-        /* The lines the front matter took, so a position in the body can
-         * step over them — mdy-docs' `lineOffset`. */
-        d->matter_lines = 0;
-        if (body.text >= d->chunk.text && body.text <= d->chunk.text + d->chunk.len)
-            for (const char *p = d->chunk.text; p < body.text; p++)
-                if (*p == '\n') d->matter_lines++;
-        d->is_markdown = e->identity.is_md && i < e->identity.count && e->identity.is_md[i];
-
-        /*
-         * The document's DATA: its front matter, with each ```data fence
-         * merged over it — `Object.assign({}, frontMatter, ...blocks)`. Its
-         * text never goes in, which is what a measured build of mdy-docs
-         * shows it doing.
-         */
-        char err[256] = { 0 };
-        mdy_yaml *matter = NULL;
-        if (d->matter.len) matter = mdy_yaml_parse(d->matter.text, d->matter.len, err, sizeof err);
-        /*
-         * A front matter the parser could not READ is this document's problem
-         * and is left as no data, which is what node does with it too. One it
-         * could not ALLOCATE for is the process's problem, and leaving it as
-         * no data means building the page without its fields and reporting
-         * success. MDY_YAML_OOM exists to tell those apart.
-         */
-        if (!matter && d->matter.len && strcmp(err, MDY_YAML_OOM) == 0) {
-            if (error && error_len) snprintf(error, error_len, "out of memory");
-            close_set(e);
-            return -1;
-        }
-
-        size_t fence_count = d->fences ? mdy_data_count(d->fences) : 0;
-        /* identity-as-default + front matter + fences + tags + data + identity */
-        const mdy_yaml_node **maps = calloc(fence_count + 5, sizeof *maps);
-        mdy_yaml **parsed = calloc(fence_count + 1, sizeof *parsed);
-        if (!maps || !parsed) { free(maps); free(parsed); mdy_yaml_free(matter); close_set(e); return -1; }
-
-        size_t used = 0;
-        /* All four are freed by the cleanup below, which the OOM jumps reach,
-         * so all four are declared before the first of those jumps. */
-        mdy_yaml *tag_map = NULL;
-        int oom = 0;
-        /* Identity is VALUES, built by the walk — no text in between to
-         * parse, so nothing here can fail and nothing needed escaping. */
-        if (e->identity.pre && i < e->identity.count && e->identity.pre[i])
-            maps[used++] = mdy_yaml_root(e->identity.pre[i]);
-        if (matter) maps[used++] = mdy_yaml_root(matter);
-        for (size_t f = 0; f < fence_count; f++) {
-            const mdy_data_fence *fence = mdy_data_at(d->fences, f);
-            err[0] = '\0';
-            mdy_yaml *y = mdy_yaml_parse(fence->source, fence->source_len, err, sizeof err);
-            /* A malformed fence is skipped, as node skips it. One that could
-             * not be allocated for is not the same thing. */
-            if (!y && strcmp(err, MDY_YAML_OOM) == 0) goto docs_oom;
-            if (!y) continue;
-            parsed[f] = y;
-            maps[used++] = mdy_yaml_root(y);
-        }
-
-
-        /*
-         * `tags`, from the parts that declare them plus the hashtags in the
-         * body. A mapping of its own, merged after the parts it was computed
-         * from, because it REPLACES whatever `tags` they held with the merged
-         * list — which is what Object.assign then a single `data.tags = tags`
-         * does on the JavaScript side.
-         */
-        {
-            size_t body_len = 0;
-            const char *body = mdy_data_body(d->fences, &body_len);
-            /* `if (text)` here meant a document silently kept none of its
-             * tags -- and tags decide which indexes it appears in. */
-            int tags_oom = 0;
-            tag_map = document_tags(maps, used, body ? body : "", body_len, &tags_oom);
-            if (tags_oom) goto docs_oom;
-            if (tag_map) maps[used++] = mdy_yaml_root(tag_map);
-        }
-
-        /* A data file's own mapping, after everything the document itself
-         * said and before the one field identity still wins. It is merged
-         * HERE, not as front matter, so `tags` above never saw it: a data
-         * record's `tags` are its own value, not the normalized hashtag list
-         * a document body earns — which is where mdy-docs' `meta` leaves
-         * them too. */
-        if (e->identity.data && i < e->identity.count && e->identity.data[i])
-            maps[used++] = mdy_yaml_root(e->identity.data[i]);
-
-        /* After them, where identity WINS — and, for a data file, the one
-         * field that must be real whatever it declared. */
-        if (e->identity.post && i < e->identity.count && e->identity.post[i])
-            maps[used++] = mdy_yaml_root(e->identity.post[i]);
-
-        mdy_oid_next(d->oid);
-        memcpy(e->set.ids[i], d->oid, 12);
-
-        bj_builder *b = bj_builder_new();
-        int ok = b && mdy_bj_document(b, d->oid, maps, used) == 0 && !bj_builder_error(b);
-        if (ok) {
-            size_t dlen = 0;
-            const uint8_t *bytes = bj_builder_data(b, &dlen);
-            ok = bytes && nis_insert(e->set.handle, bytes, (uint32_t)dlen) == 0;
-        }
-        bj_builder_free(b);
-        if (0) {
-            /*
-             * Every mdy_yaml_parse in this loop can fail two ways, and only
-             * one of them is the document's fault. A malformed part is
-             * skipped -- node skips it too -- but a part that could not be
-             * ALLOCATED for is the process failing, and skipping it builds
-             * the page without its data and calls that a success. The four
-             * call sites above jump here; the cleanup is the loop's own.
-             */
-        docs_oom:
-            ok = 0;
-            oom = 1;
-        }
-        mdy_yaml_free(matter);
-        mdy_yaml_free(tag_map);
-        for (size_t f = 0; f < fence_count; f++) mdy_yaml_free(parsed[f]);
-        free(maps);
-        free(parsed);
-
-        if (!ok) {
-            if (error && error_len) {
-                if (oom) snprintf(error, error_len, "out of memory");
-                else snprintf(error, error_len, "document %zu could not be inserted", i);
-            }
-            close_set(e);
-            return -1;
-        }
-    }
+    for (size_t i = 0; i < n; i++)
+        if (insert_one_document(e, i, error, error_len) != 0) { close_set(e); return -1; }
 
     return 0;
 }
