@@ -711,6 +711,37 @@ static void staging_free(Staging *st) {
  * this function allocated, and the caller frees the staging and the listing
  * once.
  */
+/*
+ * The record for one file, built as VALUES (no YAML text in between, so nothing
+ * to escape or mis-read). `path` FIRST because mdy-docs has it first — it builds
+ * `{ ...meta, ...parsed, path }`, and mdy_bj_document takes a key's place from
+ * the first mapping to hold it and its value from the last, so position and
+ * value are separate. A picture's dimensions are read from its header when they
+ * are there; a file this cannot decode still gets a record, just without them.
+ * NULL means the builder saw an allocation it could not make.
+ */
+static mdy_yaml *build_identity(const char *rel, const char *name, const char *ext,
+                                double size, double mtime, int is_image,
+                                const uint8_t *bytes, size_t body_len) {
+    char when[40];
+    iso8601_utc(mtime, when, sizeof when);
+    mdy_yaml_builder *ib = mdy_yaml_builder_new();
+    if (!ib) return NULL;
+    mdy_yaml_put_string(ib, "path", rel, 0);
+    mdy_yaml_put_string(ib, "name", name, 0);
+    mdy_yaml_put_string(ib, "ext", ext, 0);
+    mdy_yaml_put_number(ib, "size", size);
+    mdy_yaml_put_string(ib, "mtime", when, 0);
+    if (is_image && bytes) {
+        int iw = 0, ih = 0;
+        if (mdy_image_size(bytes, body_len, &iw, &ih) == 0) {
+            mdy_yaml_put_number(ib, "width", iw);
+            mdy_yaml_put_number(ib, "height", ih);
+        }
+    }
+    return mdy_yaml_builder_done(ib);
+}
+
 static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
                          Staging *st, char *error, size_t error_len) {
     /* Not a source: nothing staged, nothing recorded, and not a failure. */
@@ -760,48 +791,10 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
      * own data unreachable — but `path` is structurally required to be
      * real, because everything resolves documents by it.
      */
-    /* Identity, kept OUT of the text — see `identity` on the engine. Built
-     * as VALUES: no YAML source in between, so nothing to escape and nothing
-     * that can be misread. */
-    char when[40];
-    iso8601_utc(mtime, when, sizeof when);
-    mdy_yaml_builder *ib = mdy_yaml_builder_new();
-    if (!ib) { free(bytes); if (error && error_len) snprintf(error, error_len, "out of memory");
-               return -1; }
-    /*
-     * `path` FIRST, because mdy-docs has it first: it builds the record as
-     * `{ ...meta, ...parsed, path }`, and re-assigning a key in JS leaves
-     * it where it was first written. Position and value are separate here
-     * — mdy_bj_document takes a key's place from the FIRST mapping that has
-     * it and its value from the LAST — so moving it does not change which
-     * `path` wins over a data file's own.
-     */
-    mdy_yaml_put_string(ib, "path", rel, 0);
-    mdy_yaml_put_string(ib, "name", name, 0);
-    mdy_yaml_put_string(ib, "ext", ext, 0);
-    mdy_yaml_put_number(ib, "size", size);
-    mdy_yaml_put_string(ib, "mtime", when, 0);
-    /*
-     * A picture's dimensions, read from its header. Not decodable —
-     * corrupt, truncated, a variant this does not know — is not an error:
-     * it is still a real file and still gets its record, just without
-     * width and height.
-     */
-    if (is_image && bytes) {
-        int iw = 0, ih = 0;
-        if (mdy_image_size(bytes, body_len, &iw, &ih) == 0) {
-            mdy_yaml_put_number(ib, "width", iw);
-            mdy_yaml_put_number(ib, "height", ih);
-        }
-    }
-
-    /*
-     * Checked ONCE, here, rather than at each put: a builder remembers a
-     * refused allocation and answers NULL, so a block that is short a key
-     * cannot get out. The text path had no error channel at all — that is
-     * what `put_room` not failing was working around.
-     */
-    mdy_yaml *ident = mdy_yaml_builder_done(ib);
+    /* Identity, kept OUT of the text — see `identity` on the engine, and
+     * build_identity above. NULL is an OOM (the builder remembers a refused
+     * allocation); a document is short its record rather than built without it. */
+    mdy_yaml *ident = build_identity(rel, name, ext, size, mtime, is_image, bytes, body_len);
     if (!ident) { free(bytes); if (error && error_len) snprintf(error, error_len, "out of memory");
                   return -1; }
 
