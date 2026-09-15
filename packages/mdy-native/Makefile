@@ -70,6 +70,19 @@ $(warning check result surprises you, `make clean` and run it again before belie
 endif
 endif
 
+# The guard for the note above: before a check runs, the binary it runs is
+# compared to the sources it was built from — named per check, since the
+# parser test does not depend on the engine test's file — at the filesystem's
+# own precision. A source written in the same second as the object make built
+# from it is what make 3.81 cannot see and find can.
+define FRESH
+	@stale=$$(find $(2) -type f -newer $(1) 2>/dev/null | head -1); \
+	if [ -n "$$stale" ]; then \
+	  echo "$(1) is older than $$stale: make did not rebuild it (a same-second edit). Run \`make clean\` and this check again."; \
+	  exit 1; \
+	fi
+endef
+
 # Windows has no libpthread of its own and mingw's winpthreads is not needed:
 # nothing here starts a thread.
 ifeq ($(OS),Windows_NT)
@@ -393,6 +406,7 @@ build/linkify$(EXE): test/linkify.c $(PARSE_LIB) $(LX_LIB)
 # same file is the specification for both. MDY_CLI is how the test file
 # swaps the executable.
 check-cli: build/mdy$(EXE)
+	$(call FRESH,build/mdy$(EXE),src)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test ../../test/cli.test.js
 
 # The dev server, which had no test of any kind until a delivery arriving
@@ -401,6 +415,7 @@ check-cli: build/mdy$(EXE)
 # binary's, and bin/mdy.js's dev server has no delivery endpoint to hold to
 # the same answer.
 check-dev: build/mdy$(EXE)
+	$(call FRESH,build/mdy$(EXE),src)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test test/dev.test.js
 
 # What a FILE is, from its extension: .mdy a document, .md markdown, .yaml a
@@ -408,6 +423,7 @@ check-dev: build/mdy$(EXE)
 # document whatever it is called, so there is no shared behaviour here and
 # test/cli.test.js is the wrong place for a difference.
 check-document: build/mdy$(EXE)
+	$(call FRESH,build/mdy$(EXE),src)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test test/document.test.js
 
 # A hostile-input corpus through the SANITIZER build: deep nesting, ill-formed
@@ -416,8 +432,10 @@ check-document: build/mdy$(EXE)
 # what makes the next one visible before it ships. See test/hostile.test.js.
 .PHONY: check-hostile
 check-hostile: build/mdy-asan$(EXE)
+	$(call FRESH,build/mdy-asan$(EXE),src)
 	@MDY_ASAN="$(abspath build/mdy-asan$(EXE))" node --test test/hostile.test.js
 check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
+	$(call FRESH,build/parse-test$(EXE),src/parse test/parse.c)
 	@./build/lexbor-test$(EXE)
 	@./build/parse-test$(EXE)
 	@./build/html-test$(EXE)
@@ -581,6 +599,7 @@ check-determinism: build/mdy$(EXE)
 	exit $$fail
 
 check-golden: build/mdy$(EXE)
+	$(call FRESH,build/mdy$(EXE),src)
 	@bin=./build/mdy$(EXE); fail=0; \
 	for d in $(GOLDEN_SITES); do \
 	  n=`basename $$d`; \
@@ -749,6 +768,7 @@ build/mdy$(EXE): build/obj/cli.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 # one link in nine hundred pointed at the wrong page. Under stress the same
 # fault shows up in the fourth check.
 check-engine: build/engine-test$(EXE)
+	$(call FRESH,build/engine-test$(EXE),src test/engine.c)
 	@./build/engine-test$(EXE)
 	@echo "-- again, collecting at every safe point"
 	@MDY_GC_STRESS=1 ./build/engine-test$(EXE)
@@ -758,6 +778,7 @@ check-engine: build/engine-test$(EXE)
 # VM boundary into a named line rather than a property that quietly became
 # a different one.
 check-engine-asan: build/engine-test-asan$(EXE)
+	$(call FRESH,build/engine-test-asan$(EXE),src test/engine.c)
 	@MDY_GC_STRESS=1 ./build/engine-test-asan$(EXE)
 
 # A whole site built both ways and diffed. SITE names the directory, and
