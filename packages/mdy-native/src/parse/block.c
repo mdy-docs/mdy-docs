@@ -1121,30 +1121,50 @@ static void cells_free(Cells *c) {
     if (c->starts != c->s_stack) { free(c->starts); free(c->lens); free(c->align); }
 }
 
-/** Split a row on `|`, ignoring escaped pipes and the optional outer ones.
- * Returns how many cells, writing their bounds into `starts`/`lens`. */
-static size_t split_cells(const mdy_line *l, const char **starts, size_t *lens, size_t max) {
+/*
+ * Split a row into cells — table.js's splitRow. The line is trimmed; a `\\`
+ * keeps the character after it in the cell (so `\\|` is a backslash and a
+ * real pipe, and `\|` an escaped one the inline parser will unescape); each
+ * unescaped `|` ends a cell. A trailing pipe ends the last cell rather than
+ * opening an empty one, and a leading pipe's empty cell is dropped. `|` alone
+ * is no cells at all. `*delimited` says whether any pipe was seen, which a
+ * header row must have. Returns how many cells, their bounds in
+ * `starts`/`lens`, trimmed.
+ */
+static size_t split_cells(const mdy_line *l, const char **starts, size_t *lens, size_t max,
+                          int *delimited) {
     const char *text = l->text;
     size_t len = l->len;
-    /* Leading and trailing pipes are decoration. */
-    size_t from = 0, to = len;
-    while (from < to && (text[from] == ' ' || text[from] == '\t')) from++;
-    if (from < to && text[from] == '|') from++;
-    while (to > from && (text[to - 1] == ' ' || text[to - 1] == '\t')) to--;
-    if (to > from && text[to - 1] == '|') to--;
+    mdy_trim(&text, &len);
+    if (delimited) *delimited = 0;
 
-    size_t count = 0, start = from;
-    for (size_t i = from; i <= to && count < max; i++) {
-        if (i < to && (text[i] != '|' || (i > from && text[i - 1] == '\\'))) continue;
-        const char *cell = text + start;
-        size_t cell_len = i - start;
-        trim(&cell, &cell_len);
-        starts[count] = cell;
-        lens[count] = cell_len;
-        count++;
-        start = i + 1;
-        if (i == to) break;
+    size_t count = 0, start = 0;
+    int open_ended = 0;
+    size_t i = 0;
+    while (i < len) {
+        char c = text[i];
+        if (c == '\\' && i + 1 < len) { i += 2; open_ended = 0; continue; }
+        if (c == '|') {
+            if (count < max) { starts[count] = text + start; lens[count] = i - start; count++; }
+            start = i + 1;
+            if (delimited) *delimited = 1;
+            open_ended = 1;
+            i++;
+            continue;
+        }
+        open_ended = 0;
+        i++;
     }
+    if ((!open_ended || count == 0) && count < max) {
+        starts[count] = text + start;
+        lens[count] = len - start;
+        count++;
+    }
+    if (len && text[0] == '|' && count) {
+        for (size_t k = 1; k < count; k++) { starts[k - 1] = starts[k]; lens[k - 1] = lens[k]; }
+        count--;
+    }
+    for (size_t k = 0; k < count; k++) trim(&starts[k], &lens[k]);
     return count;
 }
 
@@ -1152,7 +1172,7 @@ static size_t split_cells(const mdy_line *l, const char **starts, size_t *lens, 
 static int delimiter_row(const mdy_line *l, int *align, size_t want) {
     Cells cells;
     cells_init(&cells, l);
-    size_t n = split_cells(l, cells.starts, cells.lens, cells.cap);
+    size_t n = split_cells(l, cells.starts, cells.lens, cells.cap, NULL);
     int ok = (n == want && n != 0);
 
     for (size_t c = 0; ok && c < n; c++) {
@@ -1175,8 +1195,9 @@ static int delimiter_row(const mdy_line *l, int *align, size_t want) {
 static size_t table_rows(const mdy_line *lines, size_t count, size_t i, size_t base) {
     Cells cells;
     cells_init(&cells, &lines[i]);
-    size_t want = split_cells(&lines[i], cells.starts, cells.lens, cells.cap);
-    int usable = want >= 1 && delimiter_row(&lines[i + 1], cells.align, want);
+    int delimited = 0;
+    size_t want = split_cells(&lines[i], cells.starts, cells.lens, cells.cap, &delimited);
+    int usable = delimited && want >= 1 && delimiter_row(&lines[i + 1], cells.align, want);
     cells_free(&cells);
     if (!usable) return 0;
 
@@ -1232,15 +1253,16 @@ static int caption_at(const mdy_line *lines, size_t count, size_t i) {
 
     Cells row;
     cells_init(&row, &lines[i]);
-    size_t n = split_cells(&lines[i], row.starts, row.lens, row.cap);
+    size_t n = split_cells(&lines[i], row.starts, row.lens, row.cap, NULL);
     int one_cell = (n == 1 && row.lens[0] != 0);
     cells_free(&row);
     if (!one_cell) return 0;
 
     Cells head;
     cells_init(&head, &lines[i + 1]);
-    size_t header = split_cells(&lines[i + 1], head.starts, head.lens, head.cap);
-    int ok = header != 0 && memchr(lines[i + 1].text, '|', lines[i + 1].len) != NULL &&
+    int delimited = 0;
+    size_t header = split_cells(&lines[i + 1], head.starts, head.lens, head.cap, &delimited);
+    int ok = header != 0 && delimited &&
              delimiter_row(&lines[i + 2], head.align, header);
     cells_free(&head);
     return ok;
@@ -1277,7 +1299,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
     size_t *lens = cells.lens;
     int *align = cells.align;
     for (size_t c = 0; c < cells.cap; c++) align[c] = ALIGN_NONE;
-    size_t columns = split_cells(&lines[i], starts, lens, cells.cap);
+    size_t columns = split_cells(&lines[i], starts, lens, cells.cap, NULL);
     delimiter_row(&lines[i + 1], align, columns);
 
     mdy_node *table = mdy_new_element(doc, "table", 5);
@@ -1291,7 +1313,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
     if (start < i) {
         const char *ctext;
         size_t clen;
-        split_cells(&lines[start], starts, lens, cells.cap);
+        split_cells(&lines[start], starts, lens, cells.cap, NULL);
         ctext = starts[0];
         clen = lens[0];
         unescape_pipes(doc, &ctext, &clen);
@@ -1302,7 +1324,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
         mdy_append(table, mdy_new_text(doc, "\n", 1));
         /* The caption's split reused `starts`/`lens`; the header's cells are
          * read from them below and have to be put back. */
-        columns = split_cells(&lines[i], starts, lens, cells.cap);
+        columns = split_cells(&lines[i], starts, lens, cells.cap, NULL);
     }
 
     mdy_node *thead = mdy_new_element(doc, "thead", 5);
@@ -1321,7 +1343,7 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
         mdy_node *tbody = mdy_new_element(doc, "tbody", 5);
         mdy_append(tbody, mdy_new_text(doc, "\n", 1));
         for (size_t r = i + 2; r < i + rows; r++) {
-            size_t n = split_cells(&lines[r], starts, lens, cells.cap);
+            size_t n = split_cells(&lines[r], starts, lens, cells.cap, NULL);
             mdy_node *tr = mdy_new_element(doc, "tr", 2);
             /* Every row is the header's width: a short one is PADDED with
              * empty cells and a long one loses the extra. A row that is

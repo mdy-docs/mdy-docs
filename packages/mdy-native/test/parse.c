@@ -341,6 +341,26 @@ static void dedent_checks(const mdy_options *o) {
           ROOT(EL("pre", "", TX("a\\n  \\nb"))), o);
 }
 
+/* Rows split as table.js's splitRow splits them. */
+static void table_split_checks(const mdy_options *o) {
+    printf("--- mdyast: table rows ---\n");
+    check("a lone pipe is no cells, so no table", "|\n|-|",
+          ROOT(EL("p", "", TX("| |-|"))), o);
+    check("a header with no pipe is not a header", "a\n| - |",
+          ROOT(EL("p", "", TX("a | - |"))), o);
+    {
+        mdy_doc *d = mdy_parse("| a \\\\| b | c |\n| - | - |\n", 0, o);
+        char *json = mdy_to_json_bare(mdy_root(d));
+        ok_("an escaped backslash before a pipe leaves the pipe real: three cells, no table",
+            json && strstr(json, "\"tagName\":\"p\"") && !strstr(json, "\"table\""), json);
+        free(json); mdy_free(d);
+        d = mdy_parse("| a \\| b | c |\n| - | - |\n| x | y |\n", 0, o);
+        char *html = mdy_to_html(mdy_root(d), NULL);
+        ok_("an escaped pipe stays inside its cell", html && strstr(html, "<th>a | b</th>"), html);
+        free(html); mdy_free(d);
+    }
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -511,6 +531,7 @@ int main(void) {
     intern_checks();
     definition_checks(&o);
     dedent_checks(&o);
+    table_split_checks(&o);
     markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");
