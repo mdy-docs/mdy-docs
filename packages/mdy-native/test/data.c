@@ -76,6 +76,14 @@ int main(void) {
           "a: 1", "text");
     check("the content is dedented by the opener", "  ```data\n  a: 1\n  ```\ntail", 1,
           "a: 1", "tail");
+    /* CRLF endings: the `\r` is a line ending, not part of a fence's info
+     * string or its closer, and the body keeps the endings it had. */
+    check("a fence in a CRLF file is found", "a\r\n```data\r\nx: 1\r\n```\r\ntail\r\n", 1,
+          "x: 1\r", "a\r\ntail\r\n");
+    /* Four columns in, the CommonMark parse mdy-docs locates fences with sees
+     * an indented code block, and so does this. */
+    check("a fence indented four spaces is not a fence", "text\n\n    ```data\n    a: 1\n    ```\ntail", 0,
+          "", "text\n\n    ```data\n    a: 1\n    ```\ntail");
     check("no fences at all", "just text\nand more", 0,
           "", "just text\nand more");
 

@@ -54,7 +54,9 @@ static size_t split(const char *text, size_t len, Line **out) {
 static size_t fence_open(const Line *l, char *marker, const char **first,
                          size_t *first_len, int *extra) {
     size_t i = l->indent;
-    if (i >= l->len) return 0;
+    /* Four columns in is an indented code block to the CommonMark parse
+     * mdy-docs locates fences with, not a fence. */
+    if (i >= 4 || i >= l->len) return 0;
     char c = l->s[i];
     if (c != '`' && c != '~') return 0;
     size_t width = 0;
@@ -63,6 +65,8 @@ static size_t fence_open(const Line *l, char *marker, const char **first,
 
     const char *info = l->s + i + width;
     size_t info_len = l->len - i - width;
+    /* A line ending's `\r` is not part of the info string. */
+    if (info_len && info[info_len - 1] == '\r') info_len--;
     while (info_len && (*info == ' ' || *info == '\t')) { info++; info_len--; }
     while (info_len && (info[info_len - 1] == ' ' || info[info_len - 1] == '\t')) info_len--;
     if (c == '`' && memchr(info, '`', info_len)) return 0;
@@ -81,7 +85,9 @@ static int fence_closes(const Line *l, char marker, size_t width) {
     size_t n = 0;
     while (i + n < l->len && l->s[i + n] == marker) n++;
     if (n < width) return 0;
-    for (size_t k = i + n; k < l->len; k++)
+    size_t end = l->len;
+    if (end > i + n && l->s[end - 1] == '\r') end--;
+    for (size_t k = i + n; k < end; k++)
         if (l->s[k] != ' ' && l->s[k] != '\t') return 0;
     return 1;
 }
