@@ -364,6 +364,14 @@ check-dev: build/mdy$(EXE)
 # test/cli.test.js is the wrong place for a difference.
 check-document: build/mdy$(EXE)
 	@MDY_CLI="$(abspath build/mdy$(EXE))" node --test test/document.test.js
+
+# A hostile-input corpus through the SANITIZER build: deep nesting, ill-formed
+# UTF-8, truncation, embedded NUL, outsized token counts. Every crash the
+# review found took MALFORMED input, which nothing else here feeds — this is
+# what makes the next one visible before it ships. See test/hostile.test.js.
+.PHONY: check-hostile
+check-hostile: build/mdy-asan$(EXE)
+	@MDY_ASAN="$(abspath build/mdy-asan$(EXE))" node --test test/hostile.test.js
 check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
 	@./build/lexbor-test$(EXE)
 	@./build/parse-test$(EXE)

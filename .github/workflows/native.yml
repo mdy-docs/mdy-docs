@@ -22,6 +22,7 @@
 #   7. `make check-highlight`      — the highlighter against lowlight (Linux)
 #   8. `make check-cli`            — bin/mdy.js's CLI tests, on this binary (Linux)
 #      `make check-document`       — .mdy / .md / .yaml, read by extension
+#      `make check-hostile`        — a hostile-input corpus under ASan (Linux)
 #   9. `make check-markdown`       — the markdown front end against remark,
 #                                    tree for tree, over 904 vendored spec
 #                                    examples, gated on a baseline (Linux)
@@ -201,6 +202,17 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         working-directory: packages/mdy-native
         run: make check-document
+
+      # A hostile-input corpus through the AddressSanitizer build: deep
+      # nesting, ill-formed UTF-8, truncation, embedded NUL, outsized token
+      # counts. Every content-triggered crash the review found took MALFORMED
+      # input, which nothing else here feeds, so all four survived the suite.
+      # This is what makes the next one visible before it ships. One platform,
+      # because a memory bug is only observable under the sanitizer.
+      - name: Check hostile input under AddressSanitizer
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/mdy-native
+        run: make check-hostile
 
       # The markdown front end against remark, tree for tree, over 904 spec
       # examples — the CommonMark spec, GFM's, and md4c's own extension specs,
