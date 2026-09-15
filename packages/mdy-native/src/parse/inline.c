@@ -253,6 +253,57 @@ static void push(Ctx *ctx, const char *s, size_t n) {
  * for the closer before opening anything, which is what makes an unmatched
  * `**` come out as two asterisks rather than swallowing the rest of the line.
  */
+/*
+ * A typographic replacement at text[i] — an arrow (`-->`, `<==>`, …), a
+ * three-dot ellipsis, or a two-dash em dash — as its UTF-8 bytes, or NULL, with
+ * `*used` the source bytes it stands for. Each looks BEHIND as well as ahead so
+ * a run longer than the pattern (`----`, `....`) is left as it was written.
+ * Lifted out of scan's loop; leaves at_boundary the caller's to set.
+ */
+static const char *typographic(const char *text, size_t len, size_t i, size_t *used) {
+    const char *p = text + i;
+    size_t left = len - i;
+    const char *drawn = NULL;
+    *used = 0;
+    /*
+     * An arrow may not stand against another character the table DRAWS with —
+     * `-`, `<`, `=`, `>` — on either side, so nothing inside `<--->` is an
+     * arrow and `---->` stays four dashes and an angle. The longest sequence is
+     * tried first, and when the one that fits is hemmed in, none of the shorter
+     * ones is tried either: they are pieces of the same run.
+     */
+    if (is_arrow_letter(p[0]) && !(i > 0 && is_arrow_letter(text[i - 1]))) {
+        static const struct { const char *seq; size_t len; const char *draw; } ARROWS[] = {
+            { "<-->", 4, "\xe2\x86\x94" },
+            { "<==>", 4, "\xe2\x87\x94" },
+            { "-->",  3, "\xe2\x86\x92" },
+            { "<--",  3, "\xe2\x86\x90" },
+            { "==>",  3, "\xe2\x87\x92" },
+            { "<==",  3, "\xe2\x87\x90" },
+        };
+        for (size_t a = 0; a < sizeof ARROWS / sizeof ARROWS[0]; a++) {
+            if (left < ARROWS[a].len || memcmp(p, ARROWS[a].seq, ARROWS[a].len) != 0) continue;
+            if (left > ARROWS[a].len && is_arrow_letter(p[ARROWS[a].len])) break;
+            drawn = ARROWS[a].draw;
+            *used = ARROWS[a].len;
+            break;
+        }
+    }
+    /* EXACTLY three dots. A longer run stays as it is — `108....9` is a
+     * citation, not an ellipsis and a full stop. */
+    if (!drawn && left >= 3 && p[0] == '.' && p[1] == '.' && p[2] == '.' &&
+             !(left >= 4 && p[3] == '.') && !(i > 0 && text[i - 1] == '.')) {
+        drawn = "\xe2\x80\xa6";
+        *used = 3;
+    }
+    else if (!drawn && left >= 2 && p[0] == '-' && p[1] == '-' &&
+             !(left >= 3 && p[2] == '-') && !(i > 0 && text[i - 1] == '-')) {
+        drawn = "\xe2\x80\x94";
+        *used = 2;
+    }
+    return drawn;
+}
+
 static void scan(Ctx *ctx, const char *text, size_t len) {
     size_t i = 0;
     while (i < len) {
@@ -357,47 +408,8 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
          * no more the start of a word than what follows a full stop.
          */
         {
-            const char *drawn = NULL;
             size_t used = 0;
-            /*
-             * An arrow may not stand against another character the table
-             * DRAWS with — `-`, `<`, `=`, `>` — on either side, so nothing
-             * inside `<--->` is an arrow and `---->` stays four dashes and an
-             * angle. The longest sequence is tried first, and when the one
-             * that fits is hemmed in, none of the shorter ones is tried
-             * either: they are pieces of the same run.
-             */
-            if (is_arrow_letter(p[0]) && !(i > 0 && is_arrow_letter(text[i - 1]))) {
-                static const struct { const char *seq; size_t len; const char *draw; } ARROWS[] = {
-                    { "<-->", 4, "\xe2\x86\x94" },
-                    { "<==>", 4, "\xe2\x87\x94" },
-                    { "-->",  3, "\xe2\x86\x92" },
-                    { "<--",  3, "\xe2\x86\x90" },
-                    { "==>",  3, "\xe2\x87\x92" },
-                    { "<==",  3, "\xe2\x87\x90" },
-                };
-                for (size_t a = 0; a < sizeof ARROWS / sizeof ARROWS[0]; a++) {
-                    if (left < ARROWS[a].len || memcmp(p, ARROWS[a].seq, ARROWS[a].len) != 0) continue;
-                    if (left > ARROWS[a].len && is_arrow_letter(p[ARROWS[a].len])) break;
-                    drawn = ARROWS[a].draw;
-                    used = ARROWS[a].len;
-                    break;
-                }
-            }
-            /* EXACTLY three dots. A longer run stays as it is — `108....9` is
-             * a citation, not an ellipsis and a full stop — which means
-             * looking behind as well as ahead, the same rule the em dash
-             * needs. */
-            if (!drawn && left >= 3 && p[0] == '.' && p[1] == '.' && p[2] == '.' &&
-                     !(left >= 4 && p[3] == '.') && !(i > 0 && text[i - 1] == '.')) {
-                drawn = "\xe2\x80\xa6";
-                used = 3;
-            }
-            else if (!drawn && left >= 2 && p[0] == '-' && p[1] == '-' &&
-                     !(left >= 3 && p[2] == '-') && !(i > 0 && text[i - 1] == '-')) {
-                drawn = "\xe2\x80\x94";
-                used = 2;
-            }
+            const char *drawn = typographic(text, len, i, &used);
             if (drawn) {
                 push(ctx, drawn, 3);
                 ctx->at_boundary = 0;
