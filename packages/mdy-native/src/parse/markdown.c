@@ -1377,6 +1377,14 @@ mdy_doc *mdy_markdown_parse(const char *text, size_t len, const char **why) {
         .debug_log = md_log,
     };
 
+    if (len > (size_t)0xffffffffu) {
+        /* MD_SIZE is 32 bits: a longer input would parse as its prefix and
+         * report success. */
+        if (why) *why = "the markdown is too large to read";
+        free(b.notes);
+        mdy_free(doc);
+        return NULL;
+    }
     int rc = md_parse(text, (MD_SIZE)len, &parser, &b);
     flush_text(&b);
     free(b.pending);
