@@ -103,6 +103,115 @@ static void check_refs(const char *what, const char *source,
 #define TX(v) "{\"type\":\"text\",\"value\":\"" v "\"}"
 #define ROOT(kids) "{\"type\":\"root\",\"children\":[" kids "]}"
 
+/* The `id` of every `tag` element in the tree, in document order, joined with
+ * `,` into `out`. For documents too large to spell out as a tree. */
+static void ids_of(const mdy_node *n, const char *tag, char *out, size_t cap, size_t *len) {
+    if (n->type == MDY_ELEMENT && strcmp(n->tag, tag) == 0) {
+        for (const mdy_prop *p = n->props; p; p = p->next) {
+            if (strcmp(p->name, "id") != 0 || p->type != MDY_PROP_STRING) continue;
+            int w = snprintf(out + *len, cap - *len, "%s%s", *len ? "," : "", p->as.string);
+            if (w > 0) *len = *len + (size_t)w < cap ? *len + (size_t)w : cap - 1;
+        }
+    }
+    for (const mdy_node *c = n->first; c; c = c->next) ids_of(c, tag, out, cap, len);
+}
+
+static void ok_(const char *what, int ok, const char *actual) {
+    printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
+    if (!ok) { printf("      actual   %s\n", actual ? actual : "(nothing)"); failures++; }
+}
+
+/*
+ * Names past the size a fixed table would hold. The intern table grows, and a
+ * name must come back as the same pointer however many names came after it.
+ */
+static void intern_checks(void) {
+    printf("--- mdyast: interning, at size ---\n");
+    enum { N = 50000 };
+    mdy_arena arena = { 0 };
+    mdy_intern_table table = { 0 };
+    const char **first = malloc(N * sizeof *first);
+    char name[32];
+    int same = 1, distinct = 1, found = 1;
+    for (int i = 0; i < N; i++) {
+        int len = snprintf(name, sizeof name, "name-%d", i);
+        first[i] = mdy_intern(&arena, &table, name, (size_t)len);
+    }
+    for (int i = 0; i < N; i++) {
+        int len = snprintf(name, sizeof name, "name-%d", i);
+        if (mdy_intern(&arena, &table, name, (size_t)len) != first[i]) same = 0;
+        if (mdy_intern_lookup(&table, name, (size_t)len) != first[i]) found = 0;
+        if (i && first[i] == first[i - 1]) distinct = 0;
+    }
+    size_t before = table.count;
+    const char *miss = mdy_intern_lookup(&table, "never-interned", 14);
+    ok_("fifty thousand names each come back as the pointer they were first given", same, NULL);
+    ok_("…and two different names never share one", distinct, NULL);
+    ok_("a lookup finds every interned name", found, NULL);
+    ok_("a lookup of a name never interned finds nothing and adds nothing",
+        miss == NULL && table.count == before, NULL);
+    /* The empty name, and names equal up to a NUL, are names like any other. */
+    const char *empty = mdy_intern(&arena, &table, "", 0);
+    const char *nul = mdy_intern(&arena, &table, "a\0b", 3);
+    ok_("the empty name and a name holding a NUL are distinct entries",
+        empty && nul && empty != nul && nul != mdy_intern(&arena, &table, "a", 1) &&
+        mdy_intern_lookup(&table, "a\0b", 3) == nul, NULL);
+    free(first);
+    mdy_arena_free(&arena);
+}
+
+/*
+ * Footnotes and headings in the numbers where the lookups stop being scans:
+ * past the index threshold, past the first sizes of the order and intern
+ * tables. What must not change at size is what the small cases show.
+ */
+static void footnote_scale_checks(const mdy_options *o) {
+    printf("--- mdyast: footnotes and headings, at size ---\n");
+    enum { NOTES = 40 };
+    char *src = malloc(8192);
+    size_t n = 0;
+    /* Referenced in reverse definition order, so the numbering is not the
+     * order notes[] holds them in; plus references nothing defines. */
+    for (int i = NOTES - 1; i >= 0; i--) n += (size_t)sprintf(src + n, "x [[^n%d]] [[^miss%d]] ", i, i);
+    n += (size_t)sprintf(src + n, "\n\n");
+    for (int i = 0; i < NOTES; i++)
+        n += (size_t)sprintf(src + n, "[[^n%d]]: note %d%s\n", i, i, i == 0 ? " see [[^late]]" : "");
+    /* Referenced only from inside another note, so it is numbered while the
+     * section is being written, and goes after every note numbered before. */
+    sprintf(src + n, "[[^late]]: late\n");
+
+    mdy_doc *doc = mdy_parse(src, 0, o);
+    char got[4096] = "", want[4096] = "";
+    size_t gl = 0, wl = 0;
+    ids_of(mdy_root(doc), "li", got, sizeof got, &gl);
+    for (int i = NOTES - 1; i >= 0; i--)
+        wl += (size_t)snprintf(want + wl, sizeof want - wl, "%suser-content-fn-n%d", wl ? "," : "", i);
+    snprintf(want + wl, sizeof want - wl, ",user-content-fn-late");
+    ok_("forty notes are listed in the order they were first referenced", strcmp(got, want) == 0, got);
+    char *json = mdy_to_json_bare(mdy_root(doc));
+    ok_("…and a reference nothing defines stays text", json && strstr(json, "[[^miss0]]") != NULL, NULL);
+    free(json);
+    mdy_free(doc);
+
+    /* Three hundred distinct headings, then a repeat of the first. */
+    n = 0;
+    char *heads = malloc(300 * 24 + 64);
+    n += (size_t)sprintf(heads + n, "= Same\n\n");
+    for (int i = 0; i < 300; i++) n += (size_t)sprintf(heads + n, "= Head %d\n\n", i);
+    sprintf(heads + n, "= Same\n");
+    doc = mdy_parse(heads, 0, o);
+    char hid[16384] = "";
+    size_t hl = 0;
+    ids_of(mdy_root(doc), "h1", hid, sizeof hid, &hl);
+    const char *tail = hl >= 7 ? hid + hl - 7 : "";
+    ok_("the three hundred and second heading repeats the first and is told apart",
+        strncmp(hid, "same,head-0,", 12) == 0 && strcmp(tail, ",same-1") == 0 &&
+        strstr(hid, ",head-299,") != NULL, hid);
+    mdy_free(doc);
+    free(heads);
+    free(src);
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -238,6 +347,8 @@ int main(void) {
           ROOT(EL("p", "", TX("body [[ ^7 ]] end"))), &o);
     check("an unreferenced definition produces nothing", "body\n\n[[ ^9 ]]: never used",
           ROOT(EL("p", "", TX("body"))), &o);
+    footnote_scale_checks(&o);
+    intern_checks();
 
     printf("--- mdyast: wiki links ---\n");
     /* defaultResolve DELETES what it cannot keep; slugify would hyphenate it.

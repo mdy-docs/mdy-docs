@@ -102,22 +102,33 @@ void mdy_arena_free(mdy_arena *arena);
 /* ---- interning ----------------------------------------------------------- */
 
 /*
- * Tag and property names are a closed vocabulary — 32 and 19 respectively
- * across the whole reference corpus — so they are interned to a single
- * pointer each. Comparing tags becomes a pointer compare, and the emitter
- * never copies a name.
+ * Every name the tree compares is interned to a single pointer, so comparing
+ * two is a pointer compare and the emitter never copies one. Tag and property
+ * names are a small closed vocabulary; heading slugs, footnote ids and
+ * reference names are interned too, and those grow with the document, so the
+ * table grows with them and a lookup stays O(1) at any size.
+ *
+ * A zeroed table is an empty one. The bucket arrays live in the arena, and a
+ * grow leaves the old one there, which sums to O(n) over the document.
  */
 typedef struct mdy_interned {
     struct mdy_interned *next;
+    uint32_t hash;          /* kept, so a grow relinks without rehashing */
     size_t len;
     char text[];
 } mdy_interned;
 
 typedef struct {
-    mdy_interned *buckets[128];
+    mdy_interned **buckets; /* NULL until the first name */
+    size_t mask;            /* bucket count - 1; the count is a power of two */
+    size_t count;
 } mdy_intern_table;
 
 const char *mdy_intern(mdy_arena *arena, mdy_intern_table *table, const char *s, size_t len);
+
+/* The interned copy of `s` if there is one, and NULL rather than a new entry
+ * when there is not — for a lookup whose miss should leave nothing behind. */
+const char *mdy_intern_lookup(const mdy_intern_table *table, const char *s, size_t len);
 
 /* ---- a small (interned key, tag) -> value index -------------------------- */
 
@@ -190,6 +201,11 @@ struct mdy_doc {
     mdy_footnote *notes;
     size_t note_count, note_cap;
     int next_number;
+    /* `note_order[k]` is the index into notes[] of footnote number k + 1, so
+     * the section is written in numbering order without searching for each
+     * number. Written by mdy_footnote_reference; valid up to next_number. */
+    size_t *note_order;
+    size_t note_order_cap;
     /* id -> index into notes[], for mdy_footnote_find; reset per document with
      * note_count. NULL until the list crosses MDY_HINDEX_THRESHOLD; noindex
      * sticks after an allocation failure so it is not rebuilt each insert. */

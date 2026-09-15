@@ -220,6 +220,47 @@ int main(void) {
           "{\"1\":\"a\",\"true\":\"b\"}");
     /* "It is an error for two equal keys to appear in the same mapping." */
     refuses("a repeated key is an error", "a: 1\na: 2", "line 2: duplicate key in a mapping");
+    /*
+     * Past a few keys the check is a hash set rather than a scan, and it is
+     * rebuilt as the mapping grows. Each size below sits on one side of a
+     * boundary in that: the switch from the scan, and the first two rebuilds.
+     * A repeat of the first key and of the last must both be caught, and a
+     * mapping with no repeat must keep every key in order.
+     */
+    {
+        static const size_t sizes[] = { 15, 16, 17, 32, 33, 64, 65, 5000 };
+        int ok_all = 1;
+        for (size_t s = 0; s < sizeof sizes / sizeof *sizes; s++) {
+            size_t n = sizes[s];
+            char *text = malloc(n * 16 + 32);
+            size_t len = 0;
+            for (size_t i = 0; i < n; i++) len += (size_t)sprintf(text + len, "k%zu: %zu\n", i, i);
+            char err[256];
+
+            mdy_yaml *doc = mdy_yaml_parse(text, len, err, sizeof err);
+            size_t klen = 0;
+            const char *last = doc ? mdy_yaml_key(mdy_yaml_root(doc), n - 1, &klen) : NULL;
+            char want[32];
+            snprintf(want, sizeof want, "k%zu", n - 1);
+            int ok = doc && mdy_yaml_count(mdy_yaml_root(doc)) == n && last &&
+                     klen == strlen(want) && memcmp(last, want, klen) == 0;
+            mdy_yaml_free(doc);
+
+            char expect[64];
+            snprintf(expect, sizeof expect, "line %zu: duplicate key in a mapping", n + 1);
+            for (int which = 0; which < 2 && ok; which++) {
+                size_t at = len + (size_t)sprintf(text + len, "k%zu: again\n", which ? n - 1 : 0);
+                doc = mdy_yaml_parse(text, at, err, sizeof err);
+                ok = !doc && strcmp(err, expect) == 0;
+                mdy_yaml_free(doc);
+            }
+            if (!ok) { printf("  FAIL  a mapping of %zu keys: %s\n", n, err); ok_all = 0; }
+            free(text);
+        }
+        printf("  %s  large mappings keep every key, and a repeat of the first or last is caught\n",
+               ok_all ? "ok  " : "FAIL");
+        if (!ok_all) failures++;
+    }
 
     printf("--- mdyyaml: what it refuses, and where ---\n");
     /*

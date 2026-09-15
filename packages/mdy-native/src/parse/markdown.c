@@ -89,6 +89,7 @@ typedef struct {
      */
     struct { const char *slug; unsigned refs; } *notes;
     size_t note_count, note_cap;
+    mdy_hindex note_ix;   /* interned slug -> index into notes[] */
     /*
      * The footnote definition being built. Its back-references are written on
      * the way OUT, and everything they need is known on the way in;
@@ -549,8 +550,9 @@ static const char *note_slug(Build *b, const MD_ATTRIBUTE *label) {
  * ids are built from: two labels differing only in case are one note.
  */
 static int note_entry(Build *b, const char *slug) {
-    for (size_t i = 0; i < b->note_count; i++)
-        if (strcmp(b->notes[i].slug, slug) == 0) return (int)i;
+    const char *key = mdy_intern(&b->doc->arena, &b->doc->names, slug, strlen(slug));
+    mdy_hentry *seen = mdy_hindex_get(&b->note_ix, key, 0);
+    if (seen) return (int)seen->val;
 
     if (b->note_count == b->note_cap) {
         size_t cap = b->note_cap ? b->note_cap * 2 : 8;
@@ -559,8 +561,9 @@ static int note_entry(Build *b, const char *slug) {
         b->notes = grown;
         b->note_cap = cap;
     }
-    b->notes[b->note_count].slug = slug;
+    b->notes[b->note_count].slug = key;
     b->notes[b->note_count].refs = 0;
+    mdy_hindex_put(b->doc, &b->note_ix, key, 0, b->note_count);
     return (int)b->note_count++;
 }
 

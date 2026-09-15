@@ -886,6 +886,60 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
     return n;
 }
 
+/*
+ * The keys a block mapping has taken, for the duplicate check. A mapping of up
+ * to KEYS_SCAN keys is scanned, which is every front matter there is; past
+ * that it gets a hash set, so a record file of any size is checked in linear
+ * time. A slot holds an index into the mapping's pairs plus one, and zero is
+ * empty; indices rather than pointers because the pairs array is reallocated
+ * as it grows.
+ */
+enum { KEYS_SCAN = 16 };
+
+typedef struct { size_t *slots; size_t cap; } KeySet;
+
+static size_t key_hash(const char *s, size_t len) {
+    uint64_t h = 1469598103934665603u;
+    for (size_t i = 0; i < len; i++) { h ^= (unsigned char)s[i]; h *= 1099511628211u; }
+    return (size_t)h;
+}
+
+/*
+ * Whether `key` is one of pairs[0..count), and when it is not, record it as
+ * pairs[count], which the caller writes before the next call. 1 when taken,
+ * 0 when new, -1 when the set could not be allocated.
+ */
+static int key_taken(KeySet *set, const Pair *pairs, size_t count,
+                     const char *key, size_t len) {
+    if (count < KEYS_SCAN) {
+        for (size_t k = 0; k < count; k++)
+            if (pairs[k].key_len == len && memcmp(pairs[k].key, key, len) == 0) return 1;
+        return 0;
+    }
+    if ((count + 1) * 2 > set->cap) {             /* at most half full */
+        size_t cap = set->cap ? set->cap * 2 : 64;
+        while ((count + 1) * 2 > cap) cap *= 2;
+        size_t *slots = calloc(cap, sizeof *slots);
+        if (!slots) return -1;
+        for (size_t k = 0; k < count; k++) {
+            size_t at = key_hash(pairs[k].key, pairs[k].key_len) & (cap - 1);
+            while (slots[at]) at = (at + 1) & (cap - 1);
+            slots[at] = k + 1;
+        }
+        free(set->slots);
+        set->slots = slots;
+        set->cap = cap;
+    }
+    size_t mask = set->cap - 1;
+    size_t at = key_hash(key, len) & mask;
+    for (; set->slots[at]; at = (at + 1) & mask) {
+        const Pair *taken = &pairs[set->slots[at] - 1];
+        if (taken->key_len == len && memcmp(taken->key, key, len) == 0) return 1;
+    }
+    set->slots[at] = count + 1;
+    return 0;
+}
+
 static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
     mdy_yaml_node *node = new_node(p, MDY_YAML_MAPPING);
     if (!node) return NULL;
@@ -893,6 +947,7 @@ static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
     size_t cap = 8, count = 0;
     Pair *pairs = malloc(cap * sizeof *pairs);
     if (!pairs) { oom(p); return NULL; }
+    KeySet keys = { NULL, 0 };
 
     for (;;) {
         size_t at = next_content(p, p->at);
@@ -950,12 +1005,9 @@ static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
          * one of them — is a document that means something its author did not
          * write.
          */
-        for (size_t k = 0; k < count; k++) {
-            if (pairs[k].key_len == klen && memcmp(pairs[k].key, ks, klen) == 0) {
-                fail(p, at, "duplicate key in a mapping");
-                goto map_fail;
-            }
-        }
+        int taken = key_taken(&keys, pairs, count, ks, klen);
+        if (taken < 0) { oom(p); goto map_fail; }
+        if (taken) { fail(p, at, "duplicate key in a mapping"); goto map_fail; }
         pairs[count].key = ks;
         pairs[count].key_len = klen;
         pairs[count].value = v;
@@ -969,10 +1021,12 @@ static mdy_yaml_node *parse_mapping(P *p, size_t indent) {
         node->as.map.pairs = out;
         node->as.map.count = count;
     }
+    free(keys.slots);
     free(pairs);
     return node;
 
 map_fail:
+    free(keys.slots);
     free(pairs);
     return NULL;
 }

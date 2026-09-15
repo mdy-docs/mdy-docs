@@ -78,55 +78,89 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
     return -1;
 }
 
+/*
+ * One key across the mappings being merged: the first mapping that has it,
+ * which decides where it sits, and the last, with the value it holds there,
+ * which decides what it holds. `value` is the key's first occurrence within
+ * that last mapping.
+ */
+typedef struct {
+    const char *key;
+    size_t len;
+    size_t first, last;
+    const mdy_yaml_node *value;
+    int used;
+} MergeKey;
+
+static size_t merge_hash(const char *s, size_t len) {
+    uint64_t h = 1469598103934665603u;
+    for (size_t i = 0; i < len; i++) { h ^= (unsigned char)s[i]; h *= 1099511628211u; }
+    return (size_t)h;
+}
+
+/* The slot holding `key`, or the empty one it would go in. `cap` is a power of
+ * two with room to spare, so the probe always ends. */
+static MergeKey *merge_slot(MergeKey *slots, size_t cap, const char *key, size_t len) {
+    size_t at = merge_hash(key, len) & (cap - 1);
+    while (slots[at].used && !(slots[at].len == len && memcmp(slots[at].key, key, len) == 0))
+        at = (at + 1) & (cap - 1);
+    return &slots[at];
+}
+
+static int is_store_id(const char *k, size_t len) {
+    return len == 3 && memcmp(k, "_id", 3) == 0;
+}
+
 int mdy_bj_document(bj_builder *b, const uint8_t oid[12],
                     const mdy_yaml_node *const *mappings, size_t count) {
-    if (bj_begin_object(b) != 0) return -1;
-
     /*
-     * The merge, in one pass: for each key, the FIRST mapping that has it
-     * decides where it sits and the LAST decides what it holds. Quadratic in
-     * the number of keys, which for a document's front matter is a handful and
-     * for the largest here is a few dozen.
+     * The merge: for each key, the FIRST mapping that has it decides where it
+     * sits and the LAST decides what it holds. One pass records both for every
+     * key and a second writes them, so a record of any size merges in linear
+     * time.
+     *
+     * `_id` is skipped in both: the store's id is the store's, a document
+     * cannot declare one, and it is written below, last, where mdy-docs has it.
      */
+    size_t total = 0;
+    for (size_t m = 0; m < count; m++)
+        if (mdy_yaml_type_of(mappings[m]) == MDY_YAML_MAPPING) total += mdy_yaml_count(mappings[m]);
+    size_t cap = 16;
+    while (cap < total * 2) cap *= 2;
+    MergeKey *slots = calloc(cap, sizeof *slots);
+    if (!slots) return -1;
+
     for (size_t m = 0; m < count; m++) {
         const mdy_yaml_node *map = mappings[m];
         if (mdy_yaml_type_of(map) != MDY_YAML_MAPPING) continue;
-
         for (size_t i = 0; i < mdy_yaml_count(map); i++) {
             size_t klen = 0;
             const char *k = mdy_yaml_key(map, i, &klen);
-
-            /* The store's id is the store's: a document cannot declare one,
-             * and this writes it below, last, where mdy-docs has it. */
-            if (klen == 3 && memcmp(k, "_id", 3) == 0) continue;
-
-            /* Already written, because an earlier mapping had it. */
-            int seen = 0;
-            for (size_t e = 0; e < m && !seen; e++) {
-                if (mdy_yaml_type_of(mappings[e]) != MDY_YAML_MAPPING) continue;
-                for (size_t j = 0; j < mdy_yaml_count(mappings[e]); j++) {
-                    size_t elen = 0;
-                    const char *ek = mdy_yaml_key(mappings[e], j, &elen);
-                    if (elen == klen && memcmp(ek, k, klen) == 0) { seen = 1; break; }
-                }
+            if (is_store_id(k, klen)) continue;
+            MergeKey *e = merge_slot(slots, cap, k, klen);
+            if (!e->used) {
+                *e = (MergeKey){ k, klen, m, m, mdy_yaml_value(map, i), 1 };
+            } else if (m > e->last) {
+                e->last = m;
+                e->value = mdy_yaml_value(map, i);
             }
-            if (seen) continue;
+        }
+    }
 
-            /* The last mapping that has it holds the value. */
-            const mdy_yaml_node *value = mdy_yaml_value(map, i);
-            for (size_t l = count; l-- > m + 1;) {
-                if (mdy_yaml_type_of(mappings[l]) != MDY_YAML_MAPPING) continue;
-                const mdy_yaml_node *later = NULL;
-                for (size_t j = 0; j < mdy_yaml_count(mappings[l]); j++) {
-                    size_t elen = 0;
-                    const char *ek = mdy_yaml_key(mappings[l], j, &elen);
-                    if (elen == klen && memcmp(ek, k, klen) == 0) { later = mdy_yaml_value(mappings[l], j); break; }
-                }
-                if (later) { value = later; break; }
-            }
-
-            if (bj_put_key(b, (const uint8_t *)k, (uint32_t)klen) != 0) return -1;
-            if (mdy_bj_put_yaml(b, value) != 0) return -1;
+    int rc = -1;
+    if (bj_begin_object(b) != 0) goto done;
+    for (size_t m = 0; m < count; m++) {
+        const mdy_yaml_node *map = mappings[m];
+        if (mdy_yaml_type_of(map) != MDY_YAML_MAPPING) continue;
+        for (size_t i = 0; i < mdy_yaml_count(map); i++) {
+            size_t klen = 0;
+            const char *k = mdy_yaml_key(map, i, &klen);
+            if (is_store_id(k, klen)) continue;
+            const MergeKey *e = merge_slot(slots, cap, k, klen);
+            if (e->first < m) continue;       /* written already, where an earlier mapping had it */
+            const mdy_yaml_node *value = e->last > m ? e->value : mdy_yaml_value(map, i);
+            if (bj_put_key(b, (const uint8_t *)k, (uint32_t)klen) != 0) goto done;
+            if (mdy_bj_put_yaml(b, value) != 0) goto done;
         }
     }
 
@@ -136,10 +170,13 @@ int mdy_bj_document(bj_builder *b, const uint8_t oid[12],
      * Key order is not cosmetic: a document that serialises its own record, or
      * walks its keys, produces different bytes if this differs.
      */
-    if (bj_put_key(b, (const uint8_t *)"_id", 3) != 0) return -1;
-    if (bj_put_oid(b, oid) != 0) return -1;
+    if (bj_put_key(b, (const uint8_t *)"_id", 3) != 0) goto done;
+    if (bj_put_oid(b, oid) != 0) goto done;
+    rc = bj_end_object(b);
 
-    return bj_end_object(b);
+done:
+    free(slots);
+    return rc;
 }
 
 void mdy_oid_next(uint8_t out[12]) {

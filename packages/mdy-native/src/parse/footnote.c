@@ -23,8 +23,11 @@ mdy_footnote *mdy_footnote_find(mdy_doc *doc, const char *id, size_t len) {
      * has strlen == len == its stored length, so it is in the map too.
      */
     if (doc->note_index) {
-        const char *key = mdy_intern(&doc->arena, &doc->names, id, len);
-        mdy_hentry *e = mdy_hindex_get(doc->note_index, key, 0);
+        /* Lookup only: every indexed id is already interned, so an id that is
+         * not is a miss, and interning it would keep a copy of every unknown
+         * reference for the life of the document. */
+        const char *key = mdy_intern_lookup(&doc->names, id, len);
+        mdy_hentry *e = key ? mdy_hindex_get(doc->note_index, key, 0) : NULL;
         if (!e) return NULL;
         mdy_footnote *n = &doc->notes[e->val];
         if (strlen(n->id) == len && memcmp(n->id, id, len) == 0) return n;
@@ -39,7 +42,18 @@ mdy_footnote *mdy_footnote_find(mdy_doc *doc, const char *id, size_t len) {
 }
 
 int mdy_footnote_reference(mdy_doc *doc, mdy_footnote *note) {
-    if (note->number == 0) note->number = ++doc->next_number;
+    if (note->number == 0) {
+        size_t at = (size_t)doc->next_number;
+        if (at == doc->note_order_cap) {
+            size_t cap = at ? at * 2 : 16;
+            size_t *grown = mdy_alloc(&doc->arena, cap * sizeof *grown);
+            if (at) memcpy(grown, doc->note_order, at * sizeof *grown);
+            doc->note_order = grown;
+            doc->note_order_cap = cap;
+        }
+        doc->note_order[at] = (size_t)(note - doc->notes);
+        note->number = ++doc->next_number;
+    }
     return ++note->refs;
 }
 
@@ -59,9 +73,8 @@ static const char *ref_id(mdy_doc *doc, const char *kind, const char *id, int n)
 }
 
 void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
-    int referenced = 0;
-    for (size_t i = 0; i < doc->note_count; i++) if (doc->notes[i].number) referenced++;
-    if (!referenced) return;
+    /* Every number belongs to exactly one note, so none means none referenced. */
+    if (doc->next_number == 0) return;
 
     mdy_node *section = mdy_new_element(doc, "section", 7);
     mdy_set_bool(doc, section, "dataFootnotes", 1);
@@ -78,13 +91,14 @@ void mdy_footnote_section(mdy_doc *doc, mdy_node *parent) {
     mdy_node *ol = mdy_new_element(doc, "ol", 2);
     mdy_append(ol, mdy_new_text(doc, "\n", 1));
 
-    /* In order of first reference, which is what `number` records. */
+    /*
+     * In order of first reference, which is what `number` records. The bound
+     * is read on every pass on purpose: a note's content is parsed below, and
+     * a reference inside it numbers a note that had none, which then gets its
+     * own item after the ones already numbered.
+     */
     for (int want = 1; want <= doc->next_number; want++) {
-        mdy_footnote *note = NULL;
-        for (size_t i = 0; i < doc->note_count; i++) {
-            if (doc->notes[i].number == want) { note = &doc->notes[i]; break; }
-        }
-        if (!note) continue;
+        mdy_footnote *note = &doc->notes[doc->note_order[want - 1]];
 
         mdy_node *li = mdy_new_element(doc, "li", 2);
         /* Once: ref_id copies into the arena, and calling it for the string

@@ -1578,7 +1578,7 @@ typedef struct {
     Snapshot *snapshots;
     Progress progress;
     char **seen; size_t seen_count, seen_cap;   /* [read] once per path */
-    char **announced; size_t announced_count;   /* [hold] once per name */
+    char **announced; size_t announced_count, announced_cap;   /* [hold] once per name */
     /* the bus: a broker of this process's own, or one that answered --broker */
     Broker *local;
     double last_drain;
@@ -1587,8 +1587,8 @@ typedef struct {
     int live;
     char token[40];
     char callback[512];
-    char **policied; size_t policied_count;
-    char **sent; size_t sent_count;             /* one `name\1data` per NAME: see dev_send */
+    char **policied; size_t policied_count, policied_cap;
+    char **sent; size_t sent_count, sent_cap;   /* one `name\1data` per NAME: see dev_send */
     double last_heartbeat;
 } Dev;
 
@@ -1685,7 +1685,10 @@ static void dev_send(Dev *d, int dedupe, int announce) {
             free(d->sent[at]);
             d->sent[at] = fp;
         } else {
-            d->sent = mdy_xrealloc(d->sent, (d->sent_count + 1) * sizeof *d->sent);
+            if (d->sent_count == d->sent_cap) {
+                d->sent_cap = d->sent_cap ? d->sent_cap * 2 : 16;
+                d->sent = mdy_xrealloc(d->sent, d->sent_cap * sizeof *d->sent);
+            }
             d->sent[d->sent_count++] = fp;
         }
         collect_message(&fresh, name, d->messages.json[i], 0);
@@ -1776,7 +1779,7 @@ static int dev_register(Dev *d) {
 /* A delivery: render the page the subject names, once per message. */
 /* The retry policy, once per subject, before any attempt is spent. */
 static void dev_policy(Dev *d, const char *subject) {
-    if (seen_before(&d->policied, &d->policied_count, &(size_t){d->policied_count}, subject)) return;
+    if (seen_before(&d->policied, &d->policied_count, &d->policied_cap, subject)) return;
     char query[256];
     snprintf(query, sizeof query, "group=%s&max_attempts=%d&backoff_ms=%d&max_backoff_ms=%d",
              d->o->group, d->o->max_attempts, d->o->backoff, d->o->max_backoff);
@@ -2230,7 +2233,7 @@ static int dev_rebuild(Dev *d, const char *changed, int first) {
     size_t held = d->messages.count;
     if (!d->live) {
         for (size_t i = 0; i < held; i++) {
-            if (seen_before(&d->announced, &d->announced_count, &(size_t){d->announced_count}, d->messages.names[i])) continue;
+            if (seen_before(&d->announced, &d->announced_count, &d->announced_cap, d->messages.names[i])) continue;
             printf("%s%s%s %s[hold]%s %s %s— no broker; mdy build --publish sends%s\n", DIM_OPEN(), TS(ts), DIM_CLOSE(), DIM_OPEN(), DIM_CLOSE(),
                    d->messages.names[i], DIM_OPEN(), DIM_CLOSE());
         }
