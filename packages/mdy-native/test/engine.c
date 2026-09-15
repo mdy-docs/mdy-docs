@@ -1352,6 +1352,28 @@ static void session_checks(void) {
     ok_("rotating and freeing nothing are no-ops", 1, NULL);
 }
 
+/* A knob set between two renders on ONE engine changes what the memo may
+ * answer with: the fingerprint carries the knobs, so it is forgotten when
+ * one of them moves. */
+static void knob_memo_checks(void) {
+    printf("\n--- engine: a knob changed between renders ---\n");
+    const char *source = "<script\n  alert(1)\n";
+    mdy_engine *e = mdy_engine_new(S);
+    char err[256];
+    char *open_render = NULL, *strict_render = NULL;
+    if (mdy_engine_open(e, source, strlen(source), err, sizeof err) == 0) {
+        open_render = mdy_engine_render(e, 0, err, sizeof err);
+        mdy_engine_set_sanitize(e, 1);
+        strict_render = mdy_engine_render(e, 0, err, sizeof err);
+    }
+    ok_("sanitize set after a render is applied to the next one",
+        open_render && strict_render && strstr(open_render, "alert(1)") && !strstr(strict_render, "alert(1)"),
+        strict_render ? strict_render : err);
+    free(open_render);
+    free(strict_render);
+    mdy_engine_free(e);
+}
+
 static void memo_key_checks(void) {
     printf("\n--- engine: what a document is, across builds ---\n");
 
@@ -3852,6 +3874,7 @@ int main(void) {
     reopen_checks();
     session_checks();
     memo_key_checks();
+    knob_memo_checks();
     count_checks();
     import_checks();
 #ifndef _WIN32

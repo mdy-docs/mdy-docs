@@ -750,8 +750,20 @@ void mdy_engine_set_context_bool(mdy_engine *e, const char *name, int value) {
     mdy_engine_set_context_json(e, name, value ? "true" : "false", 1);
 }
 
-void mdy_engine_set_sanitize(mdy_engine *e, int sanitize) { e->knobs.sanitize = sanitize ? 1 : 0; }
-void mdy_engine_set_tasks(mdy_engine *e, int tasks) { e->knobs.tasks = tasks ? 1 : 0; }
+/* A knob is part of every document's memo key, so a change to one forgets
+ * the fingerprints computed under the old setting. */
+static void forget_fingerprints(mdy_engine *e) {
+    for (size_t i = 0; i < e->set.count; i++) e->set.docs[i].fingerprint = 0;
+}
+
+void mdy_engine_set_sanitize(mdy_engine *e, int sanitize) {
+    e->knobs.sanitize = sanitize ? 1 : 0;
+    forget_fingerprints(e);
+}
+void mdy_engine_set_tasks(mdy_engine *e, int tasks) {
+    e->knobs.tasks = tasks ? 1 : 0;
+    forget_fingerprints(e);
+}
 
 int mdy_engine_set_scope_json(mdy_engine *e, const char *name, const char *json) {
     /* an identifier, and not one the toolkit or the wrapper already binds */
@@ -780,6 +792,7 @@ int mdy_engine_set_scope_json(mdy_engine *e, const char *name, const char *json)
     e->knobs.scope_names[e->knobs.scope_count] = mdy_xstrdup(name);
     e->knobs.scope_json[e->knobs.scope_count] = mdy_xstrdup(json);
     e->knobs.scope_count++;
+    forget_fingerprints(e);
     return 0;
 }
 
