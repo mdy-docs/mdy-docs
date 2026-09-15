@@ -1194,8 +1194,15 @@ static void register_one(mdy_engine *e, const char *name, JsNativeFn fn) {
  * The spec a document wrote, resolved against THAT document — imports are
  * recorded per source file, so the same spec in two files can be two packages.
  */
-static mdy_engine *lookup_import(mdy_engine *e, const char *spec, const char **why) {
-    static char path[1024];
+/*
+ * The imported set a `spec` names, resolved against the CURRENT document, or
+ * NULL with a reason written into `why` (may be NULL when the caller does not
+ * use it). `path` is a LOCAL buffer now, not a static returned through a `const
+ * char **`: the old shape handed the caller a pointer into shared storage that
+ * the next lookup would overwrite.
+ */
+static mdy_engine *lookup_import(mdy_engine *e, const char *spec, char *why, size_t why_cap) {
+    char path[1024];
     path[0] = '\0';
     /* The record for THIS document, by its own id. */
     JsValue r = record_by_index(e, e->graph.current);
@@ -1203,13 +1210,13 @@ static mdy_engine *lookup_import(mdy_engine *e, const char *spec, const char **w
         char *p = js_string_utf8(get_val(e, r, "path"));
         if (p) { snprintf(path, sizeof path, "%s", p); free(p); }
     }
-    if (!path[0]) { *why = "a document with no path"; return NULL; }
+    if (!path[0]) { if (why && why_cap) snprintf(why, why_cap, "a document with no path"); return NULL; }
     for (size_t i = 0; i < e->graph.import_count; i++) {
         if (strcmp(e->graph.imports[i].spec, spec) == 0 &&
             strcmp(e->graph.imports[i].source_path, path) == 0)
             return e->graph.imports[i].set;
     }
-    *why = path;
+    if (why && why_cap) snprintf(why, why_cap, "%s", path);
     return NULL;
 }
 
@@ -1246,8 +1253,8 @@ static bool import_render_native(JsContext *ctx, JsValue this_val, const JsValue
     char *spec = argc > 0 ? js_string_utf8(args[0]) : NULL;
     if (!spec) return true;
 
-    const char *why = "";
-    mdy_engine *set = lookup_import(e, spec, &why);
+    char why[1024] = "";
+    mdy_engine *set = lookup_import(e, spec, why, sizeof why);
     if (!set) {
         char msg[512];
         snprintf(msg, sizeof msg, "mdy: import \"%s\" was not resolved (declared in %s)", spec, why);
@@ -1300,8 +1307,7 @@ static bool import_query_native(JsContext *ctx, JsValue this_val, const JsValue 
     *result = one ? js_null() : js_array_new(ctx, 0);
     char *spec = argc > 0 ? js_string_utf8(args[0]) : NULL;
     if (!spec) return true;
-    const char *why = "";
-    mdy_engine *set = lookup_import(e, spec, &why);
+    mdy_engine *set = lookup_import(e, spec, NULL, 0);
     free(spec);
     if (!set) {
         const char *msg = "mdy: import was not resolved";
@@ -2108,8 +2114,7 @@ static bool import_resize_native(JsContext *ctx, JsValue this_val, const JsValue
     mdy_engine *e = js_context_userdata(ctx);
     char *spec = argc > 0 ? js_string_utf8(args[0]) : NULL;
     if (!spec) { *result = js_undefined(); return true; }
-    const char *why = "";
-    mdy_engine *set = lookup_import(e, spec, &why);
+    mdy_engine *set = lookup_import(e, spec, NULL, 0);
     free(spec);
     if (!set) {
         const char *msg = "mdy: import was not resolved";
