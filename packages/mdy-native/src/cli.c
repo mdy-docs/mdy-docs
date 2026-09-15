@@ -327,21 +327,19 @@ static void trim_slashes(char *url) {
     while (n > 0 && url[n - 1] == '/') url[--n] = 0;
 }
 
-/* The JavaScript's error line for a failed request, and out. */
-static void broker_fail(const char *fmt, const char *a, const char *b, int status, const HttpResponse *r) {
-    char msg[2048];
-    if (status) {
-        char detail[512] = "";
-        if (r && r->body_len) {
-            snprintf(detail, sizeof detail, "%.*s", (int)(r->body_len > 400 ? 400 : r->body_len), (const char *)r->body);
-            size_t n = strlen(detail);
-            while (n && (detail[n - 1] == '\n' || detail[n - 1] == ' ')) detail[--n] = 0;
-        }
-        snprintf(msg, sizeof msg, fmt, a, b, status, detail[0] ? " — " : "", detail);
-    } else {
-        snprintf(msg, sizeof msg, fmt, a, b, 0, "", "");
+/* The JavaScript's error line for a refused request, and out: `lead`, the
+ * status, and the first 400 bytes of the body after `sep`. `sep_always`
+ * writes the separator even when there is no body, which is how mdy-bus
+ * words `dead:` and `requeue:`. */
+static void broker_fail(const char *lead, const char *sep, int sep_always, const HttpResponse *r) {
+    char detail[512] = "";
+    if (r->status && r->body_len) {
+        snprintf(detail, sizeof detail, "%.*s", (int)(r->body_len > 400 ? 400 : r->body_len), (const char *)r->body);
+        size_t n = strlen(detail);
+        while (n && (detail[n - 1] == '\n' || detail[n - 1] == ' ')) detail[--n] = 0;
     }
-    fprintf(stderr, "%s%s%s\n", RED_OPEN(), msg, RED_CLOSE());
+    fprintf(stderr, "%s%s %d%s%s%s\n", RED_OPEN(), lead, r->status,
+            detail[0] || sep_always ? sep : "", detail, RED_CLOSE());
     exit(1);
 }
 
@@ -366,8 +364,10 @@ static int publish_messages(mdy_engine *e, const Messages *m, const char *broker
             fprintf(stderr, "%s%s%s\n", RED_OPEN(), msg, RED_CLOSE());
             exit(1);
         }
-        if (r.status < 200 || r.status >= 300)
-            broker_fail("publish: %s refused with %.0s%d%s%s", m->names[i], "", r.status, &r);
+        if (r.status < 200 || r.status >= 300) {
+            char lead[600]; snprintf(lead, sizeof lead, "publish: %s refused with", m->names[i]);
+            broker_fail(lead, " — ", 0, &r);
+        }
         http_response_free(&r);
         free(bytes);
         sent++;
@@ -433,8 +433,8 @@ static int cmd_dead(int argc, char **argv) {
             return 1;
         }
         if (r.status < 200 || r.status >= 300) {
-            char who[512]; snprintf(who, sizeof who, "%s#%s", name, requeue);
-            broker_fail("requeue: %s — %.0s%d %.0s%s", who, "", r.status, &r);
+            char lead[600]; snprintf(lead, sizeof lead, "requeue: %s#%s —", name, requeue);
+            broker_fail(lead, " ", 1, &r);
         }
         bjv *result = bjv_decode(r.body, r.body_len);
         double index = bjv_number(result, "index", -1);
@@ -451,7 +451,10 @@ static int cmd_dead(int argc, char **argv) {
         fprintf(stderr, "%sdead: cannot reach the sukkal broker at %s (%s)%s\n", RED_OPEN(), url, r.error, RED_CLOSE());
         return 1;
     }
-    if (r.status < 200 || r.status >= 300) broker_fail("dead: %s — %.0s%d %.0s%s", name, "", r.status, &r);
+    if (r.status < 200 || r.status >= 300) {
+        char lead[600]; snprintf(lead, sizeof lead, "dead: %s —", name);
+        broker_fail(lead, " ", 1, &r);
+    }
     bjv *entries = bjv_decode(r.body, r.body_len);
     size_t n = entries && entries->type == BJV_ARRAY ? entries->count : 0;
     if (n == 0) {

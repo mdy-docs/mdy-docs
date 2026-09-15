@@ -461,7 +461,9 @@ static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n, size_t dept
 int mdy_raw_reparse(mdy_doc *doc, mdy_node *root) {
     if (!doc || !root) return 0;
 
-    lexbor_memory_setup(raw_malloc, raw_realloc, raw_calloc, free);
+    /* Process-global, and the same four every time: once. */
+    static int allocator_set;
+    if (!allocator_set) { lexbor_memory_setup(raw_malloc, raw_realloc, raw_calloc, free); allocator_set = 1; }
 
     Raw r = { .doc = doc };
     r.parser = lxb_html_parser_create();

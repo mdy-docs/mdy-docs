@@ -200,6 +200,9 @@ static void put_number(mdy_buf *b, double v) {
  * nobody thought about.
  */
 void mdy_html_write_attribute(mdy_buf *b, const mdy_prop *p) {
+    /* A tree built by hand may carry a NULL string: written as "". */
+    mdy_prop blank;
+    if (p->type == MDY_PROP_STRING && !p->as.string) { blank = *p; blank.as.string = ""; p = &blank; }
     AttrInfo info;
     attr_info(p->name, strlen(p->name), &info);
 
@@ -324,6 +327,9 @@ static void write_node(mdy_buf *b, const mdy_node *n, const mdy_node *parent,
             return;
 
         case MDY_ELEMENT:
+            /* A tree built by hand may leave the tag NULL: no tag to write,
+             * so the element lends its children, as a root does. */
+            if (!n->tag) { write_children(b, n, o); return; }
             break;
     }
 
