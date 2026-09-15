@@ -757,12 +757,24 @@ static mdy_yaml *build_identity(const char *rel, const char *name, const char *e
  * the caller does after the loop is per DOCUMENT, because only the splitter
  * knows how many documents a file became.
  *
- * `Staging` is why the twenty-odd failures below are one line each. Freeing
- * the whole walk at each of them means a slightly different subset every
- * time, which is the shape a leak hides in; a failure here frees only what
- * this function allocated, and the caller frees the staging and the listing
- * once.
+ * Every failure leaves through one exit, which frees only what this
+ * function allocated; the caller frees the staging and the listing once.
  */
+/* Room in the staging text for `more` bytes past what is there, or -1 when
+ * it could not be had. Doubling from a cap of ZERO never reaches `need`, so
+ * the growth starts from a real size and the first file sizes the buffer. */
+static int staging_room(Staging *st, size_t more) {
+    size_t need = st->len + more;
+    if (need <= st->cap) return 0;
+    size_t want = st->cap ? st->cap : 65536;
+    while (need > want) want *= 2;
+    char *grown = realloc(st->source, want);
+    if (!grown) return -1;
+    st->source = grown;
+    st->cap = want;
+    return 0;
+}
+
 static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
                          Staging *st, char *error, size_t error_len) {
     /* Not a source: nothing staged, nothing recorded, and not a failure. */
@@ -771,38 +783,30 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
 
     const char *name = basename_of(rel);
     const char *ext = extension_of(name);
+    const char *why = NULL;
+    uint8_t *bytes = NULL;
+    char *rewritten = NULL;
+    mdy_yaml *ident = NULL, *own = NULL;
 
     /*
      * The walk has just listed this file, so a stat that fails is a real
-     * failure -- and ignoring it left `size` and `mtime` at zero, which
-     * is a record claiming an empty file last written in 1970. The
-     * document was then built and written from it.
+     * failure: ignoring it would leave `size` and `mtime` at zero, which is
+     * a record claiming an empty file last written in 1970.
      */
     double size = 0, mtime = 0;
-    if (fsx_stat(root, rel, &size, &mtime) != 0) {
-        if (error && error_len) snprintf(error, error_len, "cannot stat %s/%s", root, rel);
-        return -1;
-    }
+    if (fsx_stat(root, rel, &size, &mtime) != 0) { why = "cannot stat"; goto fail; }
 
     size_t body_len = 0;
-    char *body = NULL;
     int is_mdy = ends_with_ci(rel, ".mdy");
     int is_md = ends_with_ci(rel, ".md");
     int is_yaml = ends_with_ci(rel, ".yaml") || ends_with_ci(rel, ".yml");
-
     int is_image = is_image_ext(ext);
-    uint8_t *bytes = NULL;
     if (is_mdy || is_md || is_yaml || is_image) {
         bytes = fsx_read(root, rel, &body_len);
-        /*
-         * A file the listing named and the read could not deliver. Letting
-         * it through as no bytes drops a page from the site and still reports
-         * success — the same answer an unreadable directory gets.
-         */
-        if (!bytes) {
-            if (error && error_len) snprintf(error, error_len, "cannot read %s/%s", root, rel);
-            return -1;
-        }
+        /* A file the listing named and the read could not deliver. Letting
+         * it through as no bytes would drop a page from the site and still
+         * report success. */
+        if (!bytes) { why = "cannot read"; goto fail; }
     }
 
     /*
@@ -813,21 +817,10 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
      * builder remembers a refused allocation); a document is short its
      * record rather than built without it.
      */
-    mdy_yaml *ident = build_identity(rel, name, ext, size, mtime, is_image, bytes, body_len);
-    if (!ident) { free(bytes); if (error && error_len) snprintf(error, error_len, "out of memory");
-                  return -1; }
+    ident = build_identity(rel, name, ext, size, mtime, is_image, bytes, body_len);
+    if (!ident) { why = "out of memory"; goto fail; }
 
-    /* Doubling from a cap of ZERO never reaches `need`, so the growth starts
-     * from a real size and the first file is what sizes the buffer. */
-    size_t need = st->len + body_len + 4096;
-    if (need > st->cap) {
-        size_t want = st->cap ? st->cap : 65536;
-        while (need > want) want *= 2;
-        st->cap = want;
-        char *grown = realloc(st->source, st->cap);
-        if (!grown) { if (error && error_len) snprintf(error, error_len, "out of memory"); mdy_yaml_free(ident); free(bytes); return -1; }
-        st->source = grown;
-    }
+    if (staging_room(st, body_len + 4096) != 0) { why = "out of memory"; goto fail; }
     size_t file_start = st->len;
 
     /*
@@ -846,42 +839,22 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
          * scalar, which is also what keeps a `---` in the prose out of
          * the splitter's way. */
         st->len += (size_t)snprintf(st->source + st->len, st->cap - st->len, "+++\n");
-        if (bytes) {
-            put_block_scalar(&st->source, &st->len, &st->cap, "body", (const char *)bytes, body_len);
-            put_tags_from_text(&st->source, &st->len, &st->cap, (const char *)bytes, body_len);
-        }
+        put_block_scalar(&st->source, &st->len, &st->cap, "body", (const char *)bytes, body_len);
+        put_tags_from_text(&st->source, &st->len, &st->cap, (const char *)bytes, body_len);
         st->len += (size_t)snprintf(st->source + st->len, st->cap - st->len, "+++\n");
     }
 
-    if (is_mdy && bytes) {
+    if (is_mdy) {
         /* `% import` is rewritten before the compiler ever sees the text —
          * a real import statement is not legal inside a function body, and
-         * every `%` line becomes one. */
+         * every `%` line becomes one. A rewrite that could not be made is
+         * the build failing, not a file compiled with its import lines left
+         * as JavaScript. */
         size_t rlen = 0;
-        char *rewritten = rewrite_imports(e, rel, (const char *)bytes, body_len, &rlen);
-        /* A rewrite that could not be made is the build failing, not a file
-         * compiled with its import lines left as JavaScript. */
-        if (!rewritten) {
-            if (error && error_len) snprintf(error, error_len, "out of memory");
-            mdy_yaml_free(ident);
-            free(bytes);
-            return -1;
-        }
-        body = rewritten;
-        size_t blen = rlen;
-
-        size_t need2 = st->len + blen + 64;
-        if (need2 > st->cap) {
-            size_t want2 = st->cap ? st->cap : 65536;
-            while (need2 > want2) want2 *= 2;
-            st->cap = want2;
-            char *grown = realloc(st->source, st->cap);
-            if (!grown) { if (error && error_len) snprintf(error, error_len, "out of memory"); if (rewritten) free(rewritten); mdy_yaml_free(ident); free(bytes); return -1; }
-            st->source = grown;
-        }
-        memcpy(st->source + st->len, body, blen);
-        st->len += blen;
-        if (rewritten) free(rewritten);
+        rewritten = rewrite_imports(e, rel, (const char *)bytes, body_len, &rlen);
+        if (!rewritten || staging_room(st, rlen + 64) != 0) { why = "out of memory"; goto fail; }
+        memcpy(st->source + st->len, rewritten, rlen);
+        st->len += rlen;
     } else {
         memcpy(st->source + st->len, PLACEHOLDER_BODY, strlen(PLACEHOLDER_BODY));
         st->len += strlen(PLACEHOLDER_BODY);
@@ -896,8 +869,7 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
      * record, so the file keeps its raw identity and says so, which is
      * what mdy-docs' walkRawSources does.
      */
-    mdy_yaml *own = NULL;
-    if (is_yaml && bytes && body_len) {
+    if (is_yaml && body_len) {
         char yerr[256];
         yerr[0] = '\0';
         own = mdy_yaml_parse((const char *)bytes, body_len, yerr, sizeof yerr);
@@ -905,11 +877,7 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
          * which is a real outcome. One it could not ALLOCATE for is not:
          * the file would lose every parsed field on a build that
          * succeeded. MDY_YAML_OOM is what tells them apart. */
-        if (!own && strcmp(yerr, MDY_YAML_OOM) == 0) {
-            if (error && error_len) snprintf(error, error_len, "out of memory");
-            mdy_yaml_free(ident);
-            free(bytes); return -1;
-        }
+        if (!own && strcmp(yerr, MDY_YAML_OOM) == 0) { why = "out of memory"; goto fail; }
         mdy_yaml_type kind = own ? mdy_yaml_type_of(mdy_yaml_root(own)) : MDY_YAML_NULL;
         if (!own)
             engine_message(e, 0, 0, 0, "yaml",
@@ -926,12 +894,22 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
         }
     }
 
-    /* One entry per FILE, with its text as a span. How many documents
-     * that text is, the splitter says below. */
+    /* A default for a data record: the file's own fields win, except `path`. */
+    mdy_yaml *only_path = NULL;
+    if (is_yaml) {
+        mdy_yaml_builder *pb = mdy_yaml_builder_new();
+        if (pb) mdy_yaml_put_string(pb, "path", rel, 0);
+        only_path = mdy_yaml_builder_done(pb);
+        if (!only_path) { why = "out of memory"; goto fail; }
+    }
+
+    /* One entry per FILE, with its text as a span. How many documents that
+     * text is, the splitter says below. Nothing can fail past here, so the
+     * entry owns what it is given. */
     if (st->count == st->cap_files) {
         size_t want = st->cap_files ? st->cap_files * 2 : 16;
         WalkedFile *grown = realloc(st->files, want * sizeof *grown);
-        if (!grown) { if (error && error_len) snprintf(error, error_len, "out of memory"); mdy_yaml_free(own); mdy_yaml_free(ident); free(bytes); return -1; }
+        if (!grown) { mdy_yaml_free(only_path); why = "out of memory"; goto fail; }
         st->files = grown;
         st->cap_files = want;
     }
@@ -940,25 +918,22 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
     f->len = st->len - file_start;
     f->data = own;
     f->is_md = is_md;
-    /* Both, before anything below can fail: the slot is taken, so a
-     * failure from here on goes through walked_free and it must not find
-     * two uninitialised pointers to free. */
-    f->pre = NULL;
-    f->post = NULL;
-    if (is_yaml) {
-        /* A default: the file's own fields win, except `path`. */
-        mdy_yaml_builder *pb = mdy_yaml_builder_new();
-        if (pb) mdy_yaml_put_string(pb, "path", rel, 0);
-        mdy_yaml *only_path = mdy_yaml_builder_done(pb);
-        if (!only_path) { mdy_yaml_free(ident); free(bytes); if (error && error_len) snprintf(error, error_len, "out of memory");
-                          return -1; }
-        f->pre = ident;
-        f->post = only_path;
-    } else {
-        f->post = ident;
-    }
+    f->pre = is_yaml ? ident : NULL;
+    f->post = is_yaml ? only_path : ident;
+    free(rewritten);
     free(bytes);
     return 0;
+
+fail:
+    if (error && error_len) {
+        if (strcmp(why, "out of memory") == 0) snprintf(error, error_len, "%s", why);
+        else snprintf(error, error_len, "%s %s/%s", why, root, rel);
+    }
+    mdy_yaml_free(own);
+    mdy_yaml_free(ident);
+    free(rewritten);
+    free(bytes);
+    return -1;
 }
 
 /* Once, on an engine nobody has opened yet: the root, the import cache and
