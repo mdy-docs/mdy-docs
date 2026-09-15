@@ -173,6 +173,14 @@ typedef struct {
     const Span *urls;    /* sorted, non-overlapping */
     size_t url_count;
     /*
+     * How far a wiki link's `]]` search has already come up empty. A `[[` that
+     * finds no closer before its line ends fails, and so does every later `[[`
+     * on that same line — a wiki link cannot cross a newline. Remembering the
+     * boundary turns a line of N unclosed `[[` from O(N^2) rescans into O(N).
+     * Monotonic: it only ever moves forward.
+     */
+    const char *wiki_skip;
+    /*
      * Whether the next position starts a word. Tracked as STATE, not computed
      * from the previous byte, because what sets it is what the scanner just
      * did rather than what the text says: a marker or a wiki link leaves a
@@ -575,7 +583,8 @@ void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t l
 
     size_t cap = len * 4 + 8;   /* see push() */
     Ctx ctx = { .doc = doc, .parent = parent, .len = 0, .cap = cap,
-                .urls = urls, .url_count = url_count, .at_boundary = 1 };
+                .urls = urls, .url_count = url_count, .at_boundary = 1,
+                .wiki_skip = text };
     ctx.buf = mdy_alloc(&doc->arena, cap);
     if (ctx.buf) scan(&ctx, text, len);
     if (urls != stack_urls) free(urls);
@@ -703,13 +712,18 @@ static void cut(const char **s, size_t *len) { mdy_trim(s, len); }
 /** Consume `[[ … ]]` at `p`, emitting a link. Returns bytes consumed, or 0 to
  * leave it as text. */
 static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
+    /* A closer scan starting at or before here already failed, up to the end
+     * of this line — so this one would too. See Ctx.wiki_skip. */
+    if (p < ctx->wiki_skip) return 0;
     size_t close = 0;
     int found = 0;
     for (size_t j = 2; j + 1 < left; j++) {
         if (p[j] == ']' && p[j + 1] == ']') { close = j; found = 1; break; }
-        if (p[j] == '\n') return 0;    /* a wiki link does not cross a line */
+        /* No closer before the newline: remember it, so every `[[` up to it is
+         * answered without rescanning. A wiki link does not cross a line. */
+        if (p[j] == '\n') { ctx->wiki_skip = p + j; return 0; }
     }
-    if (!found) return 0;
+    if (!found) { ctx->wiki_skip = p + left; return 0; }   /* ran to the end, no closer */
 
     const char *body = p + 2;
     size_t body_len = close - 2;
