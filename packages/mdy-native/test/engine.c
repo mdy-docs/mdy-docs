@@ -2468,10 +2468,30 @@ static void bad_image_checks(void) {
     write_file(root, "i-sized.svg",
         "<svg width=\"30\" height=\"20\" viewBox=\"0 0 100 50\"><rect width=\"1\" height=\"1\"/></svg>\n");
     write_file(root, "j-unit.svg", "<svg width=\"3em\" height=\"2em\"><rect width=\"5\" height=\"5\"/></svg>\n");
+    /* One header of each kind the walk reads, at the smallest size that is
+     * still that kind: the frame header after a comment for JPEG, each of
+     * WebP's three chunks, a top-down BMP with its negative height, and an
+     * ICO whose 0 means 256. */
+    static const uint8_t jpeg[] = { 0xFF,0xD8, 0xFF,0xFE,0x00,0x04,'h','i', 0xFF,0xC0,0x00,0x11,0x08, 0x00,0x20, 0x00,0x30, 0x03, 0,0,0,0,0,0,0,0,0 };
+    static const uint8_t gif[]  = { 'G','I','F','8','9','a', 5,0, 6,0, 0,0,0, 0x3B };
+    static const uint8_t vp8[]  = { 'R','I','F','F', 0,0,0,0, 'W','E','B','P', 'V','P','8',' ', 0,0,0,0, 0,0,0, 0x9D,0x01,0x2A, 7,0, 8,0, 0,0 };
+    static const uint8_t vp8l[] = { 'R','I','F','F', 0,0,0,0, 'W','E','B','P', 'V','P','8','L', 0,0,0,0, 0x2F, 0x08,0x40,0x02,0x00, 0,0,0,0,0,0 };
+    static const uint8_t vp8x[] = { 'R','I','F','F', 0,0,0,0, 'W','E','B','P', 'V','P','8','X', 0,0,0,0, 0,0,0,0, 10,0,0, 11,0,0, 0,0,0,0 };
+    static const uint8_t bmp[]  = { 'B','M', 0,0,0,0, 0,0, 0,0, 54,0,0,0, 40,0,0,0, 13,0,0,0, 0xF2,0xFF,0xFF,0xFF, 1,0, 24,0, 0,0,0,0,0,0,0,0 };
+    static const uint8_t ico[]  = { 0,0, 1,0, 1,0, 16,17, 0,0, 1,0, 32,0, 0,0,0,0, 22,0,0,0 };
+    static const uint8_t ico256[] = { 0,0, 1,0, 1,0, 0,0, 0,0, 1,0, 32,0, 0,0,0,0, 22,0,0,0 };
+    write_bytes(root, "n-photo.jpg", jpeg, sizeof jpeg);
+    write_bytes(root, "o-anim.gif", gif, sizeof gif);
+    write_bytes(root, "p-lossy.webp", vp8, sizeof vp8);
+    write_bytes(root, "q-lossless.webp", vp8l, sizeof vp8l);
+    write_bytes(root, "r-extended.webp", vp8x, sizeof vp8x);
+    write_bytes(root, "s-topdown.bmp", bmp, sizeof bmp);
+    write_bytes(root, "t-icon.ico", ico, sizeof ico);
+    write_bytes(root, "u-big.ico", ico256, sizeof ico256);
 
     write_file(root, "main.mdy",
         "% $.emit('roll.txt', $.find({ ext: { $exists: true } })\n"
-        "%   .filter((x) => ['.tif', '.png', '.svg', '.avif'].includes(x.ext))\n"
+        "%   .filter((x) => ['.tif', '.png', '.svg', '.avif', '.jpg', '.gif', '.webp', '.bmp', '.ico'].includes(x.ext))\n"
         "%   .map((x) => x.name + '=' + (x.width ?? '-') + 'x' + (x.height ?? '-')).join(','))\n");
 
     mdy_engine *e = mdy_engine_new(S);
@@ -2503,7 +2523,9 @@ static void bad_image_checks(void) {
                    "a-wrap.tif=-x-,b-wrap.tif=-x-,c-past.tif=-x-,"
                    "d-count.tif=-x-,e-cut.tif=-x-,f-empty.tif=-x-,"
                    "g-good.png=9x4,h-icon.svg=100x50,i-sized.svg=30x20,j-unit.svg=-x-,"
-                   "k-type.tif=-x-,l-twice.tif=-x-,m-icon.avif=98x50") == 0,
+                   "k-type.tif=-x-,l-twice.tif=-x-,m-icon.avif=98x50,n-photo.jpg=48x32,o-anim.gif=5x6,"
+                   "p-lossy.webp=7x8,q-lossless.webp=9x10,r-extended.webp=11x12,s-topdown.bmp=13x14,"
+                   "t-icon.ico=16x17,u-big.ico=256x256") == 0,
         emitted("roll.txt"));
 
     mdy_engine_free(e);

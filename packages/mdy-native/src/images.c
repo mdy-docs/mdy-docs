@@ -143,8 +143,10 @@ static int webp_size(const uint8_t *b, size_t n, int *w, int *h) {
     if (n < 30 || memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WEBP", 4) != 0) return -1;
     const uint8_t *c = b + 12;
     if (memcmp(c, "VP8X", 4) == 0) {               /* extended: 24-bit, minus one */
-        *w = (int)(((uint32_t)c[8] | ((uint32_t)c[9] << 8) | ((uint32_t)c[10] << 16)) + 1);
-        *h = (int)(((uint32_t)c[11] | ((uint32_t)c[12] << 8) | ((uint32_t)c[13] << 16)) + 1);
+        /* After the chunk header come a flags byte and three reserved
+         * bytes; the canvas size is the six bytes after those. */
+        *w = (int)(((uint32_t)c[12] | ((uint32_t)c[13] << 8) | ((uint32_t)c[14] << 16)) + 1);
+        *h = (int)(((uint32_t)c[15] | ((uint32_t)c[16] << 8) | ((uint32_t)c[17] << 16)) + 1);
         return 0;
     }
     if (memcmp(c, "VP8L", 4) == 0) {               /* lossless: 14 bits each */
