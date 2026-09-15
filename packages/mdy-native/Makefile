@@ -356,7 +356,8 @@ build/lexbor-test$(EXE): test/lexbor.c $(LX_LIB)
 # it, and it is how every rule in src/parse was written: measured against the
 # JavaScript rather than read from it.
 PARSE_CHECKS := build/parse-test$(EXE) build/html-test$(EXE) build/script-test$(EXE) \
-                build/yaml-test$(EXE) build/data-test$(EXE) build/lexbor-test$(EXE)
+                build/yaml-test$(EXE) build/data-test$(EXE) build/doc-test$(EXE) \
+                build/lexbor-test$(EXE)
 
 build/parse-test$(EXE): test/parse.c $(PARSE_LIB) $(LX_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
@@ -366,6 +367,9 @@ build/script-test$(EXE): test/script.c $(PARSE_LIB) $(LX_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
 build/yaml-test$(EXE): test/yaml.c $(PARSE_LIB) $(LX_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+build/doc-test$(EXE): test/doc.c $(PARSE_LIB) $(LX_LIB)
+	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
+
 build/data-test$(EXE): test/data.c $(PARSE_LIB) $(LX_LIB)
 	$(CC) $(PARSE_CFLAGS) $< $(PARSE_LIB) $(LX_LIB) -o $@
 
@@ -421,6 +425,7 @@ check-parse: $(PARSE_CHECKS) build/mdyast$(EXE)
 	@./build/script-test$(EXE)
 	@./build/yaml-test$(EXE)
 	@./build/data-test$(EXE)
+	@./build/doc-test$(EXE)
 
 # The differential harnesses. mdy-docs is this repository; the corpora are
 # the site next to it. Point CORPUS, SITE and THEME elsewhere as needed.
