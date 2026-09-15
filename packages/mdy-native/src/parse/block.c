@@ -375,16 +375,7 @@ static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t l
 
 /* ---- list markers -------------------------------------------------------- */
 
-/** How many characters of `l` are a list marker, and whether it is ordered.
- * `-`, `*`, `+` for bullets; `1.` or `1)` for ordered. 0 means not a list. */
-/*
- * A marker must be followed by a space, a tab, or THE END OF THE LINE — that
- * last one is not a nicety. `1931.` alone on a line is an ordered list whose
- * item content is on the following lines, and reading it as prose instead put
- * it inside the paragraph above and shifted every footnote number after it.
- * `1931.x` is not a marker, because something that is not a space follows.
- */
-/** The number an ordered marker carries, or 0 for a bullet. Only meaningful
+/** The number an ordered marker carries, or -1 for a bullet. Only meaningful
  * when list_marker returned non-zero. */
 static long marker_number(const mdy_line *l) {
     long value = 0;
@@ -398,6 +389,17 @@ static long marker_number(const mdy_line *l) {
     return i ? value : -1;
 }
 
+/*
+ * How many characters of `l` are a list marker, and whether it is ordered:
+ * `-`, `*`, `+` for bullets; up to nine digits and `.` or `)` for ordered.
+ * 0 means not a list.
+ *
+ * A marker must be followed by a space, a tab, or THE END OF THE LINE — that
+ * last one is not a nicety: `1931.` alone on a line is an ordered list whose
+ * item content is on the following lines, where reading it as prose puts it
+ * in the paragraph above. `1931.x` is not a marker, because something that is
+ * not a space follows.
+ */
 static size_t list_marker(const mdy_line *l, int *ordered) {
     if (l->len < 1) return 0;
     char c = l->text[0];

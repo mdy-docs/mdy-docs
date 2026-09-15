@@ -116,15 +116,6 @@ int ends_with_ci(const char *s, const char *suffix) {
 
 
 /*
- * A .md file's text, written into front matter as a YAML literal block
- * scalar. Every line is indented by two, and the indentation indicator is
- * EXPLICIT (`|2`) rather than inferred: a body whose first line begins with a
- * space would otherwise set the block's indent from that line and silently
- * shift the whole thing. The chomping indicator carries the trailing newlines,
- * which are part of the text and must come back exactly — `-` strips, plain
- * clips to one, `+` keeps them all.
- */
-/*
  * THE YAML WRITER, and the one thing it is still for.
  *
  * Records do not come through here. Identity and `tags` are built as VALUES
@@ -138,15 +129,10 @@ int ends_with_ci(const char *s, const char *suffix) {
  * reader a `.mdy` file's own front matter goes to — so it has to be text, and
  * it has to be escaped. put_scalar is why it is.
  */
-/* Room for `more` bytes, growing from nothing. 0 when there is none. */
 /*
- * Room for `more` bytes of the identity block being built.
- *
- * This returned 0 on failure and every caller answered by returning quietly,
- * which truncated the block mid-line: a document whose `path` or `mtime` was
- * simply not there, written into the set and built as though that were the
- * file. There is no error channel through a chain of void put_* helpers, so
- * it does not fail. See xalloc.h.
+ * Room for `more` bytes of the block being written. It cannot fail: there is
+ * no error channel through a chain of void put_* helpers, and a block short
+ * a line would be read as a different document. See xalloc.h.
  */
 static void put_room(char **buf, size_t *len, size_t *cap, size_t more) {
     size_t need = *len + more;
@@ -225,6 +211,15 @@ static void put_tag_list(char **buf, size_t *len, size_t *cap,
     }
 }
 
+/*
+ * A .md file's text, written into front matter as a YAML literal block
+ * scalar. Every line is indented by two, and the indentation indicator is
+ * EXPLICIT (`|2`) rather than inferred: a body whose first line begins with a
+ * space would otherwise set the block's indent from that line and silently
+ * shift the whole thing. The chomping indicator carries the trailing newlines,
+ * which are part of the text and must come back exactly — `-` strips, plain
+ * clips to one, `+` keeps them all.
+ */
 static void put_block_scalar(char **buf, size_t *len, size_t *cap,
                              const char *keyname, const char *text, size_t tlen) {
     /*
@@ -732,20 +727,6 @@ static void staging_free(Staging *st) {
 }
 
 /*
- * ONE FILE: read it, decide what kind it is, build its identity, and append
- * its text to the staging buffer.
- *
- * The seam is the staging buffer: everything here is per FILE, and everything
- * the caller does after the loop is per DOCUMENT, because only the splitter
- * knows how many documents a file became.
- *
- * `Staging` is why the twenty-odd failures below are one line each. Freeing
- * the whole walk at each of them means a slightly different subset every
- * time, which is the shape a leak hides in; a failure here frees only what
- * this function allocated, and the caller frees the staging and the listing
- * once.
- */
-/*
  * The record for one file, built as VALUES (no YAML text in between, so nothing
  * to escape or mis-read). `path` FIRST because mdy-docs has it first — it builds
  * `{ ...meta, ...parsed, path }`, and mdy_bj_document takes a key's place from
@@ -776,6 +757,20 @@ static mdy_yaml *build_identity(const char *rel, const char *name, const char *e
     return mdy_yaml_builder_done(ib);
 }
 
+/*
+ * ONE FILE: read it, decide what kind it is, build its identity, and append
+ * its text to the staging buffer.
+ *
+ * The seam is the staging buffer: everything here is per FILE, and everything
+ * the caller does after the loop is per DOCUMENT, because only the splitter
+ * knows how many documents a file became.
+ *
+ * `Staging` is why the twenty-odd failures below are one line each. Freeing
+ * the whole walk at each of them means a slightly different subset every
+ * time, which is the shape a leak hides in; a failure here frees only what
+ * this function allocated, and the caller frees the staging and the listing
+ * once.
+ */
 static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
                          Staging *st, char *error, size_t error_len) {
     /* Not a source: nothing staged, nothing recorded, and not a failure. */

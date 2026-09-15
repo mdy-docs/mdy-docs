@@ -40,9 +40,9 @@
 
 #define MDY_HIGHLIGHT_SPEC "mdy-docs/highlight"
 
-/* A tree a `$.render` parked, and the id of the token standing for it. */
 /*
- * A parked tree, or a promise of one. `tree == NULL` with `is_toc` set is a
+ * A tree a `$.render` parked, and the id of the token standing for it — or
+ * a promise of one. `tree == NULL` with `is_toc` set is a
  * contents list: the token exists before the list can, because a document's
  * headings are not known until its whole tree is — including the ones a loop
  * below the contents list writes.
@@ -244,17 +244,11 @@ struct mdy_engine {
     /*
      * A document's file identity — path, name, ext, size, mtime — as a YAML
      * mapping, one per document, or NULL for a set that did not come from a
-     * directory.
+     * directory. A mapping merged into the record rather than front matter
+     * written into the source: a file with its own `+++` block would
+     * otherwise have two, and the second would be read as body text.
      *
-     * It is a MAPPING MERGED LAST rather than front matter written into the
-     * source, and the difference is not cosmetic: a file with its own `+++`
-     * block would otherwise have two of them, and the second would be read as
-     * body text. Merging last is also what makes identity win over a field of
-     * the same name, which is the rule mdy-docs states — a document's `name`
-     * is its file's, never its front matter's.
-     */
-    /*
-     * Identity is merged in a DIFFERENT PLACE depending on the kind of file,
+     * It is merged in a DIFFERENT PLACE depending on the kind of file,
      * because the rule differs:
      *
      *   .mdy/.md    identity WINS. A document's `name` is its file's, never a
@@ -381,15 +375,6 @@ int ends_with_ci(const char *s, const char *suffix);
 void dirname_of(const char *p, char *out, size_t out_len);
 void resolve_path(const char *base, const char *spec, char *out, size_t out_len);
 /*
- * `tags`: what the parts DECLARE plus the `#hashtags` the prose mentions,
- * lowercased and deduplicated, as a mapping of its own for the merge.
- *
- * NULL when no part declared the key and the prose mentions nothing — which
- * is a document with no `tags` at all, not one with an empty list. `*oom` is
- * the other NULL, and the caller has to tell them apart: a document that
- * loses its tags loses the indexes it appears in.
- */
-/*
  * One way for the library to SAY something that is not a failure.
  *
  * A message is not an error: the build carries on, and what it reports is
@@ -405,6 +390,15 @@ void resolve_path(const char *base, const char *spec, char *out, size_t out_len)
 void engine_message(mdy_engine *e, size_t doc_index, uint32_t line, uint32_t column,
                     const char *rule, const char *fmt, ...);
 
+/*
+ * `tags`: what the parts DECLARE plus the `#hashtags` the prose mentions,
+ * lowercased and deduplicated, as a mapping of its own for the merge.
+ *
+ * NULL when no part declared the key and the prose mentions nothing — which
+ * is a document with no `tags` at all, not one with an empty list. `*oom` is
+ * the other NULL, and the caller has to tell them apart: a document that
+ * loses its tags loses the indexes it appears in.
+ */
 mdy_yaml *document_tags(const mdy_yaml_node *const *parts, size_t part_count,
                         const char *body, size_t body_len, int *oom);
 

@@ -1076,24 +1076,15 @@ static bool find_one_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     return true;
 }
 
-/* `$.data(i)` — a document's own data, by index, without a query. */
-/* One document's record, as the guest sees it. */
 /*
- * A document looked up by its OWN id, which `open_documents` inserted and
- * `at < e->count` guarantees is there. So the empty object this returned on
- * every failure was never "not found": it was `$.data` answering `{}` for a
- * page whose data exists, and the page being written from it. There is no
- * JsValue that means "could not read the store", and nine callers, so the
- * failures that are allocations end the run. See xalloc.h.
- */
-/*
- * The stored record for the document at index `idx`, as a guest value — the
- * "{_id: ids[idx]} filter -> nis_find -> decode -> first hit" that three
- * readers (document_record, data_native, lookup_import) each spelled out. It
- * returns js_undefined() for any failure, and each caller decides what that
- * means: fatal, null, or nothing. There is no GC safe point between the decode
- * and the return, so the value is meant to be used immediately, which is the
- * same discipline the inline copies relied on.
+ * The stored record for the document at index `idx`, as a guest value: the
+ * "{_id: ids[idx]} filter -> nis_find -> decode -> first hit" every reader
+ * of a record goes through. The id was inserted by open_documents and
+ * `idx < count` says it is there, so js_undefined() means the store could not
+ * be read, never "not found", and each caller decides what that means:
+ * fatal, null, or nothing. Allocation failures end the run (see xalloc.h).
+ * There is no GC safe point between the decode and the return, so the value
+ * is meant to be used immediately.
  */
 static JsValue record_by_index(mdy_engine *e, size_t idx) {
     if (idx >= e->set.count) return js_undefined();
