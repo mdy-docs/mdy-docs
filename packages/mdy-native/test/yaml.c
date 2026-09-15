@@ -269,6 +269,27 @@ int main(void) {
      * that a refusal is loud: a parser that silently mis-reads data is worse
      * than one that stops.
      */
+    /* Escapes, signs and markers, as the `yaml` package reads them. */
+    check("a surrogate pair written as two \\u escapes is one character", "a: \"\\uD83D\\uDE00\"",
+          "{\"a\":\"\xf0\x9f\x98\x80\"}");
+    check("…and a surrogate alone is U+FFFD", "a: \"x\\uD83Dy\"",
+          "{\"a\":\"x\xef\xbf\xbdy\"}");
+    refuses("a \\U escape past U+10FFFF", "a: \"\\U00110000\"", "line 1: bad \\U escape");
+    check("a signed hex literal is a string; an unsigned one is a number", "a: -0x1A\nb: 0x1A\nc: +0o17",
+          "{\"a\":\"-0x1A\",\"b\":26,\"c\":\"+0o17\"}");
+    refuses("content on the document marker's line", "--- text\n",
+            "line 1: content on the document marker's line is not supported");
+    refuses("a value that would start a mapping", "a: b: c",
+            "line 1: a plain scalar cannot contain `: `");
+    refuses("…and a continuation line that is a key is not a continuation", "a: b\n  c: d",
+            "line 2: unexpected content after the document");
+    check("a colon with no space after it is text", "a: http://x/y\nb: 12:30",
+          "{\"a\":\"http://x/y\",\"b\":\"12:30\"}");
+    check("a tab after the indentation inside a block scalar is content", "a: |\n  \tcode\n  more",
+          "{\"a\":\"\\tcode\\nmore\\n\"}");
+    refuses("…but a tab where a line is structure is an error", "a: 1\n\tb: 2",
+            "line 2: a tab cannot be used for indentation");
+    check("a closing marker may carry trailing whitespace", "a: 1\n...  \n", "{\"a\":1}");
     refuses("text after a flow sequence", "a: [1, 2] junk",
             "line 1: unexpected text after a flow collection");
     refuses("...and after a flow mapping", "a: {b: 1} junk",

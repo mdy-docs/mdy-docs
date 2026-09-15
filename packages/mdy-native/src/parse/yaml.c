@@ -73,7 +73,9 @@ struct mdy_yaml {
 typedef struct {
     const char *s;      /* after the indentation */
     size_t len;
-    size_t indent;      /* spaces before it; a tab in indentation is an error */
+    size_t indent;      /* spaces before it */
+    int tab;            /* a tab followed the spaces: an error where the line
+                         * is structure, content inside a block scalar */
     const char *raw;    /* including the indentation, for block scalars */
     size_t raw_len;
     int blank;          /* nothing but whitespace */
@@ -126,13 +128,14 @@ static int matches(const char *s, size_t len, const char *want) {
     return strlen(want) == len && memcmp(s, want, len) == 0;
 }
 
-/* `[-+]?[0-9]+`, `0o[0-7]+`, `0x[0-9a-fA-F]+` */
+/* `[-+]?[0-9]+`, `0o[0-7]+`, `0x[0-9a-fA-F]+` — the sign belongs to the
+ * decimal form alone; `-0x1A` is a string. */
 static int core_int(const char *s, size_t len, double *out) {
     if (len == 0) return 0;
     size_t i = 0;
     int neg = 0;
     if (s[0] == '-' || s[0] == '+') { neg = s[0] == '-'; i = 1; }
-    if (i + 2 < len && s[i] == '0' && (s[i + 1] == 'o' || s[i + 1] == 'x')) {
+    if (i == 0 && i + 2 < len && s[i] == '0' && (s[i + 1] == 'o' || s[i + 1] == 'x')) {
         int base = s[i + 1] == 'o' ? 8 : 16;
         double v = 0;
         for (size_t k = i + 2; k < len; k++) {
@@ -395,8 +398,23 @@ static mdy_yaml_node *read_quoted(P *p, size_t line, size_t from, char quote,
                                   } i += 2; put_codepoint(&out, cp); break;
                         case 'u': if (!hex_digits(l->s + i, l->len - i, 4, &cp)) {
                                       fail(p, li, "bad \\u escape"); free(out.s); return NULL;
-                                  } i += 4; put_codepoint(&out, cp); break;
-                        case 'U': if (!hex_digits(l->s + i, l->len - i, 8, &cp)) {
+                                  }
+                                  i += 4;
+                                  /* A surrogate pair is one character, written
+                                   * as two escapes; a surrogate alone is not a
+                                   * character at all and becomes U+FFFD. */
+                                  if (cp >= 0xD800 && cp <= 0xDBFF) {
+                                      uint32_t low = 0;
+                                      if (l->len - i >= 6 && l->s[i] == '\\' && l->s[i + 1] == 'u' &&
+                                          hex_digits(l->s + i + 2, l->len - i - 2, 4, &low) &&
+                                          low >= 0xDC00 && low <= 0xDFFF) {
+                                          cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                                          i += 6;
+                                      } else cp = 0xFFFD;
+                                  } else if (cp >= 0xDC00 && cp <= 0xDFFF) cp = 0xFFFD;
+                                  put_codepoint(&out, cp); break;
+                        case 'U': if (!hex_digits(l->s + i, l->len - i, 8, &cp) || cp > 0x10FFFF ||
+                                      (cp >= 0xD800 && cp <= 0xDFFF)) {
                                       fail(p, li, "bad \\U escape"); free(out.s); return NULL;
                                   } i += 8; put_codepoint(&out, cp); break;
                         default:
@@ -738,13 +756,31 @@ static mdy_yaml_node *parse_flow_at(Cur *c, size_t depth) {
 static mdy_yaml_node *parse_block(P *p, size_t indent);
 
 /** The next line that is neither blank nor only a comment, or count. */
+static int nothing_after(const Line *l, size_t from);
+
 static size_t next_content(P *p, size_t from) {
     while (from < p->count) {
         const Line *l = &p->lines[from];
-        if (!l->blank && !(l->len && l->s[0] == '#')) return from;
+        if (!l->blank && !(l->len && l->s[0] == '#')) {
+            /* A tab may not be indentation — the spec is explicit, and the
+             * failure it otherwise causes is a structure that silently changes
+             * shape. Inside a block scalar the same bytes are content, which
+             * is why the line is refused here, where it is read as structure,
+             * and not when it was split. */
+            if (l->tab) { fail(p, from, "a tab cannot be used for indentation"); return p->count; }
+            return from;
+        }
         from++;
     }
     return p->count;
+}
+
+/* `---` or `...` alone on a line at column 0, trailing whitespace allowed. */
+static int marker_line(const Line *l, const char *marker) {
+    if (l->indent != 0 || l->len < 3 || memcmp(l->s, marker, 3) != 0) return 0;
+    if (l->len == 3) return 1;
+    if (!is_space(l->s[3])) return 0;
+    return memcmp(marker, "...", 3) != 0 || nothing_after(l, 3);
 }
 
 /** A `- ` item, or a bare `-`. */
@@ -805,6 +841,15 @@ static size_t key_end(const Line *l) {
  * block scalar header, a quoted scalar, or a plain one — and any of the last
  * three may run on to the lines below.
  */
+/* Whether plain-scalar text holds a `: ` or ends in `:`, which is what the
+ * grammar reads as a mapping's key rather than as text. */
+static int holds_key(const char *s, size_t len) {
+    if (len && s[len - 1] == ':') return 1;
+    for (size_t i = 0; i + 1 < len; i++)
+        if (s[i] == ':' && is_space(s[i + 1])) return 1;
+    return 0;
+}
+
 static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t indent) {
     const Line *l = &p->lines[line];
     while (col < l->len && is_space(l->s[col])) col++;
@@ -865,6 +910,13 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
     mdy_buf out = { .ok = 1, .seed = 128 };
     size_t stop = end;
     while (stop > col && is_space(l->s[stop - 1])) stop--;
+    /* `a: b: c` is not a value of `b: c`: a plain scalar cannot hold what
+     * would start a mapping, and every YAML reader refuses it. */
+    if (holds_key(l->s + col, stop - col)) {
+        fail(p, line, "a plain scalar cannot contain `: `");
+        free(out.s);
+        return NULL;
+    }
     mdy_buf_put(&out, l->s + col, stop - col);
 
     size_t i = line + 1;
@@ -874,9 +926,15 @@ static mdy_yaml_node *parse_value_from(P *p, size_t line, size_t col, size_t ind
         if (cont->blank) { breaks++; continue; }
         if (cont->indent <= indent) break;
         if (is_seq_item(cont) || key_end(cont)) break;
+        if (cont->tab) { fail(p, i, "a tab cannot be used for indentation"); free(out.s); return NULL; }
         size_t cend = comment_at(cont->s, cont->len);
         while (cend > 0 && is_space(cont->s[cend - 1])) cend--;
         if (cend == 0) { breaks++; continue; }
+        if (holds_key(cont->s, cend)) {
+            fail(p, i, "a plain scalar cannot contain `: `");
+            free(out.s);
+            return NULL;
+        }
         fold_break(&out, breaks + 1);
         breaks = 0;
         mdy_buf_put(&out, cont->s, cend);
@@ -1140,7 +1198,7 @@ static mdy_yaml_node *parse_block(P *p, size_t indent) {
 
 /* ---- the stream --------------------------------------------------------------- */
 
-static Line *split_lines(const char *text, size_t len, size_t *count, P *p) {
+static Line *split_lines(const char *text, size_t len, size_t *count) {
     size_t n = 1;
     for (size_t i = 0; i < len; i++) if (text[i] == '\n') n++;
     Line *lines = malloc(sizeof *lines * n);
@@ -1158,10 +1216,7 @@ static Line *split_lines(const char *text, size_t len, size_t *count, P *p) {
 
         size_t k = 0;
         while (k < l->raw_len && l->raw[k] == ' ') k++;
-        /* A tab may not be indentation — the spec is explicit, and the failure
-         * it otherwise causes is a structure that silently changes shape. */
-        if (k < l->raw_len && l->raw[k] == '\t' && p)
-            fail(p, out - 1, "a tab cannot be used for indentation");
+        l->tab = k < l->raw_len && l->raw[k] == '\t';
         l->indent = k;
         l->s = l->raw + k;
         l->len = l->raw_len - k;
@@ -1194,7 +1249,7 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
     p.error = error;
     p.error_len = error_len;
     p.trailing_newline = len > 0 && text[len - 1] == '\n';
-    p.lines = split_lines(text, len, &p.count, &p);
+    p.lines = split_lines(text, len, &p.count);
     if (!p.lines) { oom(&p); free(doc); return NULL; }
 
     /*
@@ -1212,10 +1267,9 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
         const Line *l = &p.lines[i];
         if (l->indent == 0 && l->len && l->s[0] == '%')
             fail(&p, i, "directives are not supported");
-        if (l->indent == 0 && l->len >= 3 && memcmp(l->s, "---", 3) == 0 &&
-            (l->len == 3 || is_space(l->s[3])) && i > 0)
+        if (marker_line(l, "---") && i > 0)
             fail(&p, i, "more than one document in a stream is not supported");
-        if (l->indent == 0 && l->len >= 3 && memcmp(l->s, "...", 3) == 0 && l->len == 3) {
+        if (marker_line(l, "...")) {
             if (next_content(&p, i + 1) < p.count)
                 fail(&p, i, "more than one document in a stream is not supported");
             else { ends_at = i; break; }
@@ -1224,10 +1278,14 @@ mdy_yaml *mdy_yaml_parse(const char *text, size_t len, char *error, size_t error
     /* The marker and the blank lines after it are not the document's. */
     if (!p.failed) p.count = ends_at;
 
-    /* A leading `---` opening the one document is fine. */
-    if (!p.failed && p.count && p.lines[0].indent == 0 && p.lines[0].len >= 3 &&
-        memcmp(p.lines[0].s, "---", 3) == 0 && (p.lines[0].len == 3 || is_space(p.lines[0].s[3])))
+    /* A leading `---` opening the one document is fine; content on the same
+     * line as the marker is a form this does not read, and says so rather
+     * than reading the marker as the content's first word. */
+    if (!p.failed && p.count && marker_line(&p.lines[0], "---")) {
+        if (!nothing_after(&p.lines[0], 3))
+            fail(&p, 0, "content on the document marker's line is not supported");
         p.at = 1;
+    }
 
     if (!p.failed) doc->root = parse_block(&p, 0);
 
