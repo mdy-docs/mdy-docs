@@ -377,6 +377,46 @@ static void inline_whole_checks(const mdy_options *o) {
           ROOT(EL("p", "", EL("u", "", TX("see ") "," EL("a", "\"href\":\"https://ok.org\"", TX("https://ok.org")) "," TX(" now")))), o);
 }
 
+/* The small rules, each as inline.js or wiki.js has it. */
+static void small_rule_checks(const mdy_options *o) {
+    printf("--- mdyast: the smaller inline rules ---\n");
+    {
+        mdy_doc *d = mdy_parse("[[ ^x | url ]] and [[ ^x ]]\n\n[[^x]]: n\n", 0, o);
+        char *html = mdy_to_html(mdy_root(d), NULL);
+        ok_("a label starting with ^ is a footnote reference whatever follows the pipe",
+            html && strstr(html, "user-content-fnref-x\"") && strstr(html, "user-content-fnref-x-2\""), html);
+        free(html); mdy_free(d);
+    }
+    check("a target written empty is a link with no href", "[[ label | ]]",
+          ROOT(EL("p", "", EL("a", "", TX("label")))), o);
+    check("...and so is a label that resolves to nothing", "[[ ; ]]",
+          ROOT(EL("p", "", EL("a", "", TX(";")))), o);
+    check("a slug's whitespace is JavaScript's: an ogham space is a hyphen", "[[ a\xe1\x9a\x80" "b ]]",
+          ROOT(EL("p", "", EL("a", "\"href\":\"a-b\"", TX("a\xe1\x9a\x80" "b")))), o);
+    check("a tag starts with a letter, in any script, and never a digit", "#\xd9\xa3" "x and #a",
+          ROOT(EL("p", "", TX("#\xd9\xa3" "x and ") "," EL("a", "\"href\":\"/tags/a\"", TX("#a")))), o);
+    {
+        char text[700];
+        memset(text, 'a', 600);
+        text[600] = '\0';
+        char src[720];
+        snprintf(src, sizeof src, "#%s end", text);
+        mdy_doc *d = mdy_parse(src, 0, o);
+        char *html = mdy_to_html(mdy_root(d), NULL);
+        char want[720];
+        snprintf(want, sizeof want, "href=\"/tags/%s\"", text);
+        ok_("a tag of six hundred letters links to all of them", html && strstr(html, want), html);
+        free(html); mdy_free(d);
+    }
+    {
+        mdy_doc *d = mdy_parse("a\xc2\xa0:) b", 0, o);
+        char *html = mdy_to_html(mdy_root(d), NULL);
+        ok_("a no-break space is a word boundary, so an emoticon after one is a face",
+            html && !strstr(html, ":)"), html);
+        free(html); mdy_free(d);
+    }
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -549,6 +589,7 @@ int main(void) {
     dedent_checks(&o);
     table_split_checks(&o);
     inline_whole_checks(&o);
+    small_rule_checks(&o);
     markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");

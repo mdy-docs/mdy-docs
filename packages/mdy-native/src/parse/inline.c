@@ -353,9 +353,7 @@ static size_t reference_length(const char *text, size_t len, size_t i) {
 
     uint32_t first = 0;
     size_t fw = mdy_utf8_decode(p + 1, left - 1, &first);
-    int starts = first == '_' ||
-        (mdy_is_letter_or_number_cp(first) && !(first >= '0' && first <= '9'));
-    if (!starts) return 1;
+    if (!(first == '_' || mdy_is_letter_cp(first))) return 1;
     size_t n = 1 + fw;
     while (n < left) {
         uint32_t cp;
@@ -515,11 +513,12 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
                 /* `setting.href + encodeURIComponent(name)` — the NAME is
                  * percent-encoded, so `#café` points at `/tags/caf%C3%A9`
                  * while still reading `#café`. */
-                char href[512];
                 const char *prefix = p[0] == '#' ? "/tags/" : "/users/";
                 size_t hl = strlen(prefix);
+                size_t cap = hl + (n - 1) * 3 + 5;   /* every byte may become %XX, and the encoder keeps four spare */
+                char *href = mdy_alloc(&ctx->doc->arena, cap);
                 memcpy(href, prefix, hl);
-                hl += encode_uri_component(p + 1, n - 1, href + hl, sizeof href - hl);
+                hl += encode_uri_component(p + 1, n - 1, href + hl, cap - hl);
                 mdy_set_string(ctx->doc, a, "href", href, hl);
                 /* Written down as well as written out: a document is asked
                  * often enough what it refers to that it should not have to
@@ -558,11 +557,10 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
                  * url; the two differ only for a bare email address, where
                  * linkify-it's normalize() supplies the `mailto:`. */
                 if (mailto) {
-                    char href[512];
-                    size_t take = n < sizeof href - 8 ? n : sizeof href - 8;
+                    char *href = mdy_alloc(&ctx->doc->arena, n + 8);
                     memcpy(href, "mailto:", 7);
-                    memcpy(href + 7, p, take);
-                    mdy_set_string(ctx->doc, a, "href", href, take + 7);
+                    memcpy(href + 7, p, n);
+                    mdy_set_string(ctx->doc, a, "href", href, n + 7);
                 } else
                 mdy_set_string(ctx->doc, a, "href", p, n);
                 mdy_append(a, mdy_new_text(ctx->doc, p, n));
@@ -573,11 +571,16 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
             }
         }
 
-        /* Only whitespace leaves a boundary behind — a bracket does not, and
-         * treating one as if it did made emoticons out of ordinary prose. */
-        ctx->at_boundary = *p == ' ' || *p == '\t' || *p == '\n' || *p == '\r';
-        push(ctx, p, 1);
-        i++;
+        /* Only whitespace leaves a boundary behind — `/\s/`, so a no-break
+         * space does and a bracket does not; treating a bracket as one made
+         * emoticons out of ordinary prose. */
+        {
+            uint32_t cp;
+            size_t width = mdy_utf8_decode(p, left, &cp);
+            ctx->at_boundary = mdy_is_js_space(cp);
+            push(ctx, p, width);
+            i += width;
+        }
     }
     flush(ctx);
 }
@@ -665,9 +668,7 @@ const char *mdy_resolve_slug(mdy_doc *doc, const char *s, size_t len, size_t *ou
         size_t width = mdy_utf8_decode(s + i, len - i, &cp);
         i += width;
 
-        int space = cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r' || cp == 0x00A0 ||
-                    (cp >= 0x2000 && cp <= 0x200A) || cp == 0x2028 || cp == 0x2029 ||
-                    cp == 0x202F || cp == 0x205F || cp == 0x3000;
+        int space = mdy_is_js_space(cp);
         if (space) {
             /*
              * `\s+` becomes ONE hyphen — a run of whitespace, not "whitespace
@@ -799,6 +800,15 @@ static void cut(const char **s, size_t *len) { mdy_trim(s, len); }
  * footnote reference nothing defines. The closer search asks this so a
  * marker inside a link is the link's, as the scanner takes it whole.
  */
+/* wiki.js's findPipe: the first `|` not escaped by a backslash, or `len`. */
+static size_t find_pipe(const char *s, size_t len) {
+    for (size_t j = 0; j < len; j++) {
+        if (s[j] == '\\') { j++; continue; }
+        if (s[j] == '|') return j;
+    }
+    return len;
+}
+
 static size_t wiki_link_length(Ctx *ctx, const char *p, size_t left) {
     /* A closer scan starting at or before here already failed, up to the end
      * of this line — so this one would too. See Ctx.wiki_skip. */
@@ -813,13 +823,16 @@ static size_t wiki_link_length(Ctx *ctx, const char *p, size_t left) {
     }
     if (!found) { ctx->wiki_skip = p + left; return 0; }   /* ran to the end, no closer */
 
-    const char *body = p + 2;
-    size_t body_len = close - 2;
-    cut(&body, &body_len);
-    if (body_len == 0) return 0;
-    if (body[0] == '^') {
-        const char *id = body + 1;
-        size_t id_len = body_len - 1;
+    /* `[[ ]]` says nothing and links nowhere. The label is what stands
+     * before the first unescaped pipe; a footnote reference is a label that
+     * starts with `^`, whatever follows the pipe. */
+    const char *label = p + 2;
+    size_t label_len = find_pipe(label, close - 2);
+    cut(&label, &label_len);
+    if (label_len == 0) return 0;
+    if (label[0] == '^') {
+        const char *id = label + 1;
+        size_t id_len = label_len - 1;
         cut(&id, &id_len);
         if (!mdy_footnote_find(ctx->doc, id, id_len)) return 0;
     }
@@ -836,14 +849,17 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
     const char *body = p + 2;
     size_t body_len = close - 2;
     cut(&body, &body_len);
-    if (body[0] == '^') {
+    const char *first = body;
+    size_t first_len = find_pipe(body, body_len);
+    cut(&first, &first_len);
+    if (first_len && first[0] == '^') {
         /*
          * A footnote reference — but only if the definition exists. Without
          * one it stays literal text, which is what the JavaScript does and
          * why definitions are collected before any of this runs.
          */
-        const char *id = body + 1;
-        size_t id_len = body_len - 1;
+        const char *id = first + 1;
+        size_t id_len = first_len - 1;
         cut(&id, &id_len);                              /* `label.slice(1).trim()` */
         mdy_footnote *note = mdy_footnote_find(ctx->doc, id, id_len);
         if (!note) return 0;
@@ -913,27 +929,32 @@ static size_t wiki_link(Ctx *ctx, const char *p, size_t left) {
 
         size_t n = 0;
         target = mdy_resolve_slug(ctx->doc, plain, plain_len, &n);
-        target_len = n;
-        if (!target || n == 0) return 0;
+        target_len = target ? n : 0;
     }
 
     flush(ctx);
     mdy_node *a = mdy_new_element(ctx->doc, "a", 1);
+    /* `if (!written) return {}`: a target written empty, or a label that
+     * resolves to nothing, is a link with no href, not no link. */
+    if (target_len == 0) target = NULL;
     /*
      * The href is dropped when it points somewhere the schema refuses,
      * exactly as it would be on a hand-written <a> — and otherwise TIDIED,
      * but only when it names a page of ours. Somebody else's URL is theirs,
      * case and all, and a fragment names an id.
      */
-    if (ctx->doc->options.sanitize &&
-        !mdy_protocol_allowed("href", target, target_len)) {
+    if (!target) {
+        /* no href */
+    } else if (ctx->doc->options.sanitize &&
+               !mdy_protocol_allowed("href", target, target_len)) {
         mdy_warn_inline(ctx->doc, "sanitize",
                         "`[[%.*s]]` points at a protocol that is not allowed, dropping the link",
                         (int)label_len, label);
     } else {
-        char tidy[1024];
-        if (mdy_link_kind_page(target, target_len) && target_len < sizeof tidy) {
-            size_t n = mdy_normalize_link(target, target_len, tidy, sizeof tidy);
+        if (mdy_link_kind_page(target, target_len)) {
+            size_t cap = target_len * 2 + 8;      /* lowercasing may widen a character */
+            char *tidy = mdy_alloc(&ctx->doc->arena, cap);
+            size_t n = mdy_normalize_link(target, target_len, tidy, cap);
             mdy_set_string(ctx->doc, a, "href", tidy, n);
             mdy_collect(ctx->doc, MDY_REF_LINK, tidy, n);
         } else {

@@ -191,7 +191,6 @@ typedef struct {
     /* The line that opens and closes it. NULL means the default, `+++`. */
     const char *frontmatter_fence;
     int autolink;       /* bare URLs in text become links */
-    int emphasis;       /* the default inline marker table */
     int max_heading;    /* deeper headings clamp to this; 0 means 6 */
     uint32_t line_offset; /* added to every position */
     /* Whether the emitter writes unist positions. On by default, matching

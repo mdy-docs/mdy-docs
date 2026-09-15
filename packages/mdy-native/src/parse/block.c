@@ -30,7 +30,6 @@ void mdy_options_default(mdy_options *out) {
     out->frontmatter = 1;
     out->frontmatter_fence = NULL;  /* NULL means `+++` */
     out->autolink = 1;
-    out->emphasis = 1;
     out->max_heading = 6;
     out->line_offset = 0;
     out->highlight = NULL;
@@ -519,8 +518,8 @@ static void parse_attributes(mdy_doc *doc, mdy_node *el, const char *tag,
          * spelling into hast, so `DATA-x-Y` sanitised is `dataXY` where
          * unsanitised it is `dataX-Y`.
          */
-        char lowered[256];
-        if (doc->options.sanitize && name_len < sizeof lowered) {
+        if (doc->options.sanitize) {
+            char *lowered = mdy_alloc(&doc->arena, name_len + 1);
             for (size_t k = 0; k < name_len; k++) {
                 char c = name[k];
                 lowered[k] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
@@ -552,13 +551,12 @@ static void parse_attributes(mdy_doc *doc, mdy_node *el, const char *tag,
          */
         if (strcmp(tag, "a") == 0 && strcmp(hast, "href") == 0 &&
             mdy_link_kind_page(value, value_len)) {
-            char tidy[1024];
-            if (value_len < sizeof tidy) {
-                size_t tn = mdy_normalize_link(value, value_len, tidy, sizeof tidy);
-                mdy_set_string(doc, el, hast, tidy, tn);
-                mdy_collect(doc, MDY_REF_LINK, tidy, tn);
-                continue;
-            }
+            size_t cap = value_len * 2 + 8;      /* lowercasing may widen a character */
+            char *tidy = mdy_alloc(&doc->arena, cap);
+            size_t tn = mdy_normalize_link(value, value_len, tidy, cap);
+            mdy_set_string(doc, el, hast, tidy, tn);
+            mdy_collect(doc, MDY_REF_LINK, tidy, tn);
+            continue;
         }
 
         if (strcmp(hast, "className") == 0) {
@@ -570,13 +568,8 @@ static void parse_attributes(mdy_doc *doc, mdy_node *el, const char *tag,
                 while (k < value_len && (value[k] == ' ' || value[k] == '\t')) k++;
                 size_t cstart = k;
                 while (k < value_len && value[k] != ' ' && value[k] != '\t') k++;
-                if (k > cstart) {
-                    char one[128];
-                    size_t n = k - cstart < sizeof one - 1 ? k - cstart : sizeof one - 1;
-                    memcpy(one, value + cstart, n);
-                    one[n] = '\0';
-                    mdy_add_class(doc, el, one);
-                }
+                if (k > cstart)
+                    mdy_add_class(doc, el, mdy_strdup_n(&doc->arena, value + cstart, k - cstart));
             }
         } else {
             mdy_set_string(doc, el, hast, value, value_len);
@@ -698,9 +691,10 @@ static void add_task_box(mdy_doc *doc, mdy_node *into, int task, size_t content_
     if (task < 0) return;
     mdy_node *box;
     if (doc->options.tasks) {
-        char label[1024];
+        size_t cap = node_text_len(into) + 1;
+        char *label = mdy_alloc(&doc->arena, cap);
         label[0] = '\0';
-        size_t n = text_of(into, label, sizeof label, 0);
+        size_t n = text_of(into, label, cap, 0);
         /* `.trim()` */
         size_t start = 0;
         while (start < n && (label[start] == ' ' || label[start] == '\t' || label[start] == '\n')) start++;
@@ -965,11 +959,10 @@ static size_t parse_element(mdy_doc *doc, mdy_node *parent,
         while (n < l->len && is_tag_char(l->text[n])) n++;
     }
 
-    char tag[64];
     size_t tag_len = n - tag_at;
+    char *tag = mdy_alloc(&doc->arena, (tag_len ? tag_len : 3) + 1);
     if (tag_len == 0) { memcpy(tag, "div", 3); tag_len = 3; }
     else {
-        if (tag_len > sizeof tag - 1) tag_len = sizeof tag - 1;
         for (size_t k = 0; k < tag_len; k++) {
             char c = l->text[tag_at + k];
             tag[k] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
@@ -1943,11 +1936,10 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
                 mdy_node *pre = mdy_new_element(doc, "pre", 3);
                 mdy_node *code = mdy_new_element(doc, "code", 4);
                 if (lang_len) {
-                    char cls[64];
-                    size_t n = lang_len < sizeof cls - 10 ? lang_len : sizeof cls - 10;
+                    char *cls = mdy_alloc(&doc->arena, lang_len + 10);
                     memcpy(cls, "language-", 9);
-                    memcpy(cls + 9, lang, n);
-                    cls[9 + n] = '\0';
+                    memcpy(cls + 9, lang, lang_len);
+                    cls[9 + lang_len] = '\0';
                     mdy_add_class(doc, code, cls);
                 }
                 /* The embedder's highlighter, if any, sees every fence — an
