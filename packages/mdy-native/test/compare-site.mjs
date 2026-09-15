@@ -119,7 +119,7 @@ try {
      * Both are still checked — that each is a PNG, and that both claim the
      * same dimensions, which is what a page's markup was written against.
      */
-    if (!x.equals(y) && name.endsWith('.png')) {
+    if (!x.equals(y) && /-\d+x\d+\.png$/.test(name)) {
       const size = (b) => (b.length > 24 && b.subarray(0, 8).equals(PNG_MAGIC)
         ? `${b.readUInt32BE(16)}x${b.readUInt32BE(20)}` : 'not a PNG');
       const a2 = size(x), b2 = size(y);
