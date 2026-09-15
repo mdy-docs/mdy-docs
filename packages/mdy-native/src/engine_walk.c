@@ -819,15 +819,13 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
     }
 
     /*
-     * The record. `path` is written LAST of the identity fields for the
-     * reason mdy-docs gives: a data file may declare its own `name` or
-     * `size` and identity silently shadowing that would make the file's
-     * own data unreachable — but `path` is structurally required to be
-     * real, because everything resolves documents by it.
+     * The record: identity as VALUES, kept out of the text (see `identity`
+     * on the engine, and build_identity above). Where it merges — before
+     * the file's own fields for a data record, after them for everything
+     * else — is decided per kind when the set opens. NULL is an OOM (the
+     * builder remembers a refused allocation); a document is short its
+     * record rather than built without it.
      */
-    /* Identity, kept OUT of the text — see `identity` on the engine, and
-     * build_identity above. NULL is an OOM (the builder remembers a refused
-     * allocation); a document is short its record rather than built without it. */
     mdy_yaml *ident = build_identity(rel, name, ext, size, mtime, is_image, bytes, body_len);
     if (!ident) { free(bytes); if (error && error_len) snprintf(error, error_len, "out of memory");
                   return -1; }

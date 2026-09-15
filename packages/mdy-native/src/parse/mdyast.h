@@ -19,8 +19,10 @@
  *     19 property names href, id, className, dataFootnoteRef, src, width, …
  *
  * That is a much smaller thing than hast in general, and it is what makes a C
- * implementation tractable: no comments, no doctypes, no raw nodes, and a
- * closed vocabulary small enough to intern.
+ * implementation tractable: the PARSER produces three node types and a
+ * vocabulary small enough to intern. The tree can hold more — a doctype, a
+ * comment, a raw node — for the writer's sake, since a tree reaching it may
+ * have been built by other hands.
  *
  * NAMING. Every exported symbol is `mdy_`-prefixed, deliberately. Two of the
  * C projects already in this family — lamassu's regex engine and nisaba's —
@@ -153,8 +155,7 @@ static inline size_t mdy_text_len(const mdy_node *n) {
 /*
  * The subset of mdy-docs' options that changes the TREE. Everything left out
  * either changes nothing structural or belongs to a stage this does not
- * implement — see README.md's coverage table, which is generated from the
- * comparison harness rather than written by hand.
+ * implement — README.md says what each comparison harness measures.
  */
 /*
  * Colouring for fenced code, if the embedder has any. Called as a fence's

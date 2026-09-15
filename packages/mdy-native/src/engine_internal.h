@@ -315,7 +315,7 @@ struct mdy_engine {
  *
  * What every other part of the engine needs to make a value lamassu can hold,
  * or to read one back. The conversions themselves — trees, binjson, UTF-16 —
- * stay private to that file; these twelve are the ones the rest of the engine
+ * stay private to that file; these are the ones the rest of the engine
  * actually says out loud.
  */
 /* UTF-8 here, UTF-16 there. Both allocate; caller frees. The decoding is the

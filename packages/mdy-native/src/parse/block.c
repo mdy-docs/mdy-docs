@@ -1373,8 +1373,8 @@ static size_t parse_table(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
 
 /* ---- the block loop ------------------------------------------------------ */
 
-/* Returns whether anything was added — an all-whitespace run produces no
- * paragraph, and must not produce a separator either. */
+/* Returns whether anything was added: a run that trims to nothing adds no
+ * paragraph, and the block loop writes no separator for it either. */
 static int add_paragraph(mdy_doc *doc, mdy_node *parent, const char *joined, size_t len) {
     mdy_trim_end(&joined, &len);
     if (!len) return 0;

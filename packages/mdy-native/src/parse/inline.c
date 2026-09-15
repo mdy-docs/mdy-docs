@@ -175,10 +175,11 @@ typedef struct {
     const char *text;    /* what the spans are offsets into */
     /*
      * How far a wiki link's `]]` search has already come up empty. A `[[` that
-     * finds no closer before its line ends fails, and so does every later `[[`
-     * on that same line — a wiki link cannot cross a newline. Remembering the
-     * boundary turns a line of N unclosed `[[` from O(N^2) rescans into O(N).
-     * Monotonic: it only ever moves forward.
+     * finds no closer fails, and so does every later `[[` before the same
+     * point; remembering the boundary turns a line of N unclosed `[[` from
+     * O(N^2) rescans into O(N). The search stops at a newline, which costs
+     * nothing: no caller hands this text with one in it (lines are joined
+     * with a space first). Monotonic: it only ever moves forward.
      */
     const char *wiki_skip;
     /*
@@ -266,12 +267,6 @@ static void push(Ctx *ctx, const char *s, size_t n) {
     ctx->len += n;
 }
 
-/*
- * Scan `text` into `parent`. Recursion is one level per open marker, and a
- * marker that never closes degrades to literal text — checked by looking ahead
- * for the closer before opening anything, which is what makes an unmatched
- * `**` come out as two asterisks rather than swallowing the rest of the line.
- */
 /*
  * A typographic replacement at text[i] — an arrow (`-->`, `<==>`, …), a
  * three-dot ellipsis, or a two-dash em dash — as its UTF-8 bytes, or NULL, with
@@ -370,6 +365,12 @@ static size_t wiki_link_length(Ctx *ctx, const char *p, size_t left);
 static void parse_inline_spans(mdy_doc *doc, mdy_node *parent, const char *text, size_t len,
                                const Span *urls, size_t url_count);
 
+/*
+ * Scan `text` into `parent`. A marker always opens, and one that never
+ * closes runs to the end of the input, as inline.js has it; the closer is
+ * found first so the span's inside can be scanned as a slice, one level of
+ * recursion per open marker.
+ */
 static void scan(Ctx *ctx, const char *text, size_t len) {
     size_t i = 0;
     while (i < len) {
@@ -824,7 +825,7 @@ static size_t wiki_link_length(Ctx *ctx, const char *p, size_t left) {
     for (size_t j = 2; j + 1 < left; j++) {
         if (p[j] == ']' && p[j + 1] == ']') { close = j; found = 1; break; }
         /* No closer before the newline: remember it, so every `[[` up to it is
-         * answered without rescanning. A wiki link does not cross a line. */
+         * answered without rescanning. See Ctx.wiki_skip. */
         if (p[j] == '\n') { ctx->wiki_skip = p + j; return 0; }
     }
     if (!found) { ctx->wiki_skip = p + left; return 0; }   /* ran to the end, no closer */
