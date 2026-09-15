@@ -676,9 +676,23 @@ const char *mdy_heading_id(mdy_doc *doc, const char *text, size_t len, size_t *o
     const char *base = mdy_resolve_slug(doc, text, len, &base_len);
     if (!base || !base_len) return NULL;
 
+    /*
+     * How many earlier headings already took this base slug — the count the
+     * `-1`, `-2`, … suffix is built from. A linear scan over every prior id is
+     * O(headings^2) on a document that is mostly headings, so past a threshold
+     * the scan is replaced by a slug -> count index. Keyed on the INTERNED
+     * slug, which groups exactly as the strcmp below does (both stop at NUL).
+     */
+    const char *slug_key = NULL;
     size_t taken = 0;
-    for (size_t k = 0; k < doc->heading_count; k++)
-        if (strcmp(doc->heading_ids[k], base) == 0) taken++;
+    if (doc->heading_index) {
+        slug_key = mdy_intern(&doc->arena, &doc->names, base, strlen(base));
+        mdy_hentry *e = mdy_hindex_get(doc->heading_index, slug_key, 0);
+        taken = e ? e->val : 0;
+    } else {
+        for (size_t k = 0; k < doc->heading_count; k++)
+            if (strcmp(doc->heading_ids[k], base) == 0) taken++;
+    }
 
     const char *id = base;
     size_t id_len = base_len;
@@ -699,7 +713,36 @@ const char *mdy_heading_id(mdy_doc *doc, const char *text, size_t len, size_t *o
             doc->heading_cap = grown;
         }
     }
-    if (doc->heading_count < doc->heading_cap) doc->heading_ids[doc->heading_count++] = base;
+    int appended = 0;
+    if (doc->heading_count < doc->heading_cap) {
+        doc->heading_ids[doc->heading_count++] = base;
+        appended = 1;
+    }
+
+    /* Keep the count index in step with the array — and build it, once from
+     * the array we already have, when the scan grows long enough to bite. Both
+     * only run when the append landed, so the index never disagrees with it. */
+    if (appended && doc->heading_index) {
+        if (!slug_key) slug_key = mdy_intern(&doc->arena, &doc->names, base, strlen(base));
+        if (!mdy_hindex_put(doc, doc->heading_index, slug_key, 0, taken + 1))
+            doc->heading_index = NULL;   /* an allocation failed; the scan takes over */
+    } else if (appended && !doc->heading_noindex && doc->heading_count >= MDY_HINDEX_THRESHOLD) {
+        mdy_hindex *ix = mdy_alloc(&doc->arena, sizeof *ix);
+        if (!ix) {
+            doc->heading_noindex = 1;
+        } else {
+            memset(ix, 0, sizeof *ix);
+            int ok = 1;
+            for (size_t k = 0; k < doc->heading_count && ok; k++) {
+                const char *ki = mdy_intern(&doc->arena, &doc->names,
+                                            doc->heading_ids[k], strlen(doc->heading_ids[k]));
+                mdy_hentry *e = mdy_hindex_get(ix, ki, 0);
+                ok = mdy_hindex_put(doc, ix, ki, 0, e ? e->val + 1 : 1);
+            }
+            if (ok) doc->heading_index = ix;
+            else doc->heading_noindex = 1;   /* an allocation failed mid-build; do not thrash */
+        }
+    }
 
     if (out_len) *out_len = id_len;
     return id;

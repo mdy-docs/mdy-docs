@@ -13,6 +13,23 @@
 #include "internal.h"
 
 mdy_footnote *mdy_footnote_find(mdy_doc *doc, const char *id, size_t len) {
+    /*
+     * Once there are enough notes that this scan hurts, an id -> index map
+     * built alongside notes[] answers it in O(1). The map is keyed on the
+     * interned id, which is the full length the definition was stored with —
+     * so a hit still has to pass the exact predicate below (an id with an
+     * embedded NUL is stored longer than its C-string and must not match a
+     * shorter query), while a miss is a true miss: any id the scan would find
+     * has strlen == len == its stored length, so it is in the map too.
+     */
+    if (doc->note_index) {
+        const char *key = mdy_intern(&doc->arena, &doc->names, id, len);
+        mdy_hentry *e = mdy_hindex_get(doc->note_index, key, 0);
+        if (!e) return NULL;
+        mdy_footnote *n = &doc->notes[e->val];
+        if (strlen(n->id) == len && memcmp(n->id, id, len) == 0) return n;
+        /* the rare embedded-NUL hit: fall through to the exact scan */
+    }
     for (size_t i = 0; i < doc->note_count; i++) {
         if (strlen(doc->notes[i].id) == len && memcmp(doc->notes[i].id, id, len) == 0) {
             return &doc->notes[i];

@@ -190,11 +190,24 @@ void mdy_collect(mdy_doc *doc, mdy_ref_kind kind, const char *name, size_t len) 
      * of the link, not a reference the document makes — `parseInline(label,
      * {...options, collect: undefined})`. */
     if (doc->ref_off) return;
-    /* Only once each, per document — `!list.includes(name)`. */
-    for (size_t i = 0; i < doc->ref_count; i++) {
-        const mdy_reference *r = &doc->refs[i];
-        if (r->document == doc->ref_document && r->kind == kind &&
-            r->name_len == len && memcmp(r->name, name, len) == 0) return;
+    /*
+     * Only once each, per document — `!list.includes(name)`. The dedup key is
+     * (document, kind, name); past a threshold the linear `includes` becomes a
+     * (name -> presence) index, with document and kind folded into the tag so
+     * one table holds every document's names apart. The name is compared by
+     * length and bytes, which interning reproduces exactly.
+     */
+    uint64_t tag = ((uint64_t)doc->ref_document << 32) | (uint32_t)kind;
+    const char *name_key = NULL;
+    if (doc->ref_index) {
+        name_key = mdy_intern(&doc->arena, &doc->names, name, len);
+        if (mdy_hindex_get(doc->ref_index, name_key, tag)) return;
+    } else {
+        for (size_t i = 0; i < doc->ref_count; i++) {
+            const mdy_reference *r = &doc->refs[i];
+            if (r->document == doc->ref_document && r->kind == kind &&
+                r->name_len == len && memcmp(r->name, name, len) == 0) return;
+        }
     }
     if (doc->ref_count == doc->ref_cap) {
         size_t want = doc->ref_cap ? doc->ref_cap * 2 : 16;
@@ -209,6 +222,29 @@ void mdy_collect(mdy_doc *doc, mdy_ref_kind kind, const char *name, size_t len) 
     r->name = mdy_strdup_n(&doc->arena, name, len);
     r->name_len = len;
     r->document = doc->ref_document;
+
+    /* Keep the dedup index in step, and build it once the scan grows long. */
+    if (doc->ref_index) {
+        if (!name_key) name_key = mdy_intern(&doc->arena, &doc->names, name, len);
+        if (!mdy_hindex_put(doc, doc->ref_index, name_key, tag, 0))
+            doc->ref_index = NULL;
+    } else if (!doc->ref_noindex && doc->ref_count >= MDY_HINDEX_THRESHOLD) {
+        mdy_hindex *ix = mdy_alloc(&doc->arena, sizeof *ix);
+        if (!ix) {
+            doc->ref_noindex = 1;
+        } else {
+            memset(ix, 0, sizeof *ix);
+            int ok = 1;
+            for (size_t i = 0; i < doc->ref_count && ok; i++) {
+                const mdy_reference *e = &doc->refs[i];
+                const char *ki = mdy_intern(&doc->arena, &doc->names, e->name, e->name_len);
+                uint64_t kt = ((uint64_t)e->document << 32) | (uint32_t)e->kind;
+                ok = mdy_hindex_put(doc, ix, ki, kt, 0);
+            }
+            if (ok) doc->ref_index = ix;
+            else doc->ref_noindex = 1;
+        }
+    }
 }
 
 size_t mdy_reference_count(const mdy_doc *doc) {
@@ -2034,6 +2070,26 @@ static void collect_definitions(mdy_doc *doc, mdy_line *lines, size_t count) {
         note->number = 0;
         note->refs = 0;
 
+        /* Keep the id -> index map mdy_footnote_find reads in step, and build
+         * it once from notes[] when the list grows past the threshold. The
+         * key is the note's own interned id. */
+        if (doc->note_index) {
+            if (!mdy_hindex_put(doc, doc->note_index, note->id, 0, doc->note_count - 1))
+                doc->note_index = NULL;
+        } else if (!doc->note_noindex && doc->note_count >= MDY_HINDEX_THRESHOLD) {
+            mdy_hindex *ix = mdy_alloc(&doc->arena, sizeof *ix);
+            if (!ix) {
+                doc->note_noindex = 1;
+            } else {
+                memset(ix, 0, sizeof *ix);
+                int ok = 1;
+                for (size_t ni = 0; ni < doc->note_count && ok; ni++)
+                    ok = mdy_hindex_put(doc, ix, doc->notes[ni].id, 0, ni);
+                if (ok) doc->note_index = ix;
+                else doc->note_noindex = 1;
+            }
+        }
+
         for (size_t r = i; r <= last; r++) { lines[r].len = 0; lines[r].blank = 1; }
         i = last;
     }
@@ -2215,6 +2271,8 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
          * `#user-content-fn-1`.
          */
         doc->note_count = 0;
+        doc->note_index = NULL;     /* a document's notes are its own; so is their map */
+        doc->note_noindex = 0;
         doc->next_number = 0;
         doc->ref_document = (uint32_t)index;
         if (index == 0) {
