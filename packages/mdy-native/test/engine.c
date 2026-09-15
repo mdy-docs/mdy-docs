@@ -2481,6 +2481,54 @@ static void tag_checks(void) {
 }
 
 
+#ifndef _WIN32
+/*
+ * A symbolic link is not a source: node's readdir reports one as neither a
+ * file nor a directory, and the site it lists is the same here. A link to
+ * a parent, followed, would be walked until the path ran out.
+ */
+static void symlink_checks(void) {
+    printf("\n--- engine: symbolic links in a site ---\n");
+
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/mdy-links", tmp ? tmp : ".");
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+
+    write_file(root, "sub/real.md", "# real\n");
+    write_file(root, "main.mdy",
+        "% $.emit('paths.txt', $.find({}).map((d) => d.path).sort().join(','))\n");
+    char path[1024];
+    snprintf(path, sizeof path, "%s/alias.md", root);
+    int linked = symlink("sub/real.md", path) == 0;
+    snprintf(path, sizeof path, "%s/sub/loop", root);
+    linked = linked && symlink("..", path) == 0;
+    snprintf(path, sizeof path, "%s/gone.md", root);
+    linked = linked && symlink("nowhere.md", path) == 0;
+    if (!linked) { printf("  FAIL  cannot make a symbolic link\n"); failures++; fsx_rm_rf(root); free(root); return; }
+
+    mdy_engine *e = mdy_engine_new(S);
+    char err[512];
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+    char *html = NULL;
+    if (mdy_engine_open_dir(e, root, err, sizeof err) == 0) {
+        int entry = mdy_engine_entry(e, "main.mdy");
+        if (entry >= 0) html = mdy_engine_render(e, (size_t)entry, err, sizeof err);
+    }
+    ok_("a site with a file link, a directory loop and a dangling link builds", html != NULL, err);
+    ok_("...and lists the files node lists, with no link among them",
+        emitted("paths.txt") && strcmp(emitted("paths.txt"), "main.mdy,sub/real.md") == 0,
+        emitted("paths.txt"));
+    free(html);
+    mdy_engine_free(e);
+    fsx_rm_rf(root);
+    free(root);
+}
+#endif
+
 /* ---- the collector, and values this engine has just built --------------------
  *
  * The engine hands the VM values it makes itself: a record's keys, a tree's
@@ -3734,6 +3782,9 @@ int main(void) {
     resize_checks();
     bad_image_checks();
     tag_checks();
+#ifndef _WIN32
+    symlink_checks();
+#endif
     gc_checks();
     broker_checks();
 

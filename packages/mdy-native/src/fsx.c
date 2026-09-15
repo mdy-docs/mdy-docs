@@ -184,7 +184,9 @@ static int walk(const char *base, const char *rel, const char *exts, mdy_sbuf *o
         if (*rel) snprintf(child, clen, "%s/%s", rel, name);
         else snprintf(child, clen, "%s", name);
 
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            /* A symbolic link or junction: not a source, as on POSIX. */
+        } else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             rc = walk(base, child, exts, out);
         } else if (matches(name, exts)) {
             /* The name WITH its terminator; buf_put leaves another after it,
@@ -224,22 +226,30 @@ static int walk(const char *base, const char *rel, const char *exts, mdy_sbuf *o
         else snprintf(child, need, "%s", e->d_name);
 
         /*
-         * DT_UNKNOWN is real: several filesystems (and every one reached
+         * A symbolic link is neither a file nor a directory here, and is
+         * left out — which is what node's readdir({withFileTypes}) says of
+         * one, so a site lists the same files either way. It is also what
+         * keeps a link to a parent from being walked until the path runs
+         * out. DT_UNKNOWN is real: several filesystems (and every one reached
          * through some network layers) decline to answer from the directory
-         * entry, and a walk that trusts d_type silently loses whole subtrees
-         * there. Fall back to stat rather than guess.
+         * entry, so that case asks lstat rather than guessing.
          */
-        int is_dir;
-        if (e->d_type == DT_DIR) is_dir = 1;
-        else if (e->d_type == DT_REG) is_dir = 0;
+        int is_dir, is_link;
+        if (e->d_type == DT_DIR) { is_dir = 1; is_link = 0; }
+        else if (e->d_type == DT_REG) { is_dir = 0; is_link = 0; }
+        else if (e->d_type == DT_LNK) { is_dir = 0; is_link = 1; }
         else {
             char *full = at(base, child);
             struct stat st;
-            is_dir = full && stat(full, &st) == 0 && S_ISDIR(st.st_mode);
+            int known = full && lstat(full, &st) == 0;
+            is_link = known && S_ISLNK(st.st_mode);
+            is_dir = known && S_ISDIR(st.st_mode);
             free(full);
         }
 
-        if (is_dir) {
+        if (is_link) {
+            /* not a source */
+        } else if (is_dir) {
             if (walk(base, child, exts, out) < 0) { free(child); closedir(d); return -1; }
         } else if (matches(e->d_name, exts)) {
             /* The name WITH its terminator; buf_put leaves another after it,
@@ -457,11 +467,13 @@ static char *fsx_readdir(const char *path) {
 
         int is_dir;
         if (e->d_type == DT_DIR) is_dir = 1;
-        else if (e->d_type == DT_REG) is_dir = 0;
+        else if (e->d_type == DT_REG || e->d_type == DT_LNK) is_dir = 0;
         else {
+            /* lstat: a link to a directory is removed as a link, never
+             * descended, or the remover would empty what it points at. */
             char *full = at(path, e->d_name);
             struct stat st;
-            is_dir = full && stat(full, &st) == 0 && S_ISDIR(st.st_mode);
+            is_dir = full && lstat(full, &st) == 0 && S_ISDIR(st.st_mode);
             free(full);
         }
         if (is_dir) mdy_sbuf_put(&out, "/", 1);
@@ -500,16 +512,19 @@ int fsx_mkdirp(const char *path) {
 }
 
 /** Is this a directory? Used only to decide how to remove it. */
+/* A directory of its own — a link to one answers no, so the remover takes
+ * the link and leaves what it points at. */
 static int is_dir_path(const char *path) {
 #ifdef _WIN32
     wchar_t *w = win_widen(path);
     if (!w) return 0;
     DWORD attr = GetFileAttributesW(w);
     free(w);
-    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
+    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) &&
+           !(attr & FILE_ATTRIBUTE_REPARSE_POINT);
 #else
     struct stat st;
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    return lstat(path, &st) == 0 && S_ISDIR(st.st_mode);
 #endif
 }
 
@@ -531,7 +546,12 @@ int fsx_rm_rf(const char *path) {
 #ifdef _WIN32
         wchar_t *w = win_widen(path);
         if (!w) return -1;
-        int rc = _wunlink(w);
+        /* A directory junction or link is a directory to the delete call,
+         * and removing it takes only the link. */
+        DWORD attr = GetFileAttributesW(w);
+        int rc = attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)
+                     ? (RemoveDirectoryW(w) ? 0 : -1)
+                     : _wunlink(w);
         free(w);
         return (rc == 0 || errno == ENOENT) ? 0 : -1;
 #else
@@ -543,13 +563,15 @@ int fsx_rm_rf(const char *path) {
     char *listing = fsx_readdir(path);
     if (!listing) return 0;
     int rc = 0;
-    for (char *p = listing; *p; p += strlen(p) + 1) {
+    for (char *p = listing; *p;) {
         size_t len = strlen(p);
+        char *next = p + len + 1;             /* measured before the marker goes */
         if (len && p[len - 1] == '/') p[len - 1] = '\0'; /* the dir marker */
         char *child = at(path, p);
         if (!child) { rc = -1; break; }
         if (fsx_rm_rf(child) != 0) rc = -1;
         free(child);
+        p = next;
     }
     free(listing);
     return rc == 0 ? remove_dir(path) : rc;
