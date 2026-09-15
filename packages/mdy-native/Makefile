@@ -639,13 +639,13 @@ check-ingest: build/ingest-test$(EXE)
 # PREREQUISITE and not only an include: editing a header used to leave every
 # binary that depends on it untouched, and a stale build is a test result that
 # means nothing.
-ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_walk.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c src/xalloc.c
+ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_walk.c src/engine_memo.c src/ingest.c src/nis.c src/fsx.c src/oswin.c src/images.c src/http.c src/bjval.c src/watch.c src/httpd.c src/broker.c src/xalloc.c
 
 # ---- and the objects they compile to ---------------------------------------
 #
 # One object per source, and three binaries that link them — one `cc` over
-# all thirty-one sources would recompile nisaba's seventeen for a
-# one-character change to cli.c, and again for the test binary. cli.c and
+# every source would recompile nisaba's seventeen for a one-character
+# change to cli.c, and again for the test binary. cli.c and
 # test/engine.c are objects too, so an edit to either relinks and compiles
 # nothing else. ASan gets its own directory because its flags differ (-O1,
 # -fsanitize=address) and an object built one way is not the other.
@@ -658,7 +658,7 @@ ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_w
 # "No rule to make target".
 #
 # Basenames are the object names, so two sources may not share one. They are
-# distinct today across all thirty-one; the check below is what says so if a
+# distinct today across all of them; the check below is what says so if a
 # future one is not, because the failure otherwise is a silent mis-link.
 OBJ_SRCS  := $(ENGINE_SRCS) $(NIS_SRCS)
 ENGINE_OBJS := $(addprefix build/obj/,$(notdir $(OBJ_SRCS:.c=.o)))

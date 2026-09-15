@@ -370,6 +370,23 @@ Held *held_find(mdy_engine *e, const char *id);
 /* The text of a node whose only child is text, with its length, or NULL. */
 const char *sole_text(const mdy_node *n, size_t *len);
 
+/* ---- engine_memo.c: the render memo -----------------------------------------
+ *
+ * A render is a pure function of the document, its record and the request
+ * unless it reached outside them (`compose.taint`); what was pure is kept
+ * under a key for the next render, and the next build, to answer from.
+ */
+typedef struct { uint64_t key; mdy_doc *doc; char *text; } MemoEntry;
+void memo_open(mdy_session *s);                                      /* before the first key */
+uint64_t memo_key(mdy_engine *e, size_t index, JsValue request);     /* 0 means do not remember */
+MemoEntry *memo_take(mdy_engine *e, size_t index, uint64_t mkey);    /* the entry to answer from, or NULL */
+void memo_remember(mdy_engine *e, uint64_t mkey, mdy_doc *out, char *text);   /* copies the tree; takes `text` */
+mdy_doc *memo_copy(const mdy_doc *stored);
+void key_base36(uint64_t key, char out[TOKEN_ID_CAP]);   /* a key as a token id */
+int memo_debug(void);                                    /* MDY_MEMO_DEBUG, read once */
+/* A document's record as the guest sees it; fatal when the store cannot answer. */
+JsValue document_record(mdy_engine *e, size_t at);
+
 /* ---- engine_walk.c: a directory as a document set ---------------------------
  *
  * The walk itself is behind mdy_engine_open_dir (engine.h). What crosses are
