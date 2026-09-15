@@ -63,7 +63,8 @@ test('--publish delivers in this process, dead-letters a refusal, and renders th
     '+++\nmessageName: orders.bad\n+++\n% if (req.msg) throw new Error("nope")\nbad page\n');
   writeFileSync(join(site, 'orders.bad.dead.mdy'),
     '+++\nmessageName: orders.bad.dead\n+++\ndead: {{ req.msg ? req.msg.name : "page" }}\n');
-  const r = spawnSync(bin, [site, '--publish'], { encoding: 'utf8' });
+  const response = join(dir, 'pub-response.json');
+  const r = spawnSync(bin, [site, '--publish', '--response', response], { encoding: 'utf8' });
   const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/^\s*\d{1,2}:\d\d:\d\d [AP]M /gm, '');
   const out = strip(r.stdout), err = strip(r.stderr);
   assert.equal(r.status, 0, err);
@@ -75,6 +76,8 @@ test('--publish delivers in this process, dead-letters a refusal, and renders th
   assert.match(out, /\[dead\] orders\.bad\.dead #1 → rendered orders\.bad\.dead\.mdy in \d+ms\n  <p>dead: orders\.bad\.dead<\/p>\n/,
     'the dead-letter page renders in the same pass');
   assert.match(out, /\nsent\n$/, "the entry's own output still ends the run");
+  const answered = JSON.parse(readFileSync(response, 'utf8'));
+  assert.equal(answered.data.title, 'main', "--response is the entry's answer, not the last delivery's");
 });
 
 test('a .md is markdown, not a document', () => {

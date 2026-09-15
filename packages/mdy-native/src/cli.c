@@ -1121,8 +1121,10 @@ static char *generate_output(const DocOptions *o, mdy_session *session,
         }
         char *text = o->html ? mdy_engine_render(e, (size_t)at, err, sizeof err)
                              : mdy_engine_render_text(e, (size_t)at, err, sizeof err);
-        if (text && o->publish) publish_document(e, &messages);
+        /* The response is the ENTRY's, written before a delivery renders
+         * another document over it. */
         char *rerr = text ? write_response(e, o) : NULL;
+        if (text && o->publish) publish_document(e, &messages);
         messages_clear(&messages); free(messages.names); free(messages.json);
         mdy_engine_free(e);
         if (!text) { snprintf(msg, sizeof msg, "%s", err); return msg; }
@@ -1206,8 +1208,8 @@ static char *generate_output(const DocOptions *o, mdy_session *session,
     free(text);
     char *rendered = o->html ? mdy_engine_render(e, 0, err, sizeof err)
                              : mdy_engine_render_text(e, 0, err, sizeof err);
-    if (rendered && o->publish) publish_document(e, &messages);
     char *rerr = rendered ? write_response(e, o) : NULL;
+    if (rendered && o->publish) publish_document(e, &messages);
     messages_clear(&messages); free(messages.names); free(messages.json);
     mdy_engine_free(e);
     if (!rendered) { snprintf(msg, sizeof msg, "%s", err); return msg; }
