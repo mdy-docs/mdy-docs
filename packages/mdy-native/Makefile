@@ -193,14 +193,14 @@ build/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	@for f in $(SUKKAL_SRCS); do \
 	  $(CC) -std=gnu11 -O2 $(DEBUG) -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal/`basename $$f .c`.o || exit 1; \
 	done
-	$(AR) rcs $@ build/sukkal/*.o
+	$(AR) rcs $@ $(addprefix build/sukkal/,$(notdir $(SUKKAL_SRCS:.c=.o)))
 
 build/libsukkal-asan.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	@mkdir -p build/sukkal-asan
 	@for f in $(SUKKAL_SRCS); do \
 	  $(CC) -std=gnu11 -g -O1 -fsanitize=address -fno-omit-frame-pointer -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal-asan/`basename $$f .c`.o || exit 1; \
 	done
-	$(AR) rcs $@ build/sukkal-asan/*.o
+	$(AR) rcs $@ $(addprefix build/sukkal-asan/,$(notdir $(SUKKAL_SRCS:.c=.o)))
 
 # ---- the MDY front end, in C ----------------------------------------------
 #
@@ -952,12 +952,13 @@ LAM_INC  := -I$(LAMASSU)/include -I$(LAMASSU)/src -I$(LAMASSU)/src/runtime -I$(L
             -I$(LAMASSU)/third_party/baru-re/include -DLAMASSU_HAS_REGEX
 WASM_OUT := build/wasm/mdy-native.mjs
 
-build/wasm/liblamassu.a: $(LAM_SRCS)
+WASM_LAM_OBJS := $(addprefix build/wasm/lam/,$(notdir $(LAM_SRCS:.c=.o)))
+build/wasm/liblamassu.a: $(LAM_SRCS) $(wildcard $(LAMASSU)/include/*.h $(LAMASSU)/src/*/*.h)
 	@mkdir -p build/wasm/lam
 	@for f in $(LAM_SRCS); do \
 	  $(EMCC) -O2 -std=c11 -D_POSIX_C_SOURCE=200809L $(LAM_INC) -c $$f -o build/wasm/lam/`basename $$f .c`.o || exit 1; \
 	done
-	$(EMAR) rcs $@ build/wasm/lam/*.o
+	$(EMAR) rcs $@ $(WASM_LAM_OBJS)
 
 # -sSTACK_SIZE as lamassu's own package build sets it: the interpreter and
 # the parser both recurse. INVOKE_RUN=0 and EXIT_RUNTIME=0 so main() is
@@ -972,7 +973,7 @@ build/wasm/libmdyparse.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS)
 	@for f in $(PARSE_SRCS) $(MD4C_SRCS); do \
 	  $(EMCC) $(PARSE_CFLAGS) -c $$f -o build/wasm/parse/`basename $$f .c`.o || exit 1; \
 	done
-	$(EMAR) rcs $@ build/wasm/parse/*.o
+	$(EMAR) rcs $@ $(addprefix build/wasm/parse/,$(notdir $(PARSE_SRCS:.c=.o) $(MD4C_SRCS:.c=.o)))
 
 # Objects keep their paths here too, for the reason the native rule gives.
 build/wasm/liblexbor.a: $(LX_SRCS)
@@ -981,28 +982,28 @@ build/wasm/liblexbor.a: $(LX_SRCS)
 	  o=build/wasm/lexbor/`echo $$f | sed 's|^$(LX_DIR)/||; s|/|_|g; s|\.c$$|.o|'`; \
 	  $(EMCC) $(LX_CFLAGS) -c $$f -o $$o || exit 1; \
 	done
-	$(EMAR) rcs $@ build/wasm/lexbor/*.o
+	$(EMAR) rcs $@ $(foreach f,$(LX_SRCS),build/wasm/lexbor/$(subst /,_,$(patsubst $(LX_DIR)/%.c,%.o,$(f))))
 
 build/wasm/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	@mkdir -p build/wasm/sukkal
 	@for f in $(SUKKAL_SRCS); do \
 	  $(EMCC) -std=gnu11 -O2 -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/wasm/sukkal/`basename $$f .c`.o || exit 1; \
 	done
-	$(EMAR) rcs $@ build/wasm/sukkal/*.o
+	$(EMAR) rcs $@ $(addprefix build/wasm/sukkal/,$(notdir $(SUKKAL_SRCS:.c=.o)))
 
-# The one target still built in a single invocation. It is built rarely, emcc
-# spends its time linking rather than compiling, and the headers it depends on
-# are named by the .d files the native objects already wrote — so `make wasm`
-# after a header edit is correct because build/obj carries the knowledge, and
-# `make clean wasm` is correct because there is nothing to be stale.
-$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
+# The one target still built in a single invocation: it is built rarely, and
+# emcc spends its time linking rather than compiling. Every first-party header
+# is a prerequisite by name, since a single invocation writes no .d file to
+# learn them from.
+WASM_HDRS := $(wildcard src/*.h) $(PARSE_HDRS) $(HL_HDR)
+WASM_LINK := -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
+             -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
+             -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain
+$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) $(WASM_HDRS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a
 	@mkdir -p build/wasm
-	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
+	$(EMCC) -O2 -std=gnu11 -Wall -Wextra $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include \
 	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
-	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
-	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
-	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \
-	  -o $@
+	  $(WASM_LINK) -o $@
 
 # The same module with the failing allocator forced in, for check-alloc-wasm.
 # The parser gets its own instrumented archive for the reason the native sweep
@@ -1014,7 +1015,7 @@ build/wasm/libmdyparse-af.a: $(PARSE_SRCS) $(PARSE_HDRS) $(MD4C_SRCS) src/allocf
 	@for f in $(PARSE_SRCS) $(MD4C_SRCS); do \
 	  $(EMCC) $(PARSE_CFLAGS) -include src/allocfail.h -c $$f -o build/wasm/parse-af/`basename $$f .c`.o || exit 1; \
 	done
-	$(EMAR) rcs $@ build/wasm/parse-af/*.o
+	$(EMAR) rcs $@ $(addprefix build/wasm/parse-af/,$(notdir $(PARSE_SRCS:.c=.o) $(MD4C_SRCS:.c=.o)))
 
 # The shim itself is a separate object because -include applies to every
 # source on the command line, and it is the one file the macros must not
@@ -1025,17 +1026,14 @@ build/wasm/allocfail.o: src/allocfail.c src/allocfail.h
 
 # mdy_af_arm and mdy_af_total are exported because emscripten's getenv reads
 # its own ENV and cannot see the host's environment.
-$(WASM_AF_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o src/allocfail.h \
-                build/wasm/libmdyparse-af.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a $(HL_HDR)
+$(WASM_AF_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) $(WASM_HDRS) build/wasm/allocfail.o src/allocfail.h \
+                build/wasm/libmdyparse-af.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a
 	@mkdir -p build/wasm
-	$(EMCC) -O2 -std=gnu11 -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(NIS_RENAME) $(PARSE_INC) $(STB_INC) -I$(LAMASSU)/include \
+	$(EMCC) -O2 -std=gnu11 -Wall -Wextra $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include \
 	  -include src/allocfail.h \
 	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o \
 	  build/wasm/libmdyparse-af.a build/wasm/liblexbor.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
-	  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
-	  -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
-	  -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain \
-	  -sEXPORTED_FUNCTIONS=_main,_mdy_af_arm,_mdy_af_total \
+	  $(WASM_LINK) -sEXPORTED_FUNCTIONS=_main,_mdy_af_arm,_mdy_af_total \
 	  -o $@
 
 # The same sweep through the wasm engine, which is a different question and
