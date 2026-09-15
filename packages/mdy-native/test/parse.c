@@ -255,6 +255,8 @@ static void markdown_raw_checks(void) {
             html && strstr(html, "colspan=\"0.123456789\" rowspan=\"infinity\"") &&
             strstr(html, "colspan=\"16\" rowspan=\"Infinity\"") &&
             strstr(html, "colspan=\"7\" rowspan=\"nan\""), html);
+        ok_("an empty class attribute is an empty list",
+            json && strstr(json, "\"className\":[]") != NULL, json);
         free(json); free(html); mdy_free(d);
     }
 }

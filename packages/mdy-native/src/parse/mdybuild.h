@@ -52,6 +52,9 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node);
  * pick up classes from more than one rule. `className` is the common one and
  * has its own name; `ariaDescribedBy` on a footnote reference is the other.
  */
+/* `name` as an empty token list — `className: []`, which is what an empty
+ * `class=""` is. Adding a token to it afterwards appends as usual. */
+void mdy_set_list(mdy_doc *doc, mdy_node *el, const char *name);
 void mdy_add_token(mdy_doc *doc, mdy_node *el, const char *name, const char *token);
 void mdy_add_class(mdy_doc *doc, mdy_node *el, const char *class_name);
 

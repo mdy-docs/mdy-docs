@@ -166,6 +166,18 @@ void mdy_set_bool(mdy_doc *doc, mdy_node *el, const char *name, int value) {
  * — the HTML writer, the JSON writer and the bridge into the VM — were
  * already generic over the name; only this was not.
  */
+void mdy_set_list(mdy_doc *doc, mdy_node *el, const char *name) {
+    mdy_prop *p = NULL;
+    for (mdy_prop *q = el->props; q; q = q->next) {
+        if (strcmp(q->name, name) == 0) { p = q; break; }
+    }
+    if (!p) { p = new_prop(doc, el, name); if (!p) return; }
+    p->type = MDY_PROP_LIST;
+    p->list = NULL;
+    p->list_len = 0;
+    p->list_cap = 0;
+}
+
 void mdy_add_token(mdy_doc *doc, mdy_node *el, const char *name, const char *token) {
     mdy_prop *p = NULL;
     for (mdy_prop *q = el->props; q; q = q->next) {
