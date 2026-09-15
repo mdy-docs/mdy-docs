@@ -602,12 +602,16 @@ check-golden: build/mdy$(EXE)
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
 # ingest mdy.js does in JS — `collection.insertOne({ ...doc.data })` — done in
 # C, and it is the seam the engine will be built on.
-build/ingest-test$(EXE): test/ingest.c src/ingest.c src/nis.c src/oswin.c src/bjval.c src/xalloc.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB)
+INGEST_OBJS := $(addprefix build/obj/,ingest.o nis.o oswin.o bjval.o xalloc.o $(notdir $(NIS_SRCS:.c=.o)))
+build/obj/ingest-test.o: test/ingest.c
+	@mkdir -p build/obj
+	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
+build/ingest-test$(EXE): build/obj/ingest-test.o $(INGEST_OBJS) $(PARSE_LIB) $(LX_LIB)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME) \
-	  test/ingest.c src/ingest.c src/nis.c src/oswin.c src/bjval.c src/xalloc.c $(NIS_SRCS) $(PARSE_LIB) $(LX_LIB) -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) build/obj/ingest-test.o $(INGEST_OBJS) $(PARSE_LIB) $(LX_LIB) -o $@ $(LDLIBS)
 
 check-ingest: build/ingest-test$(EXE)
+	$(call FRESH,build/ingest-test$(EXE),src test/ingest.c)
 	@./build/ingest-test$(EXE)
 
 # The engine, in the four files it is: the document store and the natives and
@@ -701,7 +705,7 @@ ASAN_LIBS   := $(PARSE_ASAN_LIB) $(LX_ASAN_LIB) build/libsukkal-asan.a $(LAM_ASA
 
 -include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) $(AF_OBJS:.o=.d) \
          build/obj/cli.d build/obj-asan/cli.d build/obj-af/cli.d \
-         build/obj-af/allocfail.d build/obj/engine-test.d
+         build/obj-af/allocfail.d build/obj/engine-test.d build/obj/ingest-test.d build/obj-asan/engine-test.d
 
 # One document, end to end, with no JavaScript engine but lamassu — the three
 # passes of src/mdy.js done in C. No JavaScript engine but lamassu is linked
