@@ -7,6 +7,7 @@
  * document, and diffing. Key order is fixed here and matched on the JS side by
  * test/compare.mjs so the diff is byte for byte.
  */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -346,14 +347,67 @@ static int out_json_string(Out *o, const char *s) {
 static int out_number(Out *o, double v) {
     char buf[40];
     /* JSON cannot write an infinity or a NaN, so `null` — JSON.stringify's
-     * answer, and yaml.c's json_number's. The test is also what keeps
-     * (long long)v away from a non-finite, which is undefined. */
+     * answer, and yaml.c's json_number's. */
     if (v != v || v > 1.7976931348623157e308 || v < -1.7976931348623157e308)
         snprintf(buf, sizeof buf, "null");
-    else if (v >= -9.2e18 && v <= 9.2e18 && v == (double)(long long)v)
-        snprintf(buf, sizeof buf, "%lld", (long long)v);
-    else snprintf(buf, sizeof buf, "%.17g", v);
+    else mdy_format_number(buf, sizeof buf, v);
     return out_str(o, buf);
+}
+
+void mdy_format_number(char *out, size_t cap, double v) {
+    /* Range test BEFORE the cast: `(long long)v` is undefined outside the
+     * type's range. */
+    if (v > -9.2e18 && v < 9.2e18 && v == (double)(long long)v) {
+        snprintf(out, cap, "%lld", (long long)v);
+        return;
+    }
+    for (int digits = 15; digits <= 17; digits++) {
+        snprintf(out, cap, "%.*g", digits, v);
+        if (strtod(out, NULL) == v) return;
+    }
+}
+
+double mdy_js_number(const char *s, size_t len) {
+    mdy_trim(&s, &len);
+    if (len == 0) return 0;                          /* Number('') is 0 */
+    char small[64];
+    if (len >= sizeof small) return NAN;             /* longer than any number */
+    memcpy(small, s, len);
+    small[len] = '\0';
+    const char *t = small;
+    int neg = 0;
+    if (*t == '+' || *t == '-') { neg = *t == '-'; t++; }
+    if (strcmp(t, "Infinity") == 0) return neg ? -INFINITY : INFINITY;
+    if (t[0] == '0' && (t[1] == 'x' || t[1] == 'X' || t[1] == 'o' || t[1] == 'O' ||
+                        t[1] == 'b' || t[1] == 'B')) {
+        if (t != small) return NAN;                  /* no sign on a prefixed literal */
+        int base = (t[1] == 'x' || t[1] == 'X') ? 16 : (t[1] == 'o' || t[1] == 'O') ? 8 : 2;
+        if (!t[2]) return NAN;
+        double v = 0;
+        for (const char *d = t + 2; *d; d++) {
+            int digit = (*d >= '0' && *d <= '9') ? *d - '0'
+                      : (*d >= 'a' && *d <= 'f') ? *d - 'a' + 10
+                      : (*d >= 'A' && *d <= 'F') ? *d - 'A' + 10 : 99;
+            if (digit >= base) return NAN;
+            v = v * base + digit;
+        }
+        return v;
+    }
+    /* A decimal literal: digits, an optional point and fraction, an optional
+     * exponent — and nothing strtod admits beyond that (hex, inf, nan). */
+    const char *d = t;
+    size_t digits = 0;
+    while (*d >= '0' && *d <= '9') { d++; digits++; }
+    if (*d == '.') { d++; while (*d >= '0' && *d <= '9') { d++; digits++; } }
+    if (digits == 0) return NAN;
+    if (*d == 'e' || *d == 'E') {
+        d++;
+        if (*d == '+' || *d == '-') d++;
+        if (!(*d >= '0' && *d <= '9')) return NAN;
+        while (*d >= '0' && *d <= '9') d++;
+    }
+    if (*d) return NAN;
+    return strtod(small, NULL);
 }
 
 static int emit(Out *o, const mdy_node *n) {

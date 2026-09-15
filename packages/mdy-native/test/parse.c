@@ -9,6 +9,7 @@
 
 #include "mdyast.h"
 #include "mdyhtml.h"
+#include "mdymarkdown.h"
 #include "internal.h"
 
 static int failures = 0;
@@ -232,6 +233,32 @@ static void footnote_scale_checks(const mdy_options *o) {
     free(src);
 }
 
+/*
+ * Raw HTML through the .md front end: what hastscript makes of an attribute
+ * value, and how deep a raw fragment may go.
+ */
+static void markdown_raw_checks(void) {
+    printf("--- markdown: raw attributes, as hastscript reads them ---\n");
+    {
+        const char *why = NULL;
+        mdy_doc *d = mdy_markdown_parse(
+            "<table><tr><td colspan=\"0.123456789\" rowspan=\"infinity\">a</td>"
+            "<td colspan=\"0x10\" rowspan=\"1e400\">b</td>"
+            "<td colspan=\" 7 \" rowspan=\"nan\">c</td></tr></table>\n\n<p class=\"\">x</p>\n", 0, &why);
+        char *json = d ? mdy_to_json_bare(mdy_root(d)) : NULL;
+        char *html = d ? mdy_to_html(mdy_root(d), NULL) : NULL;
+        ok_("Number() of a value: a decimal as it is, hex read, `infinity` and `nan` kept as text",
+            json && strstr(json, "\"colSpan\":0.123456789,\"rowSpan\":\"infinity\"") &&
+            strstr(json, "\"colSpan\":16,\"rowSpan\":null") &&
+            strstr(json, "\"colSpan\":7,\"rowSpan\":\"nan\""), json);
+        ok_("…and the HTML writes what String() writes of each",
+            html && strstr(html, "colspan=\"0.123456789\" rowspan=\"infinity\"") &&
+            strstr(html, "colspan=\"16\" rowspan=\"Infinity\"") &&
+            strstr(html, "colspan=\"7\" rowspan=\"nan\""), html);
+        free(json); free(html); mdy_free(d);
+    }
+}
+
 int main(void) {
     mdy_options o;
     mdy_options_default(&o);
@@ -369,6 +396,7 @@ int main(void) {
           ROOT(EL("p", "", TX("body"))), &o);
     footnote_scale_checks(&o);
     intern_checks();
+    markdown_raw_checks();
 
     printf("--- mdyast: wiki links ---\n");
     /* defaultResolve DELETES what it cannot keep; slugify would hyphenate it.

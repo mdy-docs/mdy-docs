@@ -370,22 +370,17 @@ static void set_from_attribute(mdy_doc *doc, mdy_node *el,
             /* Nothing in it: an empty list, which is what the property is. */
             mdy_prop *q = NULL;
             for (mdy_prop *w = el->props; w; w = w->next) if (strcmp(w->name, hast) == 0) { q = w; break; }
-            if (!q) { mdy_set_string(doc, el, hast, "", 0); }
+            if (!q) mdy_set_list(doc, el, hast);
         }
         return;
     }
 
     if (flags & MDY_ATTR_NUMBER) {
-        /* `Number(value)` — and NaN keeps the string, which is what
-         * property-information's consumers do with one that is not a number. */
-        char small[64];
-        if (value_len < sizeof small) {
-            memcpy(small, value, value_len);
-            small[value_len] = '\0';
-            char *end = NULL;
-            double d = strtod(small, &end);
-            while (end && (*end == ' ' || *end == '\t')) end++;
-            if (value_len > 0 && end && *end == '\0') { mdy_set_number(doc, el, hast, d); return; }
+        /* hastscript's parsePrimitive: `Number(value)` for a non-empty value,
+         * and the string kept when that is NaN. */
+        if (value_len > 0) {
+            double d = mdy_js_number(value, value_len);
+            if (d == d) { mdy_set_number(doc, el, hast, d); return; }
         }
     }
 

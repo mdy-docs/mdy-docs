@@ -259,6 +259,22 @@ size_t mdy_normalize_link(const char *s, size_t len, char *out, size_t cap);
 
 
 
+/* ---- numbers ------------------------------------------------------------- */
+
+/*
+ * A finite number as JavaScript's `String(n)` writes it: an integer as its
+ * digits, anything else with the fewest digits that read back as the same
+ * value. One writer for the tree's JSON, the HTML and the YAML, so a number
+ * is spelled the same wherever it appears. The caller decides what a
+ * non-finite value means; this writes only finite ones.
+ */
+void mdy_format_number(char *out, size_t cap, double v);
+
+/* `Number(text)`: JavaScript's reading of a string as a number — whitespace
+ * trimmed, `Infinity` and the `0x`/`0o`/`0b` prefixes admitted, everything
+ * else a decimal literal or NaN. `len` bytes of `s`. */
+double mdy_js_number(const char *s, size_t len);
+
 /* ---- building ------------------------------------------------------------ */
 
 /* The tree builders are PUBLIC — anything that takes a tree apart and puts it

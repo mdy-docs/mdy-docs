@@ -172,21 +172,14 @@ static void attr_info(const char *property, size_t len, AttrInfo *out) {
 
 /* ---- values ---------------------------------------------------------------- */
 
-/** `String(value)` for a number, which for every value this tree can hold is
- * an integer. A non-integer would need JavaScript's own shortest-round-trip
- * formatting; nothing produces one, and `%g` would be a guess. */
+/** `String(value)` for a number. A raw attribute read as `Number()` can be
+ * any double, an infinity included; only a NaN is kept as its string. */
 static void put_number(mdy_buf *b, double v) {
     char tmp[40];
-    /*
-     * A non-finite cannot arrive here any more — the two producers of a number
-     * property are a list's `start` and the guest, and the guest's is filtered
-     * where it crosses (engine_value.c). The test stays because `(long long)`
-     * of an infinity is undefined behaviour whether or not anything reaches
-     * it, and because %g says "inf" rather than invoking it.
-     */
-    if (v == v && v >= -9.2e18 && v <= 9.2e18 && v == (double)(long long)v)
-        snprintf(tmp, sizeof tmp, "%lld", (long long)v);
-    else snprintf(tmp, sizeof tmp, "%g", v);
+    if (v != v) snprintf(tmp, sizeof tmp, "NaN");
+    else if (v > 1.7976931348623157e308) snprintf(tmp, sizeof tmp, "Infinity");
+    else if (v < -1.7976931348623157e308) snprintf(tmp, sizeof tmp, "-Infinity");
+    else mdy_format_number(tmp, sizeof tmp, v);
     puts_(b, tmp);
 }
 
