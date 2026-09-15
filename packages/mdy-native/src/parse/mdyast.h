@@ -115,6 +115,7 @@ typedef struct mdy_node {
     size_t text_len;         /* its byte length; 0 means "use strlen(text)" — see mdy_text_len */
     mdy_prop *props;         /* MDY_ELEMENT: first property, or NULL */
     mdy_prop *props_tail;    /* so appending stays O(1) */
+    struct mdy_pindex *pindex; /* lazy name->prop map; built past a threshold — see new_prop */
     struct mdy_node *first;  /* first child */
     struct mdy_node *last;   /* last child, so appending stays O(1) */
     struct mdy_node *next;   /* next sibling */

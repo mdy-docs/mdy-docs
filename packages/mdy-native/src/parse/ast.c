@@ -53,13 +53,73 @@ void mdy_append(mdy_node *parent, mdy_node *child) {
     parent->last = child;
 }
 
+/*
+ * A name -> property map for an element that has grown MANY properties.
+ *
+ * `properties` is an OBJECT, so a repeated name replaces rather than appends,
+ * and new_prop has to find any existing property of the same name. A linear
+ * scan of the list is O(n) per insert, so building an element with n distinct
+ * properties is O(n^2) — a raw `<div a1 a2 … a60000>` took 18 seconds. Past a
+ * threshold the element grows an open-addressing index instead, keyed on the
+ * INTERNED name pointer (unique per distinct name), which makes the lookup
+ * O(1) as the JavaScript's object is. Below the threshold no index is built,
+ * so the common few-property element pays nothing but one NULL pointer.
+ *
+ * Arena-allocated and never freed individually; a grow abandons the old table,
+ * which sums to O(n) like mdy_add_token's list.
+ */
+typedef struct mdy_pindex {
+    mdy_prop **slots;   /* open addressing; cap is a power of two */
+    size_t cap;
+    size_t count;
+} mdy_pindex;
+
+enum { PINDEX_THRESHOLD = 24 };   /* below this a linear scan is the cheaper thing */
+
+static size_t pindex_slot(mdy_prop **slots, size_t cap, const char *interned) {
+    size_t mask = cap - 1;
+    size_t h = ((uintptr_t)interned >> 4) & mask;
+    while (slots[h] && slots[h]->name != interned) h = (h + 1) & mask;
+    return h;
+}
+
+static void pindex_put(mdy_doc *doc, mdy_pindex *px, mdy_prop *p) {
+    if ((px->count + 1) * 4 >= px->cap * 3) {   /* keep the load under 3/4 */
+        size_t ncap = px->cap ? px->cap * 2 : 64;
+        mdy_prop **ns = mdy_alloc(&doc->arena, ncap * sizeof *ns);
+        if (!ns) return;
+        memset(ns, 0, ncap * sizeof *ns);
+        for (size_t i = 0; i < px->cap; i++)
+            if (px->slots[i]) ns[pindex_slot(ns, ncap, px->slots[i]->name)] = px->slots[i];
+        px->slots = ns;
+        px->cap = ncap;
+    }
+    px->slots[pindex_slot(px->slots, px->cap, p->name)] = p;
+    px->count++;
+}
+
 static mdy_prop *new_prop(mdy_doc *doc, mdy_node *el, const char *name) {
-    /* `properties` is an OBJECT, so a repeated name replaces rather than
-     * appends — emitting it twice produced JSON with a duplicate key, which is
-     * not the same thing at all. */
     const char *interned = mdy_intern(&doc->arena, &doc->names, name, strlen(name));
-    for (mdy_prop *q = el->props; q; q = q->next) {
-        if (q->name == interned) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return q; }
+
+    /* An existing property of this name is reused (its value replaced). */
+    if (el->pindex) {
+        mdy_prop *q = el->pindex->slots[pindex_slot(el->pindex->slots, el->pindex->cap, interned)];
+        if (q) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return q; }
+    } else {
+        size_t n = 0;
+        for (mdy_prop *q = el->props; q; q = q->next) {
+            n++;
+            if (q->name == interned) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return q; }
+        }
+        /* Long enough that the scan hurts: index this element from here on. */
+        if (n >= PINDEX_THRESHOLD) {
+            mdy_pindex *px = mdy_alloc(&doc->arena, sizeof *px);
+            if (px) {
+                memset(px, 0, sizeof *px);
+                for (mdy_prop *q = el->props; q; q = q->next) pindex_put(doc, px, q);
+                el->pindex = px;
+            }
+        }
     }
 
     mdy_prop *p = mdy_alloc(&doc->arena, sizeof *p);
@@ -69,6 +129,7 @@ static mdy_prop *new_prop(mdy_doc *doc, mdy_node *el, const char *name) {
     if (el->props_tail) el->props_tail->next = p;
     else el->props = p;
     el->props_tail = p;
+    if (el->pindex) pindex_put(doc, el->pindex, p);
     return p;
 }
 
