@@ -395,7 +395,14 @@ static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n, size_t dept
      * deeper content is dropped rather than crashing the parse; a raw fragment
      * nested that far is pathological.
      */
-    if (depth > MDY_MAX_DEPTH) return;
+    if (depth > MDY_MAX_DEPTH) {
+        if (!doc->raw_depth_warned) {
+            doc->raw_depth_warned = 1;
+            mdy_warn_inline(doc, "nesting-depth",
+                            "raw HTML nested deeper than %d levels is dropped", MDY_MAX_DEPTH);
+        }
+        return;
+    }
     for (; n != NULL; n = n->next) {
         switch (n->type) {
             case LXB_DOM_NODE_TYPE_ELEMENT: {

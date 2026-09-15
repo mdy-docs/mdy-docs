@@ -231,6 +231,7 @@ struct mdy_doc {
     /* Warnings, in the order they were raised. */
     mdy_message *messages;
     size_t message_count, message_cap;
+    int raw_depth_warned;    /* the raw-HTML depth warning is raised once */
 
     /* One per document, in order — see mdy_frontmatter. */
     mdy_frontmatter *matter;

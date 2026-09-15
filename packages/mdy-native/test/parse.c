@@ -259,6 +259,20 @@ static void markdown_raw_checks(void) {
             json && strstr(json, "\"className\":[]") != NULL, json);
         free(json); free(html); mdy_free(d);
     }
+    {
+        char *deep = malloc(300 * 3 + 16);
+        size_t n = 0;
+        for (int i = 0; i < 300; i++) n += (size_t)sprintf(deep + n, "<b>");
+        sprintf(deep + n, "x\n");
+        const char *why = NULL;
+        mdy_doc *d = mdy_markdown_parse(deep, 0, &why);
+        ok_("raw HTML past the depth limit is dropped with one warning, not silently",
+            d && mdy_message_count(d) == 1 &&
+            strcmp(mdy_message_at(d, 0)->rule, "nesting-depth") == 0,
+            d ? "a different message count" : why);
+        mdy_free(d);
+        free(deep);
+    }
 }
 
 int main(void) {
