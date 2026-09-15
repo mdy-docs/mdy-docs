@@ -2139,6 +2139,36 @@ static bool import_resize_native(JsContext *ctx, JsValue this_val, const JsValue
     return resize_in(e, set, args + 1, argc - 1, result);
 }
 
+/*
+ * The most a resize will make. A request decides the allocation, and a
+ * document may ask for anything; these are past any page's use and well
+ * inside what the encoder's int arithmetic holds.
+ */
+#define RESIZE_SIDE_MAX 16384
+#define RESIZE_PIXELS_MAX (64 * 1024 * 1024)
+
+/*
+ * One side of a resize request, as mdy-docs reads it: absent when null or
+ * undefined (0 returned), otherwise the value as `Math.round` would see it —
+ * a number as it is, a string through Number(), anything else NaN.
+ */
+static int resize_dimension(JsValue v, double *out) {
+    if (js_is_undefined(v) || js_is_null(v)) return 0;
+    if (js_is_number(v)) { *out = js_get_number(v); return 1; }
+    *out = NAN;
+    if (js_is_string(v)) {
+        char *s = js_string_utf8(v);
+        if (s) {
+            char *end = NULL;
+            double d = strtod(s, &end);
+            while (end && (*end == ' ' || *end == '\t' || *end == '\n')) end++;
+            if (end && end != s && !*end) *out = d;
+            free(s);
+        }
+    }
+    return 1;
+}
+
 /* The `{ path, url, width, height }` object $.resize answers with — built the
  * same way whether the result was just made or found already done. */
 static JsValue resize_result(mdy_engine *e, const char *out_path, int width, int height) {
@@ -2212,16 +2242,27 @@ static bool resize_in(mdy_engine *e, mdy_engine *from, const JsValue *args,
                                        : js_undefined();
     JsValue oh = js_is_object(options) ? get_val(e, options, "height")
                                        : js_undefined();
-    int has_w = js_is_number(ow), has_h = js_is_number(oh);
+    double want_w = 0, want_h = 0;
+    int has_w = resize_dimension(ow, &want_w), has_h = resize_dimension(oh, &want_h);
     if (!has_w && !has_h) RESIZE_FAIL("resize: pass at least one of { width, height }");
-    double want_w = has_w ? js_get_number(ow) : 0;
-    double want_h = has_h ? js_get_number(oh) : 0;
     if (!has_w) want_w = floor((want_h / src_h) * src_w + 0.5);
     if (!has_h) want_h = floor((want_w / src_w) * src_h + 0.5);
-    int width = (int)floor(want_w + 0.5);
-    int height = (int)floor(want_h + 0.5);
-    if (width < 1) width = 1;
-    if (height < 1) height = 1;
+    /*
+     * A size that is not a number, or is one this engine will not make, is
+     * refused before anything is decoded: the request decides how much is
+     * allocated, and the cast below is only defined inside int.
+     */
+    if (!isfinite(want_w) || !isfinite(want_h))
+        RESIZE_FAIL("resize: width and height must be numbers");
+    want_w = floor(want_w + 0.5);
+    want_h = floor(want_h + 0.5);
+    if (want_w < 1) want_w = 1;
+    if (want_h < 1) want_h = 1;
+    if (want_w > RESIZE_SIDE_MAX || want_h > RESIZE_SIDE_MAX || want_w * want_h > RESIZE_PIXELS_MAX)
+        RESIZE_FAIL("resize: %.0fx%.0f is larger than this engine will make (at most %d on a side, %d pixels)",
+                    want_w, want_h, RESIZE_SIDE_MAX, RESIZE_PIXELS_MAX);
+    int width = (int)want_w;
+    int height = (int)want_h;
 
     /* Where it lands: dist-relative, with static/ flattened away. */
     size_t plen = strlen(path), elen = strlen(ext);

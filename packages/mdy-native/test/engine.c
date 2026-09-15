@@ -2859,7 +2859,11 @@ static void resize_checks(void) {
         "% refused('r-notdoc.txt', () => $.resize({ nope: 1 }, { width: 4 }))\n"
         "% refused('r-notpng.txt', () => $.resize($.findOne({ path: 'static/notes.txt' }), { width: 4 }))\n"
         "% refused('r-nodims.txt', () => $.resize($.findOne({ path: 'static/bad.png' }), { width: 4 }))\n"
-        "% refused('r-nosize.txt', () => $.resize(logo, {}))\n");
+        "% refused('r-nosize.txt', () => $.resize(logo, {}))\n"
+        "% refused('r-huge.txt', () => $.resize(logo, { width: 600000000, height: 1 }))\n"
+        "% refused('r-nan.txt', () => $.resize(logo, { width: NaN }))\n"
+        "% const s = $.resize(logo, { width: '20' })\n"
+        "% $.emit('s.txt', s.path)\n");
 
     mdy_engine *e = mdy_engine_new(S);
     char err[512];
@@ -2925,6 +2929,19 @@ static void resize_checks(void) {
         emitted("r-nosize.txt") && strcmp(emitted("r-nosize.txt"),
             "resize: pass at least one of { width, height }") == 0,
         emitted("r-nosize.txt"));
+    /* A size decides an allocation, so one past what a page could use is
+     * refused before the file is read; so is one that is not a number. */
+    ok_("a size past the limit is refused before anything is decoded",
+        emitted("r-huge.txt") && strncmp(emitted("r-huge.txt"),
+            "resize: 600000000x1 is larger than this engine will make", 56) == 0,
+        emitted("r-huge.txt"));
+    ok_("...and so is a size that is not a number",
+        emitted("r-nan.txt") && strcmp(emitted("r-nan.txt"),
+            "resize: width and height must be numbers") == 0,
+        emitted("r-nan.txt"));
+    ok_("a size given as a string is read as node reads it",
+        emitted("s.txt") && strcmp(emitted("s.txt"), "logo-20x13.png") == 0,
+        emitted("s.txt"));
 
     /* The bytes are a real PNG of the size asked for — checked by reading the
      * header back, because "it wrote something" is not the claim. */

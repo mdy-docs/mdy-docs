@@ -339,6 +339,11 @@ uint8_t *mdy_image_resize_png(const uint8_t *bytes, size_t len,
     int sw = 0, sh = 0, channels = 0;
     /* Four channels always: a PNG may be grey, paletted or RGB, and asking for
      * RGBA makes the resampler's job one case instead of four. */
+    /* The stride below is width * 4 in an int, and the buffer is that times
+     * the height; a request past either is refused here whatever the caller
+     * checked. */
+    if (width < 1 || height < 1 || width > INT_MAX / 4 || (size_t)width * 4 > SIZE_MAX / (size_t)height)
+        return NULL;
     unsigned char *pixels = stbi_load_from_memory(bytes, (int)len, &sw, &sh, &channels, 4);
     if (!pixels) return NULL;
 
