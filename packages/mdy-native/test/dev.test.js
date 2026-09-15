@@ -596,3 +596,27 @@ test('what is valid still works, and `--` still escapes', async () => {
   assert.equal(code, 1);
   assert.doesNotMatch(text, /Unknown option/, '`--` makes it a positional');
 });
+
+test('dev refuses a port already in use', async () => {
+  /* Two servers must not silently share a port — the second one has to say
+   * the port is taken and exit, not quietly bind nothing. SO_REUSEADDR lets a
+   * port in TIME_WAIT be reused, but not one that is actively listening. */
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'), '% $.emit("i.html", "x")\n= main\n');
+
+  const first = startDev(root);
+  try {
+    const [, port] = await first.until(/http:\/\/localhost:(\d+)/);
+
+    const second = spawn(bin, ['dev', root, '--port', port]);
+    let log = '';
+    second.stderr.on('data', (b) => { log += b; });
+    second.stdout.on('data', (b) => { log += b; });
+    const code = await new Promise((resolve) => second.on('exit', resolve));
+
+    assert.equal(code, 1, 'the second server exits non-zero');
+    assert.match(log, /EADDRINUSE|address already in use/);
+  } finally {
+    first.child.kill();
+  }
+});

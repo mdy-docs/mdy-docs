@@ -15,8 +15,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -153,4 +153,103 @@ test('--html is refused for a record, which has no rendered form', () => {
   const { status, stderr } = refuses([y, '--html']);
   assert.equal(status, 1);
   assert.match(stderr, /--html has no meaning for a data file/);
+});
+
+/*
+ * ---- the CLI's own error and knob paths ----------------------------------
+ *
+ * The options a document renders WITH — --data, --data-file, --scope,
+ * --response, --sanitize, -o — had almost no tests below the extension
+ * dispatch: a malformed --data-file, an unwritable -o, a --scope key that
+ * collides with a binding, and the working paths of --scope/--response/
+ * --sanitize (only their refusal on a .md/.yaml was pinned). These run against
+ * a .mdy input, where the code-requiring options are not refused for the file
+ * kind, so the option logic itself is what is under test. Native only, like
+ * the rest of this file: node's `bin/mdy.js` has no --scope/--response/
+ * --sanitize.
+ */
+const DOC = '+++\ntitle: T\n+++\n= {{ res.data.title }}\n';
+
+test('--data without = is refused', () => {
+  const m = write('opt-data.mdy', DOC);
+  const { status, stderr } = refuses([m, '-d', 'novalue']);
+  assert.equal(status, 1);
+  assert.match(stderr, /--data expects key=value, got "novalue"/);
+});
+
+test('--data-file that is not there names the file', () => {
+  const m = write('opt-df1.mdy', DOC);
+  const { status, stderr } = refuses([m, '--data-file', join(dir, 'no-such.yaml')]);
+  assert.equal(status, 1);
+  assert.match(stderr, /cannot read --data-file: no such file/);
+});
+
+test('--data-file that will not parse says which line', () => {
+  const m = write('opt-df2.mdy', DOC);
+  const bad = write('df-bad.yaml', 'a: [unclosed\n');
+  const { status, stderr } = refuses([m, '--data-file', bad]);
+  assert.equal(status, 1);
+  assert.match(stderr, /cannot read --data-file:.*line \d/);
+});
+
+test('--data-file that is a sequence, not a mapping, is refused', () => {
+  const m = write('opt-df3.mdy', DOC);
+  const seq = write('df-seq.yaml', '- one\n- two\n');
+  const { status, stderr } = refuses([m, '--data-file', seq]);
+  assert.equal(status, 1);
+  assert.match(stderr, /--data-file must contain a YAML\/JSON mapping/);
+});
+
+test('--scope that is not a mapping is refused', () => {
+  const m = write('opt-sc1.mdy', DOC);
+  const seq = write('scope-seq.yaml', '- one\n');
+  const { status, stderr } = refuses([m, '--scope', seq]);
+  assert.equal(status, 1);
+  assert.match(stderr, /--scope must contain a YAML\/JSON mapping/);
+});
+
+test('--scope with a reserved name (req) is refused, not silently shadowed', () => {
+  const m = write('opt-sc2.mdy', DOC);
+  const bad = write('scope-req.yaml', 'req: 1\n');
+  const { status, stderr } = refuses([m, '--scope', bad]);
+  assert.equal(status, 1);
+  assert.match(stderr, /"req" cannot be a variable/);
+});
+
+test('-o that cannot be written (a missing directory) says so', () => {
+  const m = write('opt-out.mdy', DOC);
+  const { status, stderr } = refuses([m, '--html', '-o', join(dir, 'no-dir', 'out.html')]);
+  assert.equal(status, 1);
+  assert.match(stderr, /cannot write --out/);
+});
+
+test('--response that cannot be written says so', () => {
+  const m = write('opt-resp-bad.mdy', DOC);
+  const { status, stderr } = refuses([m, '--html', '--response', join(dir, 'no-dir', 'r.json')]);
+  assert.equal(status, 1);
+  assert.match(stderr, /cannot write --response/);
+});
+
+test('--scope binds each mapping key as a variable in the document', () => {
+  const m = write('opt-scope-ok.mdy', '+++\n+++\n= {{ greeting }} {{ n }}\n');
+  const scope = write('scope-ok.yaml', 'greeting: hi\nn: 5\n');
+  assert.match(run([m, '--scope', scope, '--html']), /<h1 id="hi-5">hi 5<\/h1>/);
+});
+
+test('--response writes what the document answered with, as JSON', () => {
+  const m = write('opt-resp-ok.mdy', '+++\ntitle: T\n+++\n= x\n');
+  const out = join(dir, 'resp-ok.json');
+  run([m, '--response', out, '--html']);
+  const res = JSON.parse(readFileSync(out, 'utf8'));
+  assert.equal(res.data.title, 'T');
+  /* `res` minus the tree: the data the document referred to, no `doc`. */
+  assert.equal(res.doc, undefined);
+});
+
+test('--sanitize drops a disallowed element and warns about it', () => {
+  const m = write('opt-san.mdy', '+++\n+++\n<script>alert(1)</script>\n= hi\n');
+  const r = spawnSync(bin, [m, '--sanitize', '--html'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.doesNotMatch(r.stdout, /<script>/);
+  assert.match(r.stderr, /`<script>` is not allowed, dropping it and its content \(sanitize\)/);
 });
