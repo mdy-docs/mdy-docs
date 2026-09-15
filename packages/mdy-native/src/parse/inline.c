@@ -193,11 +193,21 @@ typedef struct {
 
 /** Is `i` inside a URL that autolink will consume? */
 static int inside_url(const Ctx *ctx, size_t i) {
-    for (size_t k = 0; k < ctx->url_count; k++) {
-        if (i >= ctx->urls[k].start && i < ctx->urls[k].end) return 1;
-        if (ctx->urls[k].start > i) break;
+    /*
+     * The spans are sorted by start and do not overlap, so at most one can
+     * contain i: the last one that begins at or before it. A binary search
+     * finds that candidate — the scan this replaces was O(spans) per call and
+     * called once per byte (and again per byte inside the marker-closer scan),
+     * so a paragraph that was mostly URLs was quadratic.
+     */
+    size_t lo = 0, hi = ctx->url_count;
+    while (lo < hi) {                       /* upper bound: first span past i */
+        size_t mid = lo + (hi - lo) / 2;
+        if (ctx->urls[mid].start <= i) lo = mid + 1;
+        else hi = mid;
     }
-    return 0;
+    if (lo == 0) return 0;                  /* no span begins at or before i */
+    return i < ctx->urls[lo - 1].end;       /* start <= i already; inside iff before end */
 }
 
 static void flush(Ctx *ctx) {
@@ -500,9 +510,17 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
         {
             size_t n = 0;
             int mailto = 0;
-            for (size_t k = 0; k < ctx->url_count; k++) {
-                if (ctx->urls[k].start == i) { n = ctx->urls[k].end - i; mailto = ctx->urls[k].mailto; break; }
-                if (ctx->urls[k].start > i) break;
+            /* The one span that could start exactly here — binary search over
+             * the sorted starts, for the same reason inside_url does. */
+            size_t lo = 0, hi = ctx->url_count;
+            while (lo < hi) {               /* lower bound: first start >= i */
+                size_t mid = lo + (hi - lo) / 2;
+                if (ctx->urls[mid].start < i) lo = mid + 1;
+                else hi = mid;
+            }
+            if (lo < ctx->url_count && ctx->urls[lo].start == i) {
+                n = ctx->urls[lo].end - i;
+                mailto = ctx->urls[lo].mailto;
             }
             if (n > 0) {
                 flush(ctx);
