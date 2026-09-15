@@ -21,7 +21,7 @@ import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -698,6 +698,105 @@ test("dev serves a site's own 404.html for the unknown, when it has one", async 
     assert.equal(missing.status, 404);
     assert.match(missing.body, /custom not found/, "the site's own 404 page is used");
     assert.match(missing.body, /EventSource/, 'and it too carries the reload client');
+  } finally {
+    dev.child.kill();
+  }
+});
+
+/*
+ * Watch mode (findings 7.4). The watcher is a poll: a snapshot of every file
+ * under the roots — path, size, mtime — diffed every ~120 ms, and the poll
+ * interval IS the debounce (watch.h). The re-render-on-change and error-
+ * recovery cases are covered above; these pin the rest — a change noticed on
+ * delete, on an atomic save-by-rename, and on a sibling that is not the entry
+ * — and that a burst of writes coalesces into far fewer rebuilds than writes.
+ *
+ * The first build is silent by design (dev_rebuild's `first`), so every count
+ * here is of the REBUILDS after the ready banner, which do log `rendered`.
+ */
+const rebuilds = (log) => (log.match(/\] rendered /g) || []).length;
+async function untilRebuilds(dev, atLeast, ms = 15000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (rebuilds(dev.log()) >= atLeast) return;
+    if (dev.child.exitCode !== null) throw new Error(`the server exited\n${dev.log()}`);
+    if (Date.now() > deadline) throw new Error(`only ${rebuilds(dev.log())} rebuilds\n${dev.log()}`);
+    await new Promise((r) => setTimeout(r, 30));
+  }
+}
+
+test('the watcher notices a sibling .yaml change and a deletion, not just the entry', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'), '% $.emit("index.html", "x")\n= x\n');
+  writeFileSync(join(root, 'data.yaml'), 'a: 1\n');
+  writeFileSync(join(root, 'note.md'), 'first\n');
+
+  const dev = startDev(root);
+  try {
+    await dev.until(/http:\/\/localhost:(\d+)/);   /* the first build is done */
+
+    /* A file that is not the entry, and not even imported, still counts: the
+     * snapshot covers everything under the root. */
+    writeFileSync(join(root, 'data.yaml'), 'a: 2\n');
+    await untilRebuilds(dev, 1);
+    assert.match(dev.log(), /\[change\][^\n]*data\.yaml/, 'and the change names the .yaml');
+
+    /* A deletion is a change too — the file leaves the snapshot. */
+    unlinkSync(join(root, 'note.md'));
+    await untilRebuilds(dev, 2);
+    assert.match(dev.log(), /\[change\][^\n]*note\.md/, 'and names the file that went away');
+
+    assert.equal(dev.child.exitCode, null, 'and the server rides all of it out');
+  } finally {
+    dev.child.kill();
+  }
+});
+
+test('an atomic save (write a temp, rename over) is picked up', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'),
+    '% $.emit("index.html", "<html><body>before</body></html>")\n= x\n');
+
+  const dev = startDev(root);
+  try {
+    const [, port] = await dev.until(/http:\/\/localhost:(\d+)/);
+    assert.match((await get(port, '/')).body, /before/);
+
+    /* How every serious editor writes: a new file beside the old, then a
+     * rename over it. The watcher follows the directory, so it sees the
+     * entry's size and mtime change and rebuilds. */
+    const tmp = join(root, 'main.mdy.tmp');
+    writeFileSync(tmp, '% $.emit("index.html", "<html><body>after</body></html>")\n= x\n');
+    renameSync(tmp, join(root, 'main.mdy'));
+    await untilRebuilds(dev, 1);
+
+    assert.match((await get(port, '/')).body, /after/, 'the renamed content is what is served');
+  } finally {
+    dev.child.kill();
+  }
+});
+
+test('a burst of writes coalesces into far fewer rebuilds than writes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  const main = join(root, 'main.mdy');
+  writeFileSync(main, '% $.emit("index.html", "x")\n= 0\n');
+
+  const dev = startDev(root);
+  try {
+    await dev.until(/http:\/\/localhost:(\d+)/);
+
+    /* Ten writes back to back, well inside one poll interval. The poll is the
+     * debounce: the snapshot taken after them sees one net change. */
+    for (let i = 1; i <= 10; i++) {
+      writeFileSync(main, `% $.emit("index.html", "x")\n= ${i}\n`);
+    }
+
+    /* Let the watcher settle: several poll intervals with no new writes. */
+    await new Promise((r) => setTimeout(r, 800));
+    const n = rebuilds(dev.log());
+
+    assert.ok(n >= 1, `the burst did rebuild (${n})`);
+    assert.ok(n <= 4, `but the ten writes coalesced, not one-rebuild-each (${n})`);
   } finally {
     dev.child.kill();
   }
