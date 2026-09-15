@@ -195,7 +195,7 @@ static int tiff_size(const uint8_t *b, size_t n, int *w, int *h) {
     uint32_t off = little ? le32(b + 4) : be32(b + 4);
     if ((uint64_t)off + 2 > n) return -1;
     uint16_t count = little ? le16(b + off) : be16(b + off);
-    int found = 0;
+    int have_w = 0, have_h = 0;
     for (uint16_t i = 0; i < count; i++) {
         uint64_t e = (uint64_t)off + 2 + (uint64_t)i * 12;
         if (e + 12 > n) return -1;
@@ -203,30 +203,59 @@ static int tiff_size(const uint8_t *b, size_t n, int *w, int *h) {
         uint16_t tag = little ? le16(at) : be16(at);
         uint16_t type = little ? le16(at + 2) : be16(at + 2);
         if (tag != 0x0100 && tag != 0x0101) continue;
-        /* SHORT is 3, LONG is 4; either is stored inline in the value field. */
+        /* SHORT is 3, LONG is 4, each stored inline in the value field; a
+         * dimension of any other type is a file this does not read. */
+        if (type != 3 && type != 4) return -1;
         uint32_t v = type == 3 ? (little ? le16(at + 8) : be16(at + 8))
                                : (little ? le32(at + 8) : be32(at + 8));
-        if (tag == 0x0100) *w = (int)v; else *h = (int)v;
-        if (++found == 2) return 0;
+        if (v > 0x7fffffff) return -1;
+        if (tag == 0x0100) { *w = (int)v; have_w = 1; } else { *h = (int)v; have_h = 1; }
+        if (have_w && have_h) return 0;
     }
     return -1;
 }
 
 /*
- * AVIF and HEIC: ISOBMFF, where the size lives in an `ispe` box. Rather than
- * walk the box tree, the file is scanned for the box type — `ispe` carries a
- * version/flags word then the two dimensions, and the FIRST one is the primary
- * item's in every file this has been tried on.
+ * AVIF and HEIC: ISOBMFF, read as the `image-size` package reads it, since
+ * that is what writes the record on the other side: the first `ispe` box in
+ * `meta` > `iprp` > `ipco`, its width less the right crop of a `clap` box
+ * that follows it in the same `ipco`.
  */
+
+/* The box named `name` at or after `at`, within `end`: its offset and size
+ * through `*size`, or 0 when there is none. A box shorter than its header is
+ * where the search stops, as it is for image-size. */
+static size_t find_box(const uint8_t *b, size_t at, size_t end, const char *name, size_t *size) {
+    while (at + 8 <= end) {
+        uint32_t box = be32(b + at);
+        if (box < 8 || (uint64_t)at + box > end) return 0;
+        if (memcmp(b + at + 4, name, 4) == 0) { *size = box; return at; }
+        at += box;
+    }
+    return 0;
+}
+
 static int isobmff_size(const uint8_t *b, size_t n, int *w, int *h) {
     if (n < 12 || memcmp(b + 4, "ftyp", 4) != 0) return -1;
-    for (size_t i = 0; i + 20 <= n; i++) {
-        if (memcmp(b + i, "ispe", 4) != 0) continue;
-        *w = (int)be32(b + i + 8);
-        *h = (int)be32(b + i + 12);
-        return (*w > 0 && *h > 0) ? 0 : -1;
-    }
-    return -1;
+    size_t size = 0;
+    size_t meta = find_box(b, 0, n, "meta", &size);
+    if (!meta) return -1;
+    size_t meta_end = meta + size;
+    size_t iprp = find_box(b, meta + 12, meta_end, "iprp", &size);   /* meta is a full box: 4 more bytes */
+    if (!iprp) return -1;
+    size_t iprp_end = iprp + size;
+    size_t ipco = find_box(b, iprp + 8, iprp_end, "ipco", &size);
+    if (!ipco) return -1;
+    size_t ipco_end = ipco + size;
+    size_t ispe = find_box(b, ipco + 8, ipco_end, "ispe", &size);
+    if (!ispe || ispe + 20 > ipco_end) return -1;
+    uint32_t width = be32(b + ispe + 12), height = be32(b + ispe + 16);
+    size_t clap = find_box(b, ipco + 8, ipco_end, "clap", &size);
+    if (clap && clap + 16 <= ipco_end) width -= be32(b + clap + 12);
+    if (width == 0 || height == 0 || width > 0x7fffffff || height > 0x7fffffff) return -1;
+    *w = (int)width;
+    *h = (int)height;
+    return 0;
 }
 
 /*

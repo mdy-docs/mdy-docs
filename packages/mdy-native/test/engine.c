@@ -2404,6 +2404,29 @@ static void bad_image_checks(void) {
     write_bytes(root, "d-count.tif", count, sizeof count);
     write_bytes(root, "e-cut.tif", cut, sizeof cut);
     write_bytes(root, "f-empty.tif", cut, 0);
+    /* A width of a type other than SHORT or LONG, and a width given twice
+     * with no height: neither is a size. */
+    static const uint8_t byte_type[] = { 'I','I',0x2a,0x00, 0x08,0x00,0x00,0x00, 0x02,0x00,
+        0x00,0x01, 0x01,0x00, 0x01,0x00,0x00,0x00, 0x05,0x00,0x00,0x00,
+        0x01,0x01, 0x03,0x00, 0x01,0x00,0x00,0x00, 0x05,0x00,0x00,0x00 };
+    static const uint8_t twice[] = { 'I','I',0x2a,0x00, 0x08,0x00,0x00,0x00, 0x02,0x00,
+        0x00,0x01, 0x03,0x00, 0x01,0x00,0x00,0x00, 0x05,0x00,0x00,0x00,
+        0x00,0x01, 0x03,0x00, 0x01,0x00,0x00,0x00, 0x06,0x00,0x00,0x00 };
+    write_bytes(root, "k-type.tif", byte_type, sizeof byte_type);
+    write_bytes(root, "l-twice.tif", twice, sizeof twice);
+    /* AVIF, read as image-size reads it: the first `ispe` inside meta >
+     * iprp > ipco, less a `clap` box's right crop; an `ispe` elsewhere in
+     * the file, and a second one in the list, are not the picture's. */
+    static const uint8_t avif[] = {
+        0,0,0,16, 'f','t','y','p', 'a','v','i','f', 0,0,0,0,
+        0,0,0,28, 'f','r','e','e', 0,0,0,20, 'i','s','p','e', 0,0,0,0, 0,0,0,9, 0,0,0,9,
+        0,0,0,80, 'm','e','t','a', 0,0,0,0,
+          0,0,0,68, 'i','p','r','p',
+            0,0,0,60, 'i','p','c','o',
+              0,0,0,20, 'i','s','p','e', 0,0,0,0, 0,0,0,100, 0,0,0,50,
+              0,0,0,16, 'c','l','a','p', 0,0,0,0, 0,0,0,2,
+              0,0,0,16, 'i','s','p','e', 0,0,0,0, 0,0,0,7 };
+    write_bytes(root, "m-icon.avif", avif, sizeof avif);
     /* A real one beside them, so the reader is not merely refusing everything. */
     write_png(root, "g-good.png", 9, 4);
     /* An SVG's size is its root element's: a shape inside it with a width of
@@ -2418,7 +2441,7 @@ static void bad_image_checks(void) {
 
     write_file(root, "main.mdy",
         "% $.emit('roll.txt', $.find({ ext: { $exists: true } })\n"
-        "%   .filter((x) => x.ext === '.tif' || x.ext === '.png' || x.ext === '.svg')\n"
+        "%   .filter((x) => ['.tif', '.png', '.svg', '.avif'].includes(x.ext))\n"
         "%   .map((x) => x.name + '=' + (x.width ?? '-') + 'x' + (x.height ?? '-')).join(','))\n");
 
     mdy_engine *e = mdy_engine_new(S);
@@ -2449,7 +2472,8 @@ static void bad_image_checks(void) {
             strcmp(emitted("roll.txt"),
                    "a-wrap.tif=-x-,b-wrap.tif=-x-,c-past.tif=-x-,"
                    "d-count.tif=-x-,e-cut.tif=-x-,f-empty.tif=-x-,"
-                   "g-good.png=9x4,h-icon.svg=100x50,i-sized.svg=30x20,j-unit.svg=-x-") == 0,
+                   "g-good.png=9x4,h-icon.svg=100x50,i-sized.svg=30x20,j-unit.svg=-x-,"
+                   "k-type.tif=-x-,l-twice.tif=-x-,m-icon.avif=98x50") == 0,
         emitted("roll.txt"));
 
     mdy_engine_free(e);
