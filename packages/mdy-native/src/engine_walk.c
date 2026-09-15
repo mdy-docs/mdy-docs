@@ -874,8 +874,16 @@ static int walk_one_file(mdy_engine *e, const char *root, const char *rel,
          * every `%` line becomes one. */
         size_t rlen = 0;
         char *rewritten = rewrite_imports(e, rel, (const char *)bytes, body_len, &rlen);
-        body = rewritten ? rewritten : (char *)bytes;
-        size_t blen = rewritten ? rlen : body_len;
+        /* A rewrite that could not be made is the build failing, not a file
+         * compiled with its import lines left as JavaScript. */
+        if (!rewritten) {
+            if (error && error_len) snprintf(error, error_len, "out of memory");
+            mdy_yaml_free(ident);
+            free(bytes);
+            return -1;
+        }
+        body = rewritten;
+        size_t blen = rlen;
 
         size_t need2 = st->len + blen + 64;
         if (need2 > st->cap) {
