@@ -38,7 +38,6 @@ void *mdy_alloc(mdy_arena *arena, size_t size) {
 
 char *mdy_strdup_n(mdy_arena *arena, const char *s, size_t len) {
     char *out = mdy_alloc(arena, len + 1);
-    if (!out) return NULL;
     if (len) memcpy(out, s, len);
     out[len] = '\0';
     return out;

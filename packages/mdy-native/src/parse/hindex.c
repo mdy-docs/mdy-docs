@@ -31,12 +31,11 @@ mdy_hentry *mdy_hindex_get(mdy_hindex *ix, const char *key, uint64_t tag) {
     return ix->slots[i].key ? &ix->slots[i] : NULL;
 }
 
-int mdy_hindex_put(mdy_doc *doc, mdy_hindex *ix, const char *key,
-                   uint64_t tag, size_t val) {
+void mdy_hindex_put(mdy_doc *doc, mdy_hindex *ix, const char *key,
+                    uint64_t tag, size_t val) {
     if ((ix->count + 1) * 4 >= ix->cap * 3) {   /* keep the load under 3/4 */
         size_t ncap = ix->cap ? ix->cap * 2 : 64;
         mdy_hentry *ns = mdy_alloc(&doc->arena, ncap * sizeof *ns);
-        if (!ns) return 0;                       /* caller falls back to its array */
         memset(ns, 0, ncap * sizeof *ns);
         for (size_t i = 0; i < ix->cap; i++)
             if (ix->slots[i].key)
@@ -49,5 +48,4 @@ int mdy_hindex_put(mdy_doc *doc, mdy_hindex *ix, const char *key,
     ix->slots[i].key = key;
     ix->slots[i].tag = tag;
     ix->slots[i].val = val;
-    return 1;
 }

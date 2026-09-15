@@ -59,7 +59,6 @@ static mdy_line *split_lines(mdy_doc *doc, const char *text, size_t len, size_t 
     for (size_t i = 0; i < len; i++) if (text[i] == '\n') n++;
 
     mdy_line *lines = mdy_alloc(&doc->arena, sizeof *lines * n);
-    if (!lines) { *count = 0; return NULL; }
 
     size_t out = 0, start = 0;
     for (size_t i = 0; i <= len; i++) {
@@ -117,12 +116,11 @@ void mdy_set_position(mdy_node *node, const mdy_line *lines, size_t from, size_t
     node->end_column = lines[to].units + 1;
 }
 
-/* Room for one more message, or NULL when the arena is exhausted. */
+/* Room for one more message. */
 static mdy_message *next_message(mdy_doc *doc) {
     if (doc->message_count == doc->message_cap) {
         size_t want = doc->message_cap ? doc->message_cap * 2 : 8;
         mdy_message *grown = mdy_alloc(&doc->arena, sizeof *grown * want);
-        if (!grown) return NULL;
         for (size_t i = 0; i < doc->message_count; i++) grown[i] = doc->messages[i];
         doc->messages = grown;
         doc->message_cap = want;
@@ -139,7 +137,6 @@ static mdy_message *next_message(mdy_doc *doc) {
 void mdy_warn(mdy_doc *doc, const mdy_line *lines, size_t line, const char *rule,
               const char *fmt, ...) {
     mdy_message *m = next_message(doc);
-    if (!m) return;
 
     char buf[512];
     va_list ap;
@@ -165,7 +162,6 @@ void mdy_warn(mdy_doc *doc, const mdy_line *lines, size_t line, const char *rule
  */
 void mdy_warn_inline(mdy_doc *doc, const char *rule, const char *fmt, ...) {
     mdy_message *m = next_message(doc);
-    if (!m) return;
 
     char buf[512];
     va_list ap;
@@ -185,7 +181,6 @@ static void record_matter(mdy_doc *doc, const char *source, size_t len,
     if (doc->matter_count == doc->matter_cap) {
         size_t want = doc->matter_cap ? doc->matter_cap * 2 : 4;
         mdy_frontmatter *grown = mdy_alloc(&doc->arena, sizeof *grown * want);
-        if (!grown) return;
         for (size_t i = 0; i < doc->matter_count; i++) grown[i] = doc->matter[i];
         doc->matter = grown;
         doc->matter_cap = want;
@@ -224,7 +219,6 @@ void mdy_collect(mdy_doc *doc, mdy_ref_kind kind, const char *name, size_t len) 
     if (doc->ref_count == doc->ref_cap) {
         size_t want = doc->ref_cap ? doc->ref_cap * 2 : 16;
         mdy_reference *grown = mdy_alloc(&doc->arena, sizeof *grown * want);
-        if (!grown) return;
         for (size_t i = 0; i < doc->ref_count; i++) grown[i] = doc->refs[i];
         doc->refs = grown;
         doc->ref_cap = want;
@@ -238,24 +232,17 @@ void mdy_collect(mdy_doc *doc, mdy_ref_kind kind, const char *name, size_t len) 
     /* Keep the dedup index in step, and build it once the scan grows long. */
     if (doc->ref_index) {
         if (!name_key) name_key = mdy_intern(&doc->arena, &doc->names, name, len);
-        if (!mdy_hindex_put(doc, doc->ref_index, name_key, tag, 0))
-            doc->ref_index = NULL;
-    } else if (!doc->ref_noindex && doc->ref_count >= MDY_HINDEX_THRESHOLD) {
+        mdy_hindex_put(doc, doc->ref_index, name_key, tag, 0);
+    } else if (doc->ref_count >= MDY_HINDEX_THRESHOLD) {
         mdy_hindex *ix = mdy_alloc(&doc->arena, sizeof *ix);
-        if (!ix) {
-            doc->ref_noindex = 1;
-        } else {
-            memset(ix, 0, sizeof *ix);
-            int ok = 1;
-            for (size_t i = 0; i < doc->ref_count && ok; i++) {
-                const mdy_reference *e = &doc->refs[i];
-                const char *ki = mdy_intern(&doc->arena, &doc->names, e->name, e->name_len);
-                uint64_t kt = ((uint64_t)e->document << 32) | (uint32_t)e->kind;
-                ok = mdy_hindex_put(doc, ix, ki, kt, 0);
-            }
-            if (ok) doc->ref_index = ix;
-            else doc->ref_noindex = 1;
+        memset(ix, 0, sizeof *ix);
+        for (size_t i = 0; i < doc->ref_count; i++) {
+            const mdy_reference *e = &doc->refs[i];
+            const char *ki = mdy_intern(&doc->arena, &doc->names, e->name, e->name_len);
+            uint64_t kt = ((uint64_t)e->document << 32) | (uint32_t)e->kind;
+            mdy_hindex_put(doc, ix, ki, kt, 0);
         }
+        doc->ref_index = ix;
     }
 }
 
@@ -1232,7 +1219,6 @@ static size_t table_rows(const mdy_line *lines, size_t count, size_t i, size_t b
 static void unescape_pipes(mdy_doc *doc, const char **text, size_t *len) {
     if (!memchr(*text, '\\', *len)) return;
     char *out = mdy_alloc(&doc->arena, *len + 1);
-    if (!out) return;
     size_t o = 0;
     for (size_t k = 0; k < *len; k++) {
         if ((*text)[k] == '\\' && k + 1 < *len && (*text)[k + 1] == '|') continue;
@@ -2255,7 +2241,6 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
     mdy_line *lines = split_lines(doc, text, len, &count);
 
     doc->root = mdy_alloc(&doc->arena, sizeof *doc->root);
-    if (!doc->root) { mdy_free(doc); return NULL; }
     memset(doc->root, 0, sizeof *doc->root);
     doc->root->type = MDY_ROOT;
 
@@ -2342,7 +2327,6 @@ mdy_doc *mdy_parse(const char *text, size_t len, const mdy_options *options) {
          */
         doc->note_count = 0;
         doc->note_index = NULL;     /* a document's notes are its own; so is their map */
-        doc->note_noindex = 0;
         doc->next_number = 0;
         doc->ref_document = (uint32_t)index;
         if (index == 0) {

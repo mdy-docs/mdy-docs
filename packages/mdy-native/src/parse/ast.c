@@ -29,7 +29,6 @@ int mdy_is_void_element(const char *tag) {
 
 static mdy_node *new_node(mdy_doc *doc, mdy_node_type type) {
     mdy_node *n = mdy_alloc(&doc->arena, sizeof *n);
-    if (!n) return NULL;
     memset(n, 0, sizeof *n);
     n->type = type;
     return n;
@@ -86,7 +85,6 @@ static void pindex_put(mdy_doc *doc, mdy_pindex *px, mdy_prop *p) {
     if ((px->count + 1) * 4 >= px->cap * 3) {   /* keep the load under 3/4 */
         size_t ncap = px->cap ? px->cap * 2 : 64;
         mdy_prop **ns = mdy_alloc(&doc->arena, ncap * sizeof *ns);
-        if (!ns) return;
         memset(ns, 0, ncap * sizeof *ns);
         for (size_t i = 0; i < px->cap; i++)
             if (px->slots[i]) ns[pindex_slot(ns, ncap, px->slots[i]->name)] = px->slots[i];
@@ -145,21 +143,18 @@ static mdy_prop *new_prop(mdy_doc *doc, mdy_node *el, const char *name) {
 
 void mdy_set_string(mdy_doc *doc, mdy_node *el, const char *name, const char *value, size_t value_len) {
     mdy_prop *p = new_prop(doc, el, name);
-    if (!p) return;
     p->type = MDY_PROP_STRING;
     p->as.string = mdy_strdup_n(&doc->arena, value, value_len);
 }
 
 void mdy_set_number(mdy_doc *doc, mdy_node *el, const char *name, double value) {
     mdy_prop *p = new_prop(doc, el, name);
-    if (!p) return;
     p->type = MDY_PROP_NUMBER;
     p->as.number = value;
 }
 
 void mdy_set_bool(mdy_doc *doc, mdy_node *el, const char *name, int value) {
     mdy_prop *p = new_prop(doc, el, name);
-    if (!p) return;
     p->type = MDY_PROP_BOOL;
     p->as.boolean = value;
 }
@@ -200,7 +195,6 @@ void mdy_add_token(mdy_doc *doc, mdy_node *el, const char *name, const char *tok
          */
         size_t cap = p->list_cap ? p->list_cap * 2 : 4;
         const char **grown = mdy_alloc(&doc->arena, sizeof(char *) * cap);
-        if (!grown) return;
         for (size_t i = 0; i < p->list_len; i++) grown[i] = p->list[i];
         p->list = grown;
         p->list_cap = cap;
@@ -234,12 +228,10 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
     } else {
         /* A root, or anything else that carries only children. */
         copy = mdy_alloc(&into->arena, sizeof *copy);
-        if (!copy) return NULL;
         memset(copy, 0, sizeof *copy);
         copy->type = node->type;
         if (node->text) { copy->text_len = mdy_text_len(node); copy->text = mdy_strdup_n(&into->arena, node->text, copy->text_len); }
     }
-    if (!copy) return NULL;
 
     /* Properties in order, since the order is what the emitter writes. */
     for (const mdy_prop *p = node->props; p; p = p->next) {
@@ -256,14 +248,12 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
             break;
         case MDY_PROP_LIST: {
             mdy_prop *q = new_prop(into, copy, p->name);
-            if (!q) break;
             q->type = MDY_PROP_LIST;
             q->list_len = 0;
             q->list = NULL;
             q->list_cap = 0;
             if (p->list_len) {
                 const char **items = mdy_alloc(&into->arena, sizeof(char *) * p->list_len);
-                if (!items) break;
                 for (size_t i = 0; i < p->list_len; i++)
                     items[i] = mdy_strdup_n(&into->arena, p->list[i], strlen(p->list[i]));
                 q->list = items;

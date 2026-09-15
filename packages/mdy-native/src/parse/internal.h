@@ -144,8 +144,7 @@ int mdy_is_fence_line(const char *s, size_t len, const char *fence, size_t fence
  * It exists only to turn a linear dedup or count scan into an O(1) lookup once
  * the list is long enough to feel it — the same idea as new_prop's mdy_pindex,
  * one step more general. Every user keeps its plain array as the source of
- * truth, so a failed allocation here is not fatal: the caller drops the index
- * and the scan gives the identical answer, only slower.
+ * truth; the index only answers lookups.
  */
 typedef struct { const char *key; uint64_t tag; size_t val; } mdy_hentry;
 typedef struct { mdy_hentry *slots; size_t cap, count; } mdy_hindex;
@@ -155,10 +154,8 @@ enum { MDY_HINDEX_THRESHOLD = 24 };   /* below this a linear scan is cheaper */
 /* The entry for (key, tag), or NULL. The returned entry's `val` is mutable. */
 mdy_hentry *mdy_hindex_get(mdy_hindex *ix, const char *key, uint64_t tag);
 
-/* Insert or overwrite (key, tag) -> val. Returns 0 if an allocation failed, in
- * which case the index is left consistent but missing this key — the caller
- * should abandon it and fall back to its array. */
-int mdy_hindex_put(mdy_doc *doc, mdy_hindex *ix, const char *key, uint64_t tag, size_t val);
+/* Insert or overwrite (key, tag) -> val. */
+void mdy_hindex_put(mdy_doc *doc, mdy_hindex *ix, const char *key, uint64_t tag, size_t val);
 
 /* ---- footnotes ----------------------------------------------------------- */
 
@@ -212,10 +209,8 @@ struct mdy_doc {
     size_t *note_order;
     size_t note_order_cap;
     /* id -> index into notes[], for mdy_footnote_find; reset per document with
-     * note_count. NULL until the list crosses MDY_HINDEX_THRESHOLD; noindex
-     * sticks after an allocation failure so it is not rebuilt each insert. */
+     * note_count. NULL until the list crosses MDY_HINDEX_THRESHOLD. */
     mdy_hindex *note_index;
-    int note_noindex;
     /*
      * The prefix a footnote's ids are built on. `user-content-` for the first
      * document, `user-content-<n>-` for the nth in a stream — two documents on
@@ -231,7 +226,6 @@ struct mdy_doc {
     /* base slug -> how many headings already took it, for mdy_heading_id's
      * `-1`/`-2` suffixing. Persists across a stream, like heading_ids. */
     mdy_hindex *heading_index;
-    int heading_noindex;
 
     /* Warnings, in the order they were raised. */
     mdy_message *messages;
@@ -251,7 +245,6 @@ struct mdy_doc {
     /* (name, document<<32|kind) -> presence, for mdy_collect's dedup. Persists
      * across a stream; the tag keeps each document's and kind's names apart. */
     mdy_hindex *ref_index;
-    int ref_noindex;
 };
 
 /* Note a `#tag`, an `@mention` or a link to a page of ours. Names go in as
