@@ -327,25 +327,6 @@ static void separate(mdy_doc *doc, mdy_node *parent) {
     if (parent->type == MDY_ELEMENT) mdy_append(parent, mdy_new_text(doc, "\n", 1));
 }
 
-/* How much node_text would write, so a caller can hold all of it. */
-static size_t node_text_len(const mdy_node *n) {
-    if (n->type == MDY_TEXT) return mdy_text_len(n);
-    size_t total = 0;
-    for (const mdy_node *c = n->first; c; c = c->next) total += node_text_len(c);
-    return total;
-}
-
-static size_t node_text(const mdy_node *n, char *out, size_t cap, size_t o) {
-    if (n->type == MDY_TEXT) {
-        size_t len = mdy_text_len(n);
-        if (o + len > cap) len = cap > o ? cap - o : 0;
-        memcpy(out + o, n->text, len);
-        return o + len;
-    }
-    for (const mdy_node *c = n->first; c; c = c->next) o = node_text(c, out, cap, o);
-    return o;
-}
-
 static void set_heading_id(mdy_doc *doc, mdy_node *h, const char *text, size_t len) {
     /*
      * The SAME slug a `[[ label ]]` resolves to, not slugify — mdy-docs says
@@ -614,21 +595,6 @@ static void prepend(mdy_node *parent, mdy_node *child) {
     if (!parent->last) parent->last = child;
 }
 
-/* All the text under a node, the markup taken off — `toText`, for a task's
- * label. Into `buf`, which is `cap` bytes; the result is cut to fit. */
-static size_t text_of(const mdy_node *node, char *buf, size_t cap, size_t at) {
-    if (!node) return at;
-    if (node->type == MDY_TEXT) {
-        size_t n = mdy_text_len(node);
-        if (at + n >= cap) n = cap - 1 - at;
-        memcpy(buf + at, node->text, n);
-        at += n;
-        buf[at] = '\0';
-        return at;
-    }
-    for (const mdy_node *c = node->first; c; c = c->next) at = text_of(c, buf, cap, at);
-    return at;
-}
 
 /* `<input type="hidden" name=… value=…>` */
 static mdy_node *hidden(mdy_doc *doc, const char *name, const char *value) {
@@ -689,11 +655,8 @@ static void add_task_box(mdy_doc *doc, mdy_node *into, int task, size_t content_
     if (task < 0) return;
     mdy_node *box;
     if (doc->options.tasks) {
-        size_t cap = node_text_len(into) + 1;
-        char *label = mdy_alloc(&doc->arena, cap);
-        label[0] = '\0';
-        size_t n = text_of(into, label, cap, 0);
-        /* `.trim()` */
+        size_t n = 0;
+        char *label = mdy_node_text(doc, into, &n);   /* `toText`, then `.trim()` */
         size_t start = 0;
         while (start < n && (label[start] == ' ' || label[start] == '\t' || label[start] == '\n')) start++;
         while (n > start && (label[n - 1] == ' ' || label[n - 1] == '\t' || label[n - 1] == '\n')) n--;
@@ -1718,17 +1681,9 @@ static size_t parse_paragraph(mdy_doc *doc, mdy_node *parent, const mdy_line *li
         mdy_node *h = mdy_new_element(doc, tag, 2);
         mdy_parse_inline(doc, h, probe, probe_len);
         {
-            /* ALL of the heading's text, as the `=` path does below: a fixed
-             * buffer gave a long setext heading an id that stopped mid-word. */
-            char stack_text[1024];
-            size_t need = node_text_len(h) + 1;
-            size_t text_cap = need > sizeof stack_text ? need : sizeof stack_text;
-            char *rendered = text_cap > sizeof stack_text ? malloc(text_cap) : stack_text;
-            if (rendered) {
-                size_t rlen = node_text(h, rendered, text_cap, 0);
-                set_heading_id(doc, h, rendered, rlen);
-                if (rendered != stack_text) free(rendered);
-            }
+            size_t rlen = 0;
+            const char *rendered = mdy_node_text(doc, h, &rlen);
+            set_heading_id(doc, h, rendered, rlen);
         }
         mdy_set_position(h, lines, i, j);
         separate(doc, parent);
@@ -1883,18 +1838,9 @@ void mdy_parse_block(mdy_doc *doc, mdy_node *parent, const mdy_line *lines, size
              * the source leaves the slashes in an id nothing can link to.
              */
             {
-                /* ALL of the heading's text, not the first kilobyte: the
-                 * slug comes from this, and a fixed buffer gives a long
-                 * heading an id that stops mid-word. */
-                char stack_text[1024];
-                size_t need = node_text_len(h) + 1;
-                size_t text_cap = need > sizeof stack_text ? need : sizeof stack_text;
-                char *rendered = text_cap > sizeof stack_text ? malloc(text_cap) : stack_text;
-                if (rendered) {
-                    size_t rlen = node_text(h, rendered, text_cap, 0);
-                    set_heading_id(doc, h, rendered, rlen);
-                    if (rendered != stack_text) free(rendered);
-                }
+                size_t rlen = 0;
+                const char *rendered = mdy_node_text(doc, h, &rlen);
+                set_heading_id(doc, h, rendered, rlen);
             }
             mdy_set_position(h, lines, i, i);
             separate(doc, parent);

@@ -277,6 +277,32 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
     return copy;
 }
 
+static size_t text_length(const mdy_node *n) {
+    if (n->type == MDY_TEXT) return n->text ? mdy_text_len(n) : 0;
+    size_t total = 0;
+    for (const mdy_node *c = n->first; c; c = c->next) total += text_length(c);
+    return total;
+}
+
+static size_t text_fill(const mdy_node *n, char *out, size_t o) {
+    if (n->type == MDY_TEXT) {
+        if (!n->text) return o;
+        size_t len = mdy_text_len(n);
+        memcpy(out + o, n->text, len);
+        return o + len;
+    }
+    for (const mdy_node *c = n->first; c; c = c->next) o = text_fill(c, out, o);
+    return o;
+}
+
+char *mdy_node_text(mdy_doc *doc, const mdy_node *n, size_t *len) {
+    size_t total = text_length(n);
+    char *out = mdy_alloc(&doc->arena, total + 1);
+    out[text_fill(n, out, 0)] = '\0';
+    if (len) *len = total;
+    return out;
+}
+
 /**
  * Drop whatever classes an element has.
  *

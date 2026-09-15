@@ -1258,21 +1258,6 @@ static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
  * build, because a heading's id comes from all of its text and md4c reports
  * that in pieces.
  */
-static void collect_text(const mdy_node *n, char *out, size_t cap, size_t *len) {
-    if (n->type == MDY_TEXT && n->text) {
-        size_t add = mdy_text_len(n);
-        if (*len + add < cap) { memcpy(out + *len, n->text, add); *len += add; }
-    }
-    for (const mdy_node *c = n->first; c; c = c->next) collect_text(c, out, cap, len);
-}
-
-/* How many bytes collect_text would gather, so a caller can size for all of it. */
-static size_t collect_text_len(const mdy_node *n) {
-    size_t total = (n->type == MDY_TEXT && n->text) ? mdy_text_len(n) : 0;
-    for (const mdy_node *c = n->first; c; c = c->next) total += collect_text_len(c);
-    return total;
-}
-
 static int has_id(const mdy_node *el) {
     for (const mdy_prop *p = el->props; p; p = p->next)
         if (strcmp(p->name, "id") == 0) return 1;
@@ -1296,21 +1281,10 @@ static void identify_headings(mdy_doc *doc, mdy_node *n) {
     for (mdy_node *c = n->first; c; c = c->next) {
         if (c->type == MDY_ELEMENT && c->tag && c->tag[0] == 'h' &&
             c->tag[1] >= '1' && c->tag[1] <= '6' && c->tag[2] == '\0' && !has_id(c)) {
-            /* All of the heading's text: a fixed 1 KB buffer gave a long
-             * heading an id that stopped mid-word. collect_text needs room for
-             * the terminator, so the cap is one past the measured length. */
-            char stack_text[1024];
-            size_t need = collect_text_len(c) + 1;
-            size_t cap = need > sizeof stack_text ? need : sizeof stack_text;
-            char *text = cap > sizeof stack_text ? malloc(cap) : stack_text;
-            if (text) {
-                size_t len = 0;
-                collect_text(c, text, cap, &len);
-                size_t id_len = 0;
-                const char *id = mdy_heading_id(doc, text, len, &id_len);
-                if (id && id_len) mdy_set_string(doc, c, "id", id, id_len);
-                if (text != stack_text) free(text);
-            }
+            size_t len = 0, id_len = 0;
+            const char *text = mdy_node_text(doc, c, &len);
+            const char *id = mdy_heading_id(doc, text, len, &id_len);
+            if (id && id_len) mdy_set_string(doc, c, "id", id, id_len);
         }
         identify_headings(doc, c);
     }

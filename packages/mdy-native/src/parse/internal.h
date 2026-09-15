@@ -129,6 +129,10 @@ const char *mdy_intern(mdy_arena *arena, mdy_intern_table *table, const char *s,
  * when there is not — for a lookup whose miss should leave nothing behind. */
 const char *mdy_intern_lookup(const mdy_intern_table *table, const char *s, size_t len);
 
+/* All the text under a node with the markup taken off — hast-util-to-string.
+ * An arena string, NUL-terminated, its length through `len`. */
+char *mdy_node_text(mdy_doc *doc, const mdy_node *n, size_t *len);
+
 /* A line that is exactly `fence` once trailing spaces and tabs are off —
  * block.js's `line.trimEnd() === settings.fence`. Leading whitespace is not
  * allowed, so the caller hands in an unindented line. */
