@@ -643,13 +643,9 @@ ENGINE_SRCS := src/engine.c src/engine_value.c src/engine_compose.c src/engine_w
 
 # ---- and the objects they compile to ---------------------------------------
 #
-# Every engine binary used to be one `cc` over all thirty-one sources. A
-# one-character change to cli.c recompiled nisaba's seventeen; `make
-# check-engine` after an edit recompiled them again for the test binary; ASan
-# a third time. The split into four engine files made that worse, which is
-# what §3 of the review said it would.
-#
-# So: one object per source, and three binaries that link them. cli.c and
+# One object per source, and three binaries that link them — one `cc` over
+# all thirty-one sources would recompile nisaba's seventeen for a
+# one-character change to cli.c, and again for the test binary. cli.c and
 # test/engine.c are objects too, so an edit to either relinks and compiles
 # nothing else. ASan gets its own directory because its flags differ (-O1,
 # -fsanitize=address) and an object built one way is not the other.

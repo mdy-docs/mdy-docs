@@ -7,9 +7,8 @@
  * JavaScript engine at all. Moving the PARSE into C does not remove that
  * extension point; it removes the largest single cost in front of it. On the
  * reference corpus the front end is 4,441 lines of JavaScript producing 285k
- * nodes from 6.5 MB of text, and it was measured at 8.8x slower under QuickJS
- * than under V8 — the one component where that ratio decides a build's wall
- * clock.
+ * nodes from 6.5 MB of text, and it runs 8.8x slower under QuickJS than under
+ * V8 — the one component where that ratio decides a build's wall clock.
  *
  * WHAT THE TREE ACTUALLY IS, measured rather than assumed. Across the whole
  * reference corpus:

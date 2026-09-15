@@ -23,8 +23,7 @@ if (!base) throw new Error('usage: scripts/generate-schema.mjs <path to mdy-docs
 /*
  * pathToFileURL, not `file://` + the path. A RELATIVE base — which is what
  * the line above documents — makes `file://../..`, and a URL reads what
- * follows `//` as the HOST: node answers ERR_INVALID_FILE_URL_HOST and the
- * generator has never run as its own instructions say. (§4.)
+ * follows `//` as the HOST: node answers ERR_INVALID_FILE_URL_HOST.
  */
 const root = pathToFileURL(resolve(base) + '/');
 const { defaultSchema: s } = await import(

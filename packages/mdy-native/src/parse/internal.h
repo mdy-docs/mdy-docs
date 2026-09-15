@@ -14,8 +14,7 @@
  * Order two byte strings the way the sorted lookup tables here are keyed:
  * by shared bytes first, then the SHORTER one before the longer. Returns
  * <0 / 0 / >0. The generated `*_table.h` tables are sorted this way, so a
- * binary search over any of them compares with this; five copies of exactly
- * this three-line tiebreak had grown up across attrs/emoji/html/raw.
+ * binary search over any of them compares with this.
  */
 static inline int mdy_strkey_cmp(const char *a, size_t alen, const char *b, size_t blen) {
     size_t n = alen < blen ? alen : blen;

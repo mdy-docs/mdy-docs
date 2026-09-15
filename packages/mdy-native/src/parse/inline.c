@@ -398,12 +398,7 @@ static void scan(Ctx *ctx, const char *text, size_t len) {
             /*
              * A marker ALWAYS opens, and an unclosed one runs to the end of
              * the input — `a //b` is `a <em>b</em>`, not the literal text.
-             *
-             * Worth stating because the opposite is the intuitive guess and it
-             * was the guess made here first: an assumption written into a test
-             * without being checked against the JavaScript, which then passed
-             * for the wrong reason and cost 196 spurious <em> across the
-             * corpus before anyone looked.
+             * Worth stating because the opposite is the intuitive guess.
              */
             size_t close = len;
             int found = 0;

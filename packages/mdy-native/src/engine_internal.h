@@ -196,8 +196,8 @@ struct mdy_engine {
      * WHAT THE HOST HEARS. One struct because they are one thing with one
      * rule: an imported package's `$.emit` contributes to the SAME outputs as
      * the site that imported it, so a child engine takes the whole set from
-     * its importer — `child->cb = e->cb;`, which was eight assignments that
-     * had to be kept in step with this list by hand.
+     * its importer in one assignment, `child->cb = e->cb;`, so a callback
+     * added here cannot be left behind.
      *
      * `on_message` is the exception inside the group and stays documented as
      * one: it is registered in document mode only (cli.c), so the messages

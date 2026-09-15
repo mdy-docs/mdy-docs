@@ -16,18 +16,16 @@
 #include "xalloc.h"
 
 /*
- * Vendored, and it compiles a handful of helpers this build never reaches —
- * `-Wall -Wextra` says so twice, and they were the only warnings left in a
- * clean build. Silenced HERE rather than in the Makefile, so the exemption is
- * as narrow as the file it is for, and rather than in stb_image.h, which is
- * somebody else's to update.
+ * Vendored, and it compiles a handful of helpers this build never reaches,
+ * which `-Wall -Wextra` reports. Silenced HERE rather than in the Makefile,
+ * so the exemption is as narrow as the file it is for, and rather than in
+ * stb_image.h, which is somebody else's to update.
  */
 #if defined(__GNUC__) || defined(__clang__)
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wunused-function"
 /* stb_image_resize2.h's ring_buffer_size, which it computes and then only uses
- * under an #ifdef. It appears at -O1 and not at -O2, so it was invisible until
- * the ASan build started being read for warnings as well as the default one. */
+ * under an #ifdef. Reported at -O1 (the ASan build) and not at -O2. */
 #  pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #endif
 

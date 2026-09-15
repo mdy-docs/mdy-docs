@@ -23,8 +23,8 @@ const SITES = [
   { name: 'fixture',     mounts: [join(pkg, 'test', 'fixture')],                                  site: 'fixture' },
   { name: 'fixture-pkg', mounts: [join(pkg, 'test', 'fixture-pkg'), join(pkg, 'test', 'fixture-style')],  site: 'fixture-pkg' },
   { name: 'messaging',   mounts: [join(pkg, '..', '..', 'examples', 'messaging')],        site: 'messaging' },
-  /* The inputs that were bugs (§4). Its golden output is committed like the
-   * others', so the wasm build is held to it too. */
+  /* The awkward inputs. Its golden output is committed like the others',
+   * so the wasm build is held to it too. */
   { name: 'fixture-awkward', mounts: [join(pkg, 'test', 'fixture-awkward')],                    site: 'fixture-awkward' },
 ];
 

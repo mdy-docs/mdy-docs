@@ -455,8 +455,7 @@ static void walk_in(mdy_doc *doc, mdy_node *into, lxb_dom_node_t *n, size_t dept
  * tree we had" — and it is wrong here for the reason allocfail.c exists: the
  * tree we had is a DIFFERENT SITE, with raw nodes where the answer has
  * elements, and a build that quietly produced it would exit 0 having written
- * something nobody asked for. 453 of the allocation sweep's ordinals said so
- * the first time this was run. A parse that could not be made is a document
+ * something nobody asked for. A parse that could not be made is a document
  * that could not be read, and the caller is told.
  */
 int mdy_raw_reparse(mdy_doc *doc, mdy_node *root) {

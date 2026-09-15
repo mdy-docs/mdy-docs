@@ -1,16 +1,11 @@
 /*
- * The growable byte buffer this library had four identical copies of.
+ * The growable byte buffer every writer in this library uses. `s[len]` is
+ * always NUL once anything has been put, so `s` reads as a C string as well
+ * as a (pointer, length) pair.
  *
- * html.c, script.c, yaml.c and data.c each declared the same struct and the
- * same thirteen-line `put`, differing only in the capacity of the first
- * allocation — 8192, 4096, 128, 1024, each sized to what that caller
- * typically writes. It was duplication left unfolded for want of a home; the
- * home was here all along, since all four are one library with a private
- * header.
- *
- * `seed` is how the four stay four in the one place it mattered: a caller
- * that knows it is about to write a page does not want to double from 256 to
- * get there. Zero means 256.
+ * `seed` is the capacity of the first allocation: a caller that knows it is
+ * about to write a page does not want to double from 256 to get there. Zero
+ * means 256.
  *
  * `ok` is the error channel, and it is why this is not just `mdy_xmalloc`
  * (the engine's answer to the same problem): a parse has a caller to report

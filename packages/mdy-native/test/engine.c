@@ -1057,7 +1057,7 @@ static void raw_html_checks(void) {
         emitted("inline.html"));
 
     /* The table path is worth its own case: a cell's content is parsed
-     * through the same callbacks and then foster-parented (§4). */
+     * through the same callbacks and then foster-parented. */
     ok_("...and so is one in a table cell",
         emitted("cell.html") &&
             strstr(emitted("cell.html"), "<td><b>x</b></td>") != NULL,
@@ -2265,11 +2265,9 @@ static void import_checks(void) {
     mdy_engine_free(e);
 
     /*
-     * A LONG specifier, which is the one that overflowed. The line the walk
-     * builds for an import carries the spec four times, so `import_line`'s
-     * limit of 1023 makes a line of about 4,500 characters — and it was
-     * assembled into a char[4096] with snprintf's RETURN used as the length to
-     * copy out of it. ASan: stack-buffer-overflow, READ of size 4277. (§3.)
+     * A LONG specifier. The line the walk builds for an import carries the
+     * spec four times, so `import_line`'s limit of 1023 makes a line of about
+     * 4,500 characters, longer than any fixed buffer would be.
      *
      * The import does not resolve, and does not need to: what is under test is
      * the rewrite of the line, which happens before anything looks for the
@@ -3364,10 +3362,8 @@ static void broker_checks(void) {
 
 /* ---- the public surface an embedder holds --------------------------------
  *
- * Ten of the twelve entry points below had NO test here at all; they were
- * reached only through the 34 CLI cases, which CI runs on Linux alone (§4,
- * and §5 called this the cheapest remaining thing worth doing). What an
- * embedder holds is engine.h, and engine.h is what this exercises: the
+ * What an embedder holds is engine.h, and engine.h is what this exercises,
+ * on every platform rather than only through the CLI cases CI runs on Linux: the
  * things a caller does BEFORE a render (the knobs, a scope, a response), the
  * things it asks DURING one (a page by name, a document's path), and the
  * things it reads AFTER (the roots, the response, JSON encoded the way

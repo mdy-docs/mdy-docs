@@ -301,8 +301,7 @@ static void fold_break(mdy_buf *out, size_t breaks) {
     else for (size_t i = 1; i < breaks; i++) mdy_buf_putc(out, '\n');
 }
 
-/** `\x41`, `é`, `\U0001F600` — written back out as UTF-8, by the encoder
- * mdytext.h already declares rather than a third copy of it (§2). */
+/** `\x41`, `é`, `\U0001F600` — written back out as UTF-8. */
 static void put_codepoint(mdy_buf *out, unsigned cp) {
     char enc[4];
     size_t n = mdy_utf8_encode((uint32_t)cp, enc);

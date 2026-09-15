@@ -4,8 +4,7 @@
  * Strings (UTF-8 here, UTF-16 there), trees (hast as objects and back), and a
  * query filter or its answer as binjson. Nothing in this file knows what a
  * document is or what a render does — it is called by every other part of the
- * engine and calls none of them, which is why it was the first piece to take
- * out of a five-thousand-line file.
+ * engine and calls none of them.
  */
 #include "engine_internal.h"
 #include "xalloc.h"
@@ -121,13 +120,12 @@ void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v) {
 /*
  * ...and the read, which has the same hazard from the other side.
  *
- * `js_object_get(e->vm, thing, key(e->vm, "path"))` was the shape this engine
- * reached for forty-three times, and it is wrong whenever `thing` is reachable
- * only from the C stack: C does not say which argument is evaluated first, and
- * building the key is a safe point, so the object can be collected before the
- * get it was an argument to. It survives when the atom is already interned,
- * which is nearly always — which is why such a bug hides. All forty-three say
- * `get_val` now.
+ * `js_object_get(e->vm, thing, key(e->vm, "path"))` is wrong whenever `thing`
+ * is reachable only from the C stack: C does not say which argument is
+ * evaluated first, and building the key is a safe point, so the object can be
+ * collected before the get it was an argument to. It survives when the atom
+ * is already interned, which is nearly always — which is why such a bug
+ * hides. Every read in the engine goes through here.
  *
  * Rooting the object here — and building the key after, as set_val does —
  * makes the whole shape safe by construction, including for an object that is

@@ -23,9 +23,7 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
             /*
              * The range test comes BEFORE the cast, and that ordering is the
              * whole of it: `.inf` and `.nan` are legal YAML, they reach this
-             * line, and `(int64_t)v` of either is undefined behaviour. It happened
-             * to answer with a sentinel that failed the equality and fell
-             * through to the float, which is why nothing had noticed.
+             * line, and `(int64_t)v` of either is undefined behaviour.
              *
              * A non-finite still goes in as a FLOAT and not as null: node's
              * YAML reads `.inf` as a real Infinity and its store keeps one, so
@@ -36,20 +34,11 @@ int mdy_bj_put_yaml(bj_builder *b, const mdy_yaml_node *node) {
                 return bj_put_float(b, v);
 
             /*
-             * Everything integral and in range goes in as an INT, including
-             * past 2^53 — binjson's encoder decides what that becomes.
-             *
-             * It did not always: bj_put_int wrote BJ_TYPE_INT at any magnitude
-             * while both binjson decoders refuse an INT outside the JS safe
-             * range and abort the whole DECODE, so one such integer made the
-             * document it was in disappear from every query — every other key
-             * of that record with it, insert reporting success, nothing said.
-             *
-             * binjson falls back to FLOAT there now, which is what its JS
-             * reference always did, so the workaround is gone and the value
-             * comes back as the same NUMBER node has. Requires binjson at
-             * 07a5461 or later; the engine test's big_integer_checks is what
-             * says so.
+             * Everything integral goes in as an INT, including past 2^53:
+             * binjson's encoder writes a FLOAT for a magnitude its decoders
+             * would refuse, so the value comes back as the same NUMBER the
+             * node has. The engine test's big_integer_checks holds it to
+             * that.
              */
             return bj_put_int(b, (int64_t)v);
         }

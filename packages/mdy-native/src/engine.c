@@ -6,15 +6,9 @@
 #include "xalloc.h"
 
 /*
- * The debug switches, read ONCE.
- *
- * MDY_MEMO_DEBUG was three getenv calls per render and MDY_LINEMAP_DEBUG one
- * per produced line. Measured before changing it, because §4 filed this as a
- * hot path and it is worth knowing by how much: `docs-site` built with two
- * thousand extra environment variables was 1.9% slower than with a normal
- * one, median of nine. So the cost is real and small. What this buys is that
- * it is provably nothing, and that a switch cannot be read differently in two
- * places — the same idiom `key()` already uses for MDY_GC_STRESS.
+ * The debug switches, read ONCE: MDY_LINEMAP_DEBUG is asked for per produced
+ * line and MDY_MEMO_DEBUG per render, and a switch read once cannot be read
+ * differently in two places — the same idiom `key()` uses for MDY_GC_STRESS.
  */
 static int debug_flag(const char *name, int *cache) {
     if (*cache < 0) *cache = getenv(name) != NULL;
@@ -332,15 +326,9 @@ static void collect_text_into(const mdy_node *n, char **out, size_t *len, size_t
     if (n->type == MDY_TEXT && n->text) {
         size_t add = mdy_text_len(n);
         if (*len + add + 1 > *cap) {
-            /*
-             * `*cap` moved BEFORE the allocation was known to have succeeded,
-             * and the early return left it moved: the next call through here
-             * saw room that did not exist and wrote past the end of the
-             * buffer. A heap overflow reached from an allocation failure
-             * rather than at it -- the same shape as cache_put's, found by
-             * the same sweep. `want` is local until it is real, and there is
-             * no early return now. See xalloc.h.
-             */
+            /* `want` stays local until the block is real: a `*cap` moved
+             * before the allocation succeeded would promise room that is not
+             * there. See xalloc.h. */
             size_t want = *cap;
             while (*len + add + 1 > want) want = want ? want * 2 : 256;
             *out = mdy_xrealloc(*out, want);
@@ -977,14 +965,10 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query,
     int rc = nis_find(store->set.handle, filter, (uint32_t)flen, &out, &out_len);
     bj_builder_free(b);
     /*
-     * A query that could not RUN is not a query that matched nothing.
-     *
-     * nisaba reports an exhausted allocation properly, all the way out through
-     * dc_find's negative return -- and this threw that away and answered with
-     * an empty array. `$.find` then said the site had no posts, the index page
-     * was written without them, and the build reported success. It is the one
-     * place in this engine where a foreign error code was dropped rather than
-     * missing, which is why it survived so long.
+     * A query that could not RUN is not a query that matched nothing: nisaba
+     * reports an exhausted allocation through dc_find's negative return, and
+     * an empty array here would be `$.find` saying the site had no posts in
+     * a build that reported success.
      */
     if (rc != 0 || !out) {
         if (failed) *failed = 1;
@@ -1012,8 +996,8 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query,
      */
     JsValue id_key = key(e->vm, "_id");
     js_gc_protect(e->vm, &id_key);
-    /* Placing the hits is not optional: `order` being NULL used to mean the
-     * loop did not run and `find` answered with nothing. See xalloc.h. */
+    /* Placing the hits is not optional: without `order` the loop below does
+     * not run and `find` answers with nothing. See xalloc.h. */
     Placed *order = n ? mdy_xmalloc((size_t)n * sizeof *order) : NULL;
     uint32_t placed = 0;
     for (uint32_t i = 0; order && i < n; i++) {
@@ -1221,9 +1205,7 @@ static void register_one(mdy_engine *e, const char *name, JsNativeFn fn) {
 /*
  * The imported set a `spec` names, resolved against the CURRENT document, or
  * NULL with a reason written into `why` (may be NULL when the caller does not
- * use it). `path` is a LOCAL buffer now, not a static returned through a `const
- * char **`: the old shape handed the caller a pointer into shared storage that
- * the next lookup would overwrite.
+ * use it).
  */
 static mdy_engine *lookup_import(mdy_engine *e, const char *spec, char *why, size_t why_cap) {
     char path[1024];
@@ -2428,7 +2410,7 @@ static JsValue settled(JsContext *ctx, JsValue v, int ok) {
     /* `v` is a string made a moment ago and held nowhere but here, and
      * making the promise allocates: without this, a collection between the
      * two takes the module's source, and the compiler reads whatever the
-     * memory holds now. Found by MDY_GC_STRESS on the first 380 KB module. */
+     * memory holds now. */
     mdy_engine *e = js_context_userdata(ctx);
     js_gc_protect(e->vm, &v);
     JsValue p = js_promise_new(ctx);
@@ -2747,11 +2729,7 @@ void mdy_engine_free(mdy_engine *e) {
  * which the caller hands to to_utf16 for the same reason.
  */
 static char *wrap(mdy_engine *e, const char *statements, size_t stmt_len, size_t *wrapped_len) {
-    /*
-     * Every `$` native. There is no longer a refusing stand-in behind any of
-     * them: the last one, `$.resize`, was the only native that needed a codec
-     * rather than a port, and it has one now.
-     */
+    /* Every `$` native. */
     static const char OPEN[] =
         "(async (req, res, $$) => {\n"
         "const $ = {\n"
@@ -2918,7 +2896,7 @@ static mdy_doc *parse_lines(JsValue out, mdy_engine *e) {
 
     /* What the document engine asks the parser for: it has already taken the
      * front matter off and split the documents, and the code has already run
-     * — so all three are the parser's business no longer. */
+     * — so none of the three is the parser's business here. */
     mdy_options options;
     parse_options(e, &options);
 
@@ -3198,11 +3176,9 @@ static uint64_t document_fingerprint(mdy_engine *e, size_t index) {
      * a directory and every OTHER document keeps its fingerprint, so a second
      * build in the same process serves each of them the render made when the
      * set was one document smaller — `$.count` frozen at the old number, in a
-     * page that is otherwise correct. mdy-docs can get this wrong the same
-     * way in reverse: it embeds the count in the program text, so keying the
-     * memo on the text BEFORE the count is substituted in has the same fault.
-     * Its
-     * fingerprint carries the set's size now, so the two agree here.
+     * page that is otherwise correct. mdy-docs embeds the count in the
+     * program text and its fingerprint carries the set's size, so the two
+     * agree here.
      */
     char knobs[32];
     int klen = snprintf(knobs, sizeof knobs, "s%dt%dn%zu", e->knobs.sanitize ? 1 : 0, e->knobs.tasks ? 1 : 0, e->set.count);
@@ -3277,9 +3253,8 @@ typedef struct {
  * stops the build rather than leaving a root registered on a dead frame,
  * which is the failure this whole arrangement exists to prevent. It is worth
  * a compile-time check because it is worth nothing at run time: a root left
- * registered is a crash LATER, somewhere else, and the parity suite, the
- * engine tests and MDY_GC_STRESS=1 were each measured against a deliberately
- * leaked root here and none of the three noticed.
+ * registered is a crash LATER, somewhere else, and neither the parity suite,
+ * the engine tests nor MDY_GC_STRESS=1 notices one.
  */
 _Static_assert(sizeof(RenderRoots) == offsetof(RenderRoots, all) + sizeof(JsValue[7]),
                "a root added to RenderRoots must go in all[] too — roots_release walks it");

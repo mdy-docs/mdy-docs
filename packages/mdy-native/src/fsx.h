@@ -26,11 +26,9 @@
  *
  *     "a.mdy\0sub/b.mdy\0"   and   ""   for nothing at all
  *
- * so `for (const char *p = list; *p; p += strlen(p) + 1)` walks it. It was one
- * per LINE, which is a file name a POSIX filesystem allows: `new\nline.mdy`
- * came back as two entries, `new` and `line.mdy`, neither of which exists, and
- * the file was silently not part of the site. A NUL is the one byte a name
- * cannot hold.
+ * so `for (const char *p = list; *p; p += strlen(p) + 1)` walks it. NUL rather
+ * than newline because a POSIX file name may hold a newline (`new\nline.mdy`)
+ * and a NUL is the one byte it cannot.
  *
  * `exts` is a comma-separated suffix list (".mdy,.md") or NULL for
  * every file whatever its extension — the same distinction
@@ -68,13 +66,10 @@ int fsx_is_absolute(const char *p);
 
 /*
  * `.` and `..` collapsed, so that two spellings of one file compare equal.
+ * Shared by the engine's `resolve_path` and the CLI's `absolute`, which is
+ * why it lives here beside `fsx_is_absolute` rather than in either.
  *
- * This is here because it was written twice — `resolve_path` in the engine
- * and `absolute` in the CLI, the same algorithm over the same `strtok` (§2).
- * They were left unfolded for want of a home; `fsx.h` is it, since this is a
- * fact about paths and the file already owns `fsx_is_absolute`.
- *
- * What did NOT fold is the JOINING, and the difference is load-bearing rather
+ * What is NOT shared is the JOINING, and the difference is load-bearing rather
  * than accidental: the CLI translates `\` to `/` because it is handling a path
  * a person typed on Windows, and the engine must not, because an import
  * specifier is POSIX-ish and `a\b.mdy` is a legal POSIX filename. So the two
@@ -92,8 +87,7 @@ void fsx_normalize(char *joined, char *out, size_t out_len);
  *
  * Real filesystem work: test/engine.c writes a site into a temp directory and
  * builds it, and takes it away again. Nothing in the backend proper calls
- * any of this. It was written for a ported run of mdy-docs' own tests, over
- * `node:fs` shims that no longer exist.
+ * any of this.
  */
 
 /* mkdir -p. 0 on success, and an existing directory is success. */

@@ -7,11 +7,10 @@
  * its text. `% import` is resolved from here too, each spec against the file
  * that wrote it, with a cache so a package imported twice is built once.
  *
- * This is where four of the review's bugs lived — a data file read as a
- * document separator, an empty file counted but not produced, a file name
- * carried through a text encoding that could not hold it, and the listing
- * split on a byte a file name may contain. They were all the same mistake in
- * different clothes: something about a file encoded as text and read back.
+ * The rule the whole file keeps: nothing about a FILE is encoded as text and
+ * read back. A data file's `---` is not a document separator, an empty file
+ * is still a document, a file name travels as a value, and the listing is
+ * split on the one byte a name cannot hold.
  */
 #include "engine_internal.h"
 #include "xalloc.h"
@@ -573,15 +572,8 @@ static char *rewrite_imports(mdy_engine *e, const char *source_path,
             imp->spec = ispec;
             imp->set = NULL;
 
-            /*
-             * Measured, then allocated. This was a char[4096] with snprintf's
-             * RETURN used as the length to copy -- and the line it builds
-             * carries `spec` FOUR times, so a specifier past about 950
-             * characters makes a line longer than the buffer and the memcpy
-             * below reads off the end of it. ASan calls it a
-             * stack-buffer-overflow, READ of size 4277; `import_line` admits
-             * a spec of 1023.
-             */
+            /* Measured, then allocated: the line carries `spec` four times,
+             * and `import_line` admits a spec of 1023 bytes. */
             /* The spec as a JavaScript string literal, as JSON.stringify
              * writes it for the same line in mdy-docs: a backslash in a
              * specifier reaches the native as the backslash it was. */
@@ -1122,17 +1114,14 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         if (have) { imp->set = have; continue; }
 
         /* The importer's session: an imported package's renders go in the
-         * same memo as the site's, which is what they did when the memo was
-         * one process-wide table. */
+         * same memo as the site's. */
         mdy_engine *child = mdy_engine_new(e->session);
         if (!child) { if (error && error_len) snprintf(error, error_len, "out of memory"); return -1; }
         /* An `$.emit` from an imported package contributes to the SAME
-         * outputs as the site that imported it — and so, it turns out, does
-         * everything else the host listens for. This was three of the five
-         * pairs, assigned by hand; `on_source` was not among them, so an
-         * imported package's files were read without a `[read]` line where
-         * node prints one. Whole struct, so the next callback added cannot
-         * be forgotten here. */
+         * outputs as the site that imported it, and so does everything else
+         * the host listens for: an imported file's `[read]` line is printed
+         * like the site's own. Whole struct, so the next callback added
+         * cannot be forgotten here. */
         child->cb = e->cb;
         child->compose.tokens = token_table(e);
         /* In the cache before it is built, so a package that imports itself

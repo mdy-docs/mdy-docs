@@ -74,8 +74,7 @@ void snapshot_free(Snapshot *s) {
  *
  * The three cases are the three a merge has. A path on both sides changed if
  * its size or mtime did; one only in `after` is new; one only in `before` is
- * gone. Each is emitted once, which the old version needed a second lookup to
- * be sure of.
+ * gone. Each is emitted once.
  */
 static int emit_path(char **out, size_t *cap, size_t *len, const char *path) {
     size_t n = strlen(path) + 1;

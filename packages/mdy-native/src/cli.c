@@ -1722,22 +1722,11 @@ static void dev_send(Dev *d, int dedupe, int announce) {
         char url[2300];
         snprintf(url, sizeof url, "%s/pub/%s", d->o->broker, fresh.names[i]);
         /*
-         * Zeroed at the declaration, and freed on every path.
-         *
-         * A refusal branch that skips http_response_free keeps the response
-         * body of every non-2xx answer for the life of the process. That is
-         * not one leak: it is one per
-         * refused message per rebuild, in a server meant to run all day —
-         * measured at 57 leaks and 89,984 bytes after twenty rebuilds
-         * against a broker returning 500, the leaked blocks being the refusal
-         * bodies themselves.
-         *
-         * The zeroing is what lets the free be unconditional: `encoded` can
-         * fail before http_request has touched `r` at all. The old expression
-         * relied on `bytes` being NULL to avoid reading `r.error` in that
-         * case, which is true — mdy_engine_encode_json NULLs it first — but it
-         * is true somewhere else, and a cleanup that depends on that is a
-         * cleanup waiting to be wrong.
+         * Zeroed at the declaration, and freed on every path: a refusal that
+         * skipped http_response_free would keep the body of every non-2xx
+         * answer for the life of a server meant to run all day. The zeroing
+         * is what lets the free be unconditional — `encoded` can fail before
+         * http_request has touched `r` at all.
          */
         HttpResponse r = { 0 };
         int encoded = mdy_engine_encode_json(d->engine, fresh.json[i], &bytes, &len) == 0;
@@ -1859,12 +1848,9 @@ static void dev_drain(Dev *d) {
 }
 
 /*
- * `done_list` is the `X-Sukkal-Done` header's body, and it GROWS. It was a
- * char[4096] filled with strncat, which silently stopped at about three
- * hundred and forty indexes — and the header is how a partial batch tells the
- * broker which of its jobs are settled, so the ones that fell off the end
- * would be delivered again. §3 listed this under fixed-size scratch; what it
- * was waiting for is the growable buffer §2 gave the engine.
+ * `done_list` is the `X-Sukkal-Done` header's body, and it GROWS: the header
+ * is how a partial batch tells the broker which of its jobs are settled, and
+ * an index that fell off the end of a fixed buffer would be delivered again.
  */
 static void deliver_batch(Dev *d, const char *subject, const bjv *batch, int is_dead, int target,
                           size_t *done, size_t *failed, mdy_sbuf *done_list,

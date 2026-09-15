@@ -65,8 +65,7 @@ int main(void) {
         "<p>a <b>x</i> b</p>", "<p>a <b>x b</b></p>");
 
     /* Foster parenting: character data and elements may not sit between a
-     * <table> and its first row, so they are hoisted out in front of it.
-     * §4 wrote this one rule out by hand for tables; it is lexbor's now. */
+     * <table> and its first row, so they are hoisted out in front of it. */
     ok_("a stray element in a table is foster-parented out",
         "<table><b>stray</b><tr><td>x</td></tr></table>",
         "<b>stray</b><table><tbody><tr><td>x</td></tr></tbody></table>");

@@ -98,12 +98,9 @@ static void on_object_end(void *c) { pop(c); }
 bjv *bjv_decode(const uint8_t *data, size_t len) {
     Builder b = { 0 };
     /*
-     * By NAME. This was positional, with `on_num` appearing four times — for
-     * int, float, date and pointer — so a field reordered or inserted in
-     * binjson's header would have kept compiling and quietly bound the wrong
-     * callback to the wrong type. engine_value.c fills the same struct with
-     * designated initialisers, and binjson is a separate repository whose
-     * header can change under this one — which is the case being guarded.
+     * By NAME, never positionally: `on_num` stands for four types, so a field
+     * reordered in binjson's header — a separate repository that can change
+     * under this one — would keep compiling and bind the wrong callback.
      */
     bj_visitor v = {
         .on_null = on_null, .on_bool = on_bool,

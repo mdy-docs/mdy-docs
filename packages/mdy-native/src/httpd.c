@@ -268,13 +268,9 @@ void httpd_respond(Httpd *s, HttpdRequest *req, int status, const char *content_
                    const char *extra_headers, const void *body, size_t len) {
     Conn *c = &s->conns[req->connection];
     /*
-     * The head GROWS, and it has to: this was a char[4096] with snprintf's
-     * return used as the length to send — which is what snprintf WOULD have
-     * written, not what it did. A caller with headers past 4096 bytes
-     * therefore sent `n` bytes out of a 4096-byte buffer, reading off the end
-     * of it, and what reaches the client is a truncated header with no
-     * terminating blank line. Reachable from `X-Sukkal-Done`, which names
-     * every settled job of a partial batch.
+     * The head GROWS: `extra_headers` has no bound, since `X-Sukkal-Done`
+     * names every settled job of a partial batch, and a head cut short would
+     * reach the client without its terminating blank line.
      */
     char fixed[512];
     int n = snprintf(fixed, sizeof fixed,

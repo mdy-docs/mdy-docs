@@ -40,15 +40,10 @@ typedef struct {
 } Slot;
 
 /*
- * The slot table GROWS rather than being capped. It was eight, which was fine
- * for a build — one document set per package — and wrong the moment mdy-docs'
- * own test suite ran here: it opens a set per test, hundreds of them, and the
- * ninth failed with "could not open a collection".
- *
- * Growing alone would have moved the failure to the file-descriptor limit
- * when a collection was a temp file and an index another; it is a buffer now
- * (see Store below), so the only thing a slot costs is the memory in it. What
- * gives it back is nis_close, which the engine calls when it closes a set.
+ * The slot table GROWS rather than being capped: a build opens one set per
+ * package, but a test suite opens one per test, hundreds of them. A slot
+ * costs only the memory in it (see Store below), and nis_close, which the
+ * engine calls when it closes a set, gives it back.
  */
 static Slot *g_slots;
 static int g_slot_count;
@@ -58,16 +53,11 @@ static int g_slot_count;
  *
  * The four bj_io callbacks are this file's entire platform surface, which is
  * the reason nisaba itself needs no porting — and it is equally the reason
- * storage does not have to be a file at all. It was one: a temp file that
- * "lives exactly as long as its handle, which is the lifetime
- * MemoryStorageProvider promises on the JS side". That is a memory store
- * described as a file, so this is the same lifetime with the detour removed.
- *
- * The detour was not free. Every read and write went through the kernel, and
- * a 93-page build spent ELEVEN of its seventeen seconds in system time —
- * more than its own computation. It also cost a file descriptor per
- * collection plus one per index, and hardcoded /tmp, which is not writable
- * on iOS.
+ * storage does not have to be a file at all. A collection lives exactly as
+ * long as its handle, which is the lifetime MemoryStorageProvider promises
+ * on the JS side; a memory buffer is that lifetime with no detour through
+ * the kernel, no file descriptor per collection and index, and no /tmp,
+ * which is not writable on iOS.
  *
  * A persistent store is still exactly four callbacks away when Phase 6 wants
  * one. That is what the vtable is for.

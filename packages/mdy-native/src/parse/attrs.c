@@ -24,18 +24,18 @@
  *
  * This is `property-information`'s `find(html, name)`, which is what mdy-docs
  * calls, reproduced exactly rather than approximated — and the difference is
- * not academic. A hand-written table of the twenty names that "obviously"
- * matter got three separate things wrong, each of which changed real output:
+ * not academic. Three rules a table of the names that "obviously" matter
+ * would miss, each of which changes real output:
  *
  *   - The lookup is case-INSENSITIVE. `SRC` is `src`, and `For` is `htmlFor`.
  *   - An UNKNOWN name is kept verbatim, not lowercased. `FOO` stays `FOO`.
  *   - `data-` camel-cases only where a dash is followed by a LOWERCASE letter,
  *     so `DATA-x-Y` is `dataX-Y` and not `dataXY`.
  *
- * The last two are only reachable through malformed markup, which is exactly
- * where they were found: an unescaped quote inside an `alt=""` turns the rest
- * of a caption into bare attributes, and one name resolved differently was
- * enough to reorder the whole element's properties downstream.
+ * The last two are only reachable through malformed markup, which is
+ * ordinary: an unescaped quote inside an `alt=""` turns the rest of a caption
+ * into bare attributes, and one name resolved differently is enough to
+ * reorder the whole element's properties downstream.
  *
  * MDY_PROPS is generated from the library itself — scripts/generate-props.mjs.
  */

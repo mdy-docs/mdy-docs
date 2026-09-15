@@ -314,11 +314,10 @@ int http_request(const char *method, const char *url, const char *content_type,
     }
 
     /*
-     * Until the peer closes, was the whole of it: a broker that accepted and
-     * says nothing holds this forever, and one that says too much grows the
-     * buffer until the allocation fails — and `realloc`'s answer going
-     * straight back into `buf` turns that into a write through NULL rather
-     * than an error. The deadline, the cap and the check are all three.
+     * Read until the peer closes, under a deadline and a size cap: a broker
+     * that accepts and says nothing would otherwise hold this forever, and
+     * one that says too much would grow the buffer until an allocation
+     * failed.
      */
     size_t cap = 65536, len = 0;
     uint8_t *buf = malloc(cap + 1);

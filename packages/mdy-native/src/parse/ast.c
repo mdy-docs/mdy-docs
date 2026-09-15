@@ -158,13 +158,9 @@ void mdy_set_bool(mdy_doc *doc, mdy_node *el, const char *name, int value) {
 /*
  * A space-separated property is a LIST in hast, and it is appended to rather
  * than replaced — an element can pick up classes from more than one rule.
- *
- * `className` was the only one until a `.md` footnote reference needed
- * `ariaDescribedBy`, which hast's schema also calls space-separated: what
- * rehype-raw's parser hands back for `aria-describedby="footnote-label"` is
- * `["footnote-label"]` and not the string. The three places that read a list
- * — the HTML writer, the JSON writer and the bridge into the VM — were
- * already generic over the name; only this was not.
+ * `className` is one; so is `ariaDescribedBy`, which hast's schema also calls
+ * space-separated: rehype-raw hands back `["footnote-label"]` for
+ * `aria-describedby="footnote-label"`, not the string.
  */
 void mdy_set_list(mdy_doc *doc, mdy_node *el, const char *name) {
     mdy_prop *p = NULL;

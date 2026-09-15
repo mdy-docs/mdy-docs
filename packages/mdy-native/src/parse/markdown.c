@@ -46,8 +46,8 @@ enum { STACK_MAX = MDY_MAX_DEPTH };
  *           and what a tight <li> gets
  *
  * Getting it wrong is a difference on every document rather than an unusual
- * one: the first version padded after every block and was wrong 1389 times
- * out of 1390, all of them a single trailing newline.
+ * one: padding after every block would be a spurious trailing newline on
+ * nearly all of them.
  */
 typedef struct {
     mdy_node *node;
@@ -236,8 +236,6 @@ static void flush_gathered(Build *b) {
 /* ---- entities ------------------------------------------------------------- */
 
 /* One codepoint as UTF-8, into `out`; returns how many bytes. */
-/* mdytext.h's, since §2's sweep: this library had three copies of the same
- * encoder and one of them is the one the header already declares. */
 #define utf8_of(cp, out) mdy_utf8_encode((uint32_t)(cp), (out))
 
 static void put_codepoint(Build *b, unsigned cp) {
@@ -802,12 +800,10 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
              * that is tight — which it also unwraps. In a tight list md4c
              * never reports that paragraph at all and hands the inline
              * content straight over, so the skip is already done here by the
-             * shape of the callbacks. What was left was the other half: every
-             * child that IS a block still gets its newline before, and a
-             * trailing one after the last, whether the item is tight or not.
-             *
-             * `- > quoted` was the shortest case — [blockquote] here against
-             * [\n, blockquote, \n] there — and it is the same for a table, a
+             * shape of the callbacks. The other half is this: every child
+             * that IS a block gets its newline before, and a trailing one
+             * after the last, whether the item is tight or not — `- > quoted`
+             * is [\n, blockquote, \n], and it is the same for a table, a
              * nested list, a fence and a heading.
              */
             push(b, li, 1);
@@ -1223,15 +1219,10 @@ static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
             return 0;
         case MD_TEXT_HTML:
             /*
-             * A RAW node, the way MD_BLOCK_HTML already makes one.
-             *
-             * This had no case at all and fell through to `default:`, so an
-             * inline tag became ordinary text and the writer escaped it:
-             * `a <b>x</b>` came out `a &#x3C;b>x&#x3C;/b>` where node writes
-             * the markup. The block kind was right all along, which is what
-             * made it look deliberate — it is the same `.md` pipeline and the
-             * same rehype-raw re-parsing both, and only one of the two was
-             * being handed anything to re-parse.
+             * A RAW node, the way MD_BLOCK_HTML makes one: it is the same
+             * `.md` pipeline and the same rehype-raw re-parsing both, and as
+             * text the writer would escape it — `a <b>x</b>` as
+             * `a &#x3C;b>x&#x3C;/b>` where node writes the markup.
              *
              * It is `.md` only, and that is not an accident of where this
              * file sits: mdy's OWN language has no inline HTML — a `<` in a
@@ -1291,14 +1282,11 @@ static int has_id(const mdy_node *el) {
 /*
  * "Give every heading an id it does not already have" — mdy-docs'
  * identifyHeadings, and the second half of that sentence is load-bearing.
- * This overwrote one.
- *
- * Until footnotes there was nothing to overwrite: a heading the document wrote
- * as raw HTML is still a `raw` node here, so the only headings this pass met
- * were the ones it had just named itself. The footnotes section's `h2` is the
- * first that arrives with an id of its own — `footnote-label`, which every
- * back-reference's aria-describedby points at — and it was being handed the
- * slug of the word "Footnotes" instead.
+ * A heading the document wrote as raw HTML is still a `raw` node here, so
+ * the one heading that arrives with an id of its own is the footnotes
+ * section's `h2`: `footnote-label`, which every back-reference's
+ * aria-describedby points at, and which must not become the slug of the
+ * word "Footnotes".
  *
  * The other half is that the slugger is not ASKED for a name it will not use,
  * so a document with its own `## Footnotes` beside a footnotes section

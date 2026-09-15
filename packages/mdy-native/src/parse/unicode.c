@@ -4,9 +4,8 @@
  * THE TABLES ARE NOT OURS, and that is the point of this file. `\p{L}`,
  * `\p{N}` and simple lowercase are Unicode data, and a hand-written
  * approximation of them is wrong in ways that only show up in somebody's
- * language. This one was: an earlier cut treated "every non-ASCII byte" as a
- * letter, which kept en dashes in URLs, and lowercased only Latin-1 and Latin
- * Extended-A, which left `Ń` and `Ḫ` upper. Both produced links to nowhere.
+ * language: "every non-ASCII byte is a letter" keeps en dashes in URLs, and
+ * a Latin-only lowercase leaves `Ń` and `Ḫ` upper. Both are links to nowhere.
  *
  * baru-re — the regex engine lamassu uses — already carries generated UCD
  * tables, so this reaches for those rather than inventing a third copy. Only
@@ -21,8 +20,8 @@
  * character can be mistaken for ASCII — so every rule that looks for `|`, `-`
  * or `[[` can scan bytes and be right. What CANNOT scan bytes is anything that
  * asks a question ABOUT a character: is it a letter, what is its lowercase,
- * should it be deleted. Those decode first, and each of the three that did not
- * was a bug — the worst left two bytes of an en dash behind in a URL.
+ * should it be deleted. Those decode first: one that scans bytes leaves two
+ * of an en dash's three behind in a URL.
  *
  * The UTF-16 pair at the bottom is a BOUNDARY, not a representation. Every
  * JavaScript engine — QuickJS, lamassu, V8 — holds strings as UTF-16, so a
@@ -70,11 +69,8 @@ int mdy_is_letter_or_number_cp(uint32_t cp) {
  * that changes a string's length changes every offset after it and no document
  * in reach needs one.
  *
- * lamassu's own `toLowerCase` was ASCII-only when this was written, which
- * would have meant the same call inside and outside the sandbox disagreeing on
- * any non-ASCII string. That was a bug rather than a boundary and it is fixed
- * upstream (lamassu e38fcf9), over these same UCD tables — so the sandbox and
- * the host now answer alike.
+ * lamassu's own `toLowerCase` is built over these same UCD tables, so the
+ * sandbox and the host answer alike on any string.
  */
 uint32_t mdy_lower_cp(uint32_t cp) {
     if (cp < 0x80) return (cp >= 'A' && cp <= 'Z') ? cp + 32 : cp;

@@ -7,10 +7,10 @@
  *
  * A handful of places cannot. `key(vm, "_id")` returns a JsValue; there is no
  * JsValue that means "the allocation failed", and `js_undefined()` is a value
- * a document may legitimately hold. So the code did the only thing it could
- * and carried on with the wrong answer: a property landed under the key
- * `undefined`, a tagName fell back to `div`, a hash was taken over a subset
- * of the object's keys. The build then reported success.
+ * a document may legitimately hold. Carrying on would mean the wrong answer:
+ * a property under the key `undefined`, a tagName fallen back to `div`, a
+ * hash taken over a subset of the object's keys, and a build that reports
+ * success.
  *
  * Threading a status out of those helpers means changing every caller of a
  * function called from everywhere, to carry a condition that on any machine
