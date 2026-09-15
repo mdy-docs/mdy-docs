@@ -18,7 +18,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = process.env.MDY_ASAN ?? join(here, '..', 'build', 'mdy-asan');
 const dir = mkdtempSync(join(tmpdir(), 'mdy-hostile-'));
+process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
 
 const rep = (s, n) => Buffer.from(s.repeat(n));
 const bytes = (...parts) => Buffer.concat(parts.map((p) => (Buffer.isBuffer(p) ? p : Buffer.from(p))));

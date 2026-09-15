@@ -34,7 +34,11 @@ const bin = process.env.MDY_CLI ?? join(here, '..', 'build', 'mdy');
  * lot at the end rather than leaving one per test under . */
 const temps = [];
 const mkTemp = () => { const d = mkdtempSync(join(tmpdir(), 'mdy-dev-')); temps.push(d); return d; };
-after(() => { for (const d of temps) rmSync(d, { recursive: true, force: true }); });
+const cleanup = () => { for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true }); };
+after(cleanup);
+/* And on the way out however the run ends: a timed-out or killed run does
+ * not reach `after`. */
+process.on('exit', cleanup);
 
 /* One delivery, in the shape sukkal POSTs: an array of jobs. A `payload` is
  * not needed to reach what is under test and would only say less clearly what

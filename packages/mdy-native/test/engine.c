@@ -1765,6 +1765,7 @@ static void record_key_checks(void) {
             got && strstr(got, "path=note.yaml") != NULL, got ? got : err);
         free(html);
         mdy_engine_free(e);
+        fsx_rm_rf(root);
         free(root);
     }
 }
@@ -2114,6 +2115,7 @@ static void unreadable_dir_checks(void) {
         listing != NULL && listing[0] == '\0', listing ? "(empty)" : "(NULL)");
     free(listing);
 
+    fsx_rm_rf(root);
     free(root);
 }
 #endif
@@ -2213,6 +2215,7 @@ static void import_checks(void) {
     free(html2);
     mdy_engine_free(e2);
 
+    fsx_rm_rf(root);
     free(root);
 }
 
@@ -3492,6 +3495,7 @@ static void api_checks(void) {
             mdy_engine_root_at(e, roots + 5) == NULL, "(NULL)");
 
         mdy_engine_free(e);
+        fsx_rm_rf(root);
         free(root);
     }
 }
