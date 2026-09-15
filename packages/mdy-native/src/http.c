@@ -40,10 +40,13 @@ static int sockets_ready(void) {
 #  include <errno.h>
 #  include <fcntl.h>
 #  include <strings.h>
+#  include <signal.h>
 typedef int sock_t;
 #  define BAD_SOCKET (-1)
 #  define close_socket close
-static int sockets_ready(void) { return 1; }
+/* A peer that resets mid-send raises SIGPIPE, whose default ends the
+ * process; ignored, the send fails and is reported like any other. */
+static int sockets_ready(void) { signal(SIGPIPE, SIG_IGN); return 1; }
 #endif
 
 /*
