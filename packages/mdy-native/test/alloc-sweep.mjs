@@ -249,6 +249,7 @@ const stalled = [];
 const traces = new Map();
 let ok = 0;
 let reported = 0;
+const silent = [];   /* stopped with a code, and said nothing */
 
 let next = from;
 
@@ -261,11 +262,12 @@ const runBuild = (n, slot) =>
       bin,
       argsFor(out),
       { env: { ...process.env, MDY_ALLOC_FAIL_NTH: String(n) }, encoding: 'buffer' },
-      (err) => {
+      (err, _stdout, stderr) => {
         // A signal is a crash; a non-zero code is the run reporting it could
-        // not finish, which is what the invariant allows.
+        // not finish, which is what the invariant allows — provided it SAID
+        // so, since the invariant is that a run that could not says why.
         if (err?.signal) crashed.push(`${n}:${err.signal}`);
-        else if (err?.code) reported++;
+        else if (err?.code) { if (stderr && stderr.length) reported++; else silent.push(n); }
         else if (same(reference, treeOf(out))) ok++;
         else wrong.push(n);
         resolve();
@@ -345,8 +347,9 @@ if (wrong.length) {
   const what = mode === 'dev' ? 'served a DIFFERENT site (or nothing, with status 0)' : 'reported success with a DIFFERENT site';
   console.log(`  ${what} at: ${wrong.sort((a, b) => a - b).join(' ')}`);
 }
-if (crashed.length || wrong.length || stalled.length) {
-  console.log(`  ${crashed.length + wrong.length + stalled.length} of ${to - from + 1}`);
+if (silent.length) console.log(`  stopped without a word at: ${silent.sort((a, b) => a - b).join(' ')}`);
+if (crashed.length || wrong.length || stalled.length || silent.length) {
+  console.log(`  ${crashed.length + wrong.length + stalled.length + silent.length} of ${to - from + 1}`);
   process.exit(1);
 }
 console.log(`  ${to - from + 1} refusals: every one was either survived exactly or reported`);
