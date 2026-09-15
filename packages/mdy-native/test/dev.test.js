@@ -21,7 +21,7 @@ import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -618,5 +618,87 @@ test('dev refuses a port already in use', async () => {
     assert.match(log, /EADDRINUSE|address already in use/);
   } finally {
     first.child.kill();
+  }
+});
+
+/* A GET, read to completion: { status, headers, body }. */
+const get = (port, path, method = 'GET') =>
+  new Promise((resolve, reject) => {
+    const req = request({ host: 'localhost', port, path, method }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+
+/* Just the response head, for an endpoint that KEEPS the connection open (the
+ * live-reload stream) and so never ends — resolve on the headers, then drop it. */
+const getHead = (port, path) =>
+  new Promise((resolve, reject) => {
+    const req = request({ host: 'localhost', port, path }, (res) => {
+      resolve({ status: res.statusCode, headers: res.headers });
+      res.destroy();
+      req.destroy();
+    });
+    req.on('error', reject);
+    req.end();
+  });
+
+test('dev serves the site, injects live-reload, types static files, and 404s the unknown', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'),
+    '% $.emit("index.html", "<html><body>home</body></html>")\n= x\n');
+  mkdirSync(join(root, 'static'), { recursive: true });
+  writeFileSync(join(root, 'static', 'style.css'), 'body{color:red}\n');
+
+  const dev = startDev(root);
+  try {
+    /* The ready banner prints after the first build, so the site is served. */
+    const [, port] = await dev.until(/http:\/\/localhost:(\d+)/);
+
+    const home = await get(port, '/');
+    assert.equal(home.status, 200, 'the emitted index is served at /');
+    assert.match(home.headers['content-type'], /text\/html/);
+    assert.match(home.body, /home/);
+    assert.match(home.body, /EventSource\("\/__mdy__\/events"\)/,
+      'the live-reload client is injected into every page');
+
+    const css = await get(port, '/style.css');
+    assert.equal(css.status, 200, 'static/ is served from disk');
+    assert.match(css.headers['content-type'], /text\/css/, 'typed by extension');
+    assert.match(css.body, /color:red/);
+    assert.doesNotMatch(css.body, /EventSource/, 'a non-HTML file is not rewritten');
+
+    const missing = await get(port, '/no-such-page');
+    assert.equal(missing.status, 404);
+    assert.match(missing.body, /404/);
+    assert.match(missing.body, /EventSource/, 'the 404 still carries the reload client');
+
+    const events = await getHead(port, '/__mdy__/events');
+    assert.match(events.headers['content-type'], /text\/event-stream/,
+      'the reload endpoint is an event stream');
+  } finally {
+    dev.child.kill();
+  }
+});
+
+test("dev serves a site's own 404.html for the unknown, when it has one", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdy-dev-'));
+  writeFileSync(join(root, 'main.mdy'),
+    '% $.emit("index.html", "<html><body>home</body></html>")\n' +
+    '% $.emit("404.html", "<html><body>custom not found</body></html>")\n= x\n');
+
+  const dev = startDev(root);
+  try {
+    const [, port] = await dev.until(/http:\/\/localhost:(\d+)/);
+    const missing = await get(port, '/whatever');
+    assert.equal(missing.status, 404);
+    assert.match(missing.body, /custom not found/, "the site's own 404 page is used");
+    assert.match(missing.body, /EventSource/, 'and it too carries the reload client');
+  } finally {
+    dev.child.kill();
   }
 });
