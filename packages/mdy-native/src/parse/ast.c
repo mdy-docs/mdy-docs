@@ -75,8 +75,6 @@ typedef struct mdy_pindex {
     size_t count;
 } mdy_pindex;
 
-enum { PINDEX_THRESHOLD = 24 };   /* below this a linear scan is the cheaper thing */
-
 static size_t pindex_slot(mdy_prop **slots, size_t cap, const char *interned) {
     size_t mask = cap - 1;
     size_t h = ((uintptr_t)interned >> 4) & mask;
@@ -99,32 +97,43 @@ static void pindex_put(mdy_doc *doc, mdy_pindex *px, mdy_prop *p) {
     px->count++;
 }
 
+/* The element's property with this interned name, or NULL. `*scanned` is how
+ * many properties the list walk passed, for the caller that decides when the
+ * list is long enough to index. */
+static mdy_prop *find_interned(const mdy_node *el, const char *interned, size_t *scanned) {
+    if (el->pindex) return el->pindex->slots[pindex_slot(el->pindex->slots, el->pindex->cap, interned)];
+    size_t n = 0;
+    for (mdy_prop *q = el->props; q; q = q->next, n++)
+        if (q->name == interned) { if (scanned) *scanned = n; return q; }
+    if (scanned) *scanned = n;
+    return NULL;
+}
+
+/* The element's property of this name, or NULL when it has none — through
+ * the index when the element has one, and without interning a name no
+ * property has ever had. */
+static mdy_prop *find_prop(mdy_doc *doc, const mdy_node *el, const char *name) {
+    const char *interned = mdy_intern_lookup(&doc->names, name, strlen(name));
+    return interned ? find_interned(el, interned, NULL) : NULL;
+}
+
 static mdy_prop *new_prop(mdy_doc *doc, mdy_node *el, const char *name) {
     const char *interned = mdy_intern(&doc->arena, &doc->names, name, strlen(name));
 
     /* An existing property of this name is reused (its value replaced). */
-    if (el->pindex) {
-        mdy_prop *q = el->pindex->slots[pindex_slot(el->pindex->slots, el->pindex->cap, interned)];
-        if (q) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return q; }
-    } else {
-        size_t n = 0;
-        for (mdy_prop *q = el->props; q; q = q->next) {
-            n++;
-            if (q->name == interned) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return q; }
-        }
-        /* Long enough that the scan hurts: index this element from here on. */
-        if (n >= PINDEX_THRESHOLD) {
-            mdy_pindex *px = mdy_alloc(&doc->arena, sizeof *px);
-            if (px) {
-                memset(px, 0, sizeof *px);
-                for (mdy_prop *q = el->props; q; q = q->next) pindex_put(doc, px, q);
-                el->pindex = px;
-            }
-        }
+    size_t scanned = 0;
+    mdy_prop *q = find_interned(el, interned, &scanned);
+    if (q) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return q; }
+
+    /* Long enough that the scan hurts: index this element from here on. */
+    if (!el->pindex && scanned >= MDY_HINDEX_THRESHOLD) {
+        mdy_pindex *px = mdy_alloc(&doc->arena, sizeof *px);
+        memset(px, 0, sizeof *px);
+        for (mdy_prop *r = el->props; r; r = r->next) pindex_put(doc, px, r);
+        el->pindex = px;
     }
 
     mdy_prop *p = mdy_alloc(&doc->arena, sizeof *p);
-    if (!p) return NULL;
     memset(p, 0, sizeof *p);
     p->name = interned;
     if (el->props_tail) el->props_tail->next = p;
@@ -163,11 +172,8 @@ void mdy_set_bool(mdy_doc *doc, mdy_node *el, const char *name, int value) {
  * `aria-describedby="footnote-label"`, not the string.
  */
 void mdy_set_list(mdy_doc *doc, mdy_node *el, const char *name) {
-    mdy_prop *p = NULL;
-    for (mdy_prop *q = el->props; q; q = q->next) {
-        if (strcmp(q->name, name) == 0) { p = q; break; }
-    }
-    if (!p) { p = new_prop(doc, el, name); if (!p) return; }
+    mdy_prop *p = find_prop(doc, el, name);
+    if (!p) p = new_prop(doc, el, name);
     p->type = MDY_PROP_LIST;
     p->list = NULL;
     p->list_len = 0;
@@ -175,11 +181,8 @@ void mdy_set_list(mdy_doc *doc, mdy_node *el, const char *name) {
 }
 
 void mdy_add_token(mdy_doc *doc, mdy_node *el, const char *name, const char *token) {
-    mdy_prop *p = NULL;
-    for (mdy_prop *q = el->props; q; q = q->next) {
-        if (strcmp(q->name, name) == 0) { p = q; break; }
-    }
-    if (!p) { p = new_prop(doc, el, name); if (!p) return; }
+    mdy_prop *p = find_prop(doc, el, name);
+    if (!p) p = new_prop(doc, el, name);
     /*
      * A token list — whether the property is new, or a same-named non-list
      * value being turned into one. Appending without setting the type left a
@@ -293,10 +296,8 @@ mdy_node *mdy_clone(mdy_doc *into, const mdy_node *node) {
  * one rule can contribute; a repeated attribute is not that case.
  */
 void mdy_clear_class(mdy_doc *doc, mdy_node *el) {
-    (void)doc;
-    for (mdy_prop *q = el->props; q; q = q->next) {
-        if (strcmp(q->name, "className") == 0) { q->list = NULL; q->list_len = 0; q->list_cap = 0; return; }
-    }
+    mdy_prop *q = find_prop(doc, el, "className");
+    if (q) { q->list = NULL; q->list_len = 0; q->list_cap = 0; }
 }
 
 /* ---- a growable output buffer -------------------------------------------- */

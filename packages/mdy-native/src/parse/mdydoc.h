@@ -64,6 +64,10 @@ void mdy_documents_free(mdy_documents *docs);
  * with no partner is left alone — it is more likely prose than a block
  * somebody forgot to finish, and guessing would swallow the rest.
  *
+ * The fence is fixed here as it is in mdy.js, which takes the block off
+ * before the parser sees the document; the parser's own `frontmatter_fence`
+ * option is block.js's setting, for a caller that parses whole documents.
+ *
  * Writes the YAML through `matter` (len 0 when there is none) and everything
  * after the closing fence through `body`. Neither is copied: both point into
  * `text`.

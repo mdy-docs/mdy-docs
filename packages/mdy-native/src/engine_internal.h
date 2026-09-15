@@ -47,7 +47,10 @@
  * headings are not known until its whole tree is — including the ones a loop
  * below the contents list writes.
  */
-typedef struct { char id[24]; mdy_doc *doc; mdy_node *tree; int is_toc; } Held;
+/* A token id, base 36 with its terminator: what token_at reads and
+ * key_base36 writes. */
+#define TOKEN_ID_CAP 24
+typedef struct { char id[TOKEN_ID_CAP]; mdy_doc *doc; mdy_node *tree; int is_toc; } Held;
 
 /* One document's index, under the `_id` it was inserted with — see
  * `oid_slots` on the engine. An empty `hex` is an empty slot. */
@@ -164,7 +167,7 @@ struct mdy_engine {
          * itself, or one past the node budget. Set by the conversion and
          * reported by whoever asked for it. */
         const char *tree_fault;
-        char last_render_key[24];   /* the memo key of the render just done, base 36 */
+        char last_render_key[TOKEN_ID_CAP];   /* the memo key of the render just done, base 36 */
         char *last_response;
         JsValue render_res;         /* the `res` of the render in progress, for its references */
     } compose;
@@ -359,6 +362,7 @@ char *fill_tokens(mdy_engine *e, const char *s, size_t len);
  * spanned, whether a string is nothing BUT tokens, and the tree one names. */
 size_t token_at(const char *s, size_t len, char *id, size_t id_cap);
 int only_tokens(const char *s, size_t len);
+Held *held_by_text(mdy_engine *e, const char *s, size_t len);
 Held *held_find(mdy_engine *e, const char *id);
 /* The text of a node whose only child is text, with its length, or NULL. */
 const char *sole_text(const mdy_node *n, size_t *len);

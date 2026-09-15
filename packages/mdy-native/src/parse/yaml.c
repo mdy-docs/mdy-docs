@@ -1201,6 +1201,8 @@ static mdy_yaml_node *parse_block(P *p, size_t indent) {
 
 /* ---- the stream --------------------------------------------------------------- */
 
+/* A line ends at `\n`, and a `\r` before it is part of the ending, not the
+ * content — the reading YAML and the `yaml` package both give a CRLF file. */
 static Line *split_lines(const char *text, size_t len, size_t *count) {
     size_t n = 1;
     for (size_t i = 0; i < len; i++) if (text[i] == '\n') n++;

@@ -129,6 +129,11 @@ const char *mdy_intern(mdy_arena *arena, mdy_intern_table *table, const char *s,
  * when there is not — for a lookup whose miss should leave nothing behind. */
 const char *mdy_intern_lookup(const mdy_intern_table *table, const char *s, size_t len);
 
+/* A line that is exactly `fence` once trailing spaces and tabs are off —
+ * block.js's `line.trimEnd() === settings.fence`. Leading whitespace is not
+ * allowed, so the caller hands in an unindented line. */
+int mdy_is_fence_line(const char *s, size_t len, const char *fence, size_t fence_len);
+
 /* ---- a small (interned key, tag) -> value index -------------------------- */
 
 /*

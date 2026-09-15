@@ -23,6 +23,9 @@ struct mdy_data {
 
 typedef struct { const char *s; size_t len; size_t indent; } Line;
 
+/* `text.split('\n')`, as the fence extraction does: a `\r` stays on its
+ * line, and the fence tests below take it off where the JavaScript's
+ * regexes end in `\s*$`. The body keeps every byte it was given. */
 static size_t split(const char *text, size_t len, Line **out) {
     size_t n = 1;
     for (size_t i = 0; i < len; i++) if (text[i] == '\n') n++;

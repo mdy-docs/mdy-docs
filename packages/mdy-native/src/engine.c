@@ -1812,15 +1812,12 @@ static void splice_toc(mdy_engine *e, mdy_doc *doc, mdy_node *parent,
 
         size_t len = 0;
         const char *text = sole_text(child, &len);
-        char id[24];
-        if (text && only_tokens(text, len) && token_at(text, len, id, sizeof id)) {
-            Held *h = held_find(e, id);
-            if (h && h->is_toc) {
-                mdy_node *list = toc_list(doc, entries, count);
-                if (list) mdy_append(parent, list);
-                child = next;
-                continue;
-            }
+        Held *h = text ? held_by_text(e, text, len) : NULL;
+        if (h && h->is_toc) {
+            mdy_node *list = toc_list(doc, entries, count);
+            if (list) mdy_append(parent, list);
+            child = next;
+            continue;
         }
         splice_toc(e, doc, child, entries, count);
         mdy_append(parent, child);
@@ -1866,11 +1863,10 @@ static bool toc_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     if (js_is_string(args[0])) {
         char *s = js_string_utf8(args[0]);
         size_t slen = s ? strlen(s) : 0;
-        char id[24];
         /* A token is how a rendered document travels, so `$.toc($.render(…))`
          * is asking about THAT document, not about three characters. */
-        if (s && only_tokens(s, slen) && token_at(s, slen, id, sizeof id)) {
-            Held *h = held_find(e, id);
+        if (s && only_tokens(s, slen)) {
+            Held *h = held_by_text(e, s, slen);
             if (h) tree = h->tree;
         } else {
             mdy_options options;

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "mdydoc.h"
+#include "internal.h"
 
 struct mdy_documents {
     mdy_chunk *chunks;
@@ -24,13 +25,8 @@ static int is_separator(const char *s, size_t len) {
     return 1;
 }
 
-/* `/^\+\+\+[ \t]*$/` */
-static int is_fence(const char *s, size_t len) {
-    if (len < 3 || s[0] != '+' || s[1] != '+' || s[2] != '+') return 0;
-    for (size_t i = 3; i < len; i++)
-        if (s[i] != ' ' && s[i] != '\t') return 0;
-    return 1;
-}
+/* `/^\+\+\+[ \t]*$/` — the engine's fence is fixed, as mdy.js's is. */
+static int is_fence(const char *s, size_t len) { return mdy_is_fence_line(s, len, "+++", 3); }
 
 /*
  * While a list is being built a chunk is an OFFSET, not a pointer: the buffer

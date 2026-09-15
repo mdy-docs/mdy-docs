@@ -2166,15 +2166,16 @@ static size_t parse_definition(mdy_doc *doc, const mdy_line *lines, size_t count
 
 /* ---- front matter and documents ------------------------------------------ */
 
-/** A line that is exactly the fence, once trailing whitespace is off —
- * `lines[open].trimEnd() !== settings.fence`. Leading whitespace is not
- * allowed, so an indented `+++` is content. */
-static int is_fence(const mdy_line *l, const char *fence, size_t fence_len) {
-    if (l->indent != 0 || l->len < fence_len) return 0;
-    if (memcmp(l->text, fence, fence_len) != 0) return 0;
-    for (size_t k = fence_len; k < l->len; k++)
-        if (l->text[k] != ' ' && l->text[k] != '\t') return 0;
+int mdy_is_fence_line(const char *s, size_t len, const char *fence, size_t fence_len) {
+    if (len < fence_len || memcmp(s, fence, fence_len) != 0) return 0;
+    for (size_t k = fence_len; k < len; k++)
+        if (s[k] != ' ' && s[k] != '\t') return 0;
     return 1;
+}
+
+/* An indented `+++` is content. */
+static int is_fence(const mdy_line *l, const char *fence, size_t fence_len) {
+    return l->indent == 0 && mdy_is_fence_line(l->text, l->len, fence, fence_len);
 }
 
 /*

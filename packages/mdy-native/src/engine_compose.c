@@ -34,8 +34,8 @@
 #define TOKEN_CLOSE "\xee\x80\x81"      /* U+E001 */
 
 /* A token's id at `s`, or 0. Writes the id and how many bytes it spanned.
- * `id_cap` is a Held's id (24 bytes): an id longer than that is not one this
- * engine minted, and is refused as such rather than cut. */
+ * `id_cap` is TOKEN_ID_CAP: an id longer than that is not one this engine
+ * minted, and is refused as such rather than cut. */
 size_t token_at(const char *s, size_t len, char *id, size_t id_cap) {
     if (len < 5 || memcmp(s, TOKEN_OPEN, 3) != 0) return 0;
     size_t i = 3;
@@ -153,6 +153,16 @@ static int only_space(const char *s, size_t len) {
     return 1;
 }
 
+/* The next token at or after `*i`, its id written into `id`: returns how
+ * many bytes it spans, with `*i` at its start, or 0 with `*i` at `len`. */
+static size_t next_token(const char *s, size_t len, size_t *i, char id[TOKEN_ID_CAP]) {
+    for (; *i < len; (*i)++) {
+        size_t used = token_at(s + *i, len - *i, id, TOKEN_ID_CAP);
+        if (used) return used;
+    }
+    return 0;
+}
+
 /* `^(?:\s*TOKEN)+\s*$` — a run that is nothing but tokens and space. */
 int only_tokens(const char *s, size_t len) {
     size_t i = 0;
@@ -160,12 +170,20 @@ int only_tokens(const char *s, size_t len) {
     for (;;) {
         while (i < len && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
         if (i >= len) return found;
-        char id[24];
+        char id[TOKEN_ID_CAP];
         size_t used = token_at(s + i, len - i, id, sizeof id);
         if (!used) return 0;
         i += used;
         found = 1;
     }
+}
+
+/* What a text that is nothing but tokens stands for: the tree held under
+ * its first token, or NULL when it is ordinary text or names nothing. */
+Held *held_by_text(mdy_engine *e, const char *s, size_t len) {
+    char id[TOKEN_ID_CAP];
+    if (!s || !only_tokens(s, len) || !token_at(s, len, id, sizeof id)) return NULL;
+    return held_find(e, id);
 }
 
 /* Elements that hold a line of their own, and so cannot hold one of somebody
@@ -216,10 +234,8 @@ static void block_content(mdy_node *dest, mdy_node *tree) {
 static void inline_content(mdy_engine *e, mdy_doc *doc, mdy_node *dest,
                            const char *s, size_t len) {
     size_t i = 0, last = 0;
-    while (i < len) {
-        char id[24];
-        size_t used = token_at(s + i, len - i, id, sizeof id);
-        if (!used) { i++; continue; }
+    char id[TOKEN_ID_CAP];
+    for (size_t used; (used = next_token(s, len, &i, id)) != 0; ) {
         if (i > last) mdy_append(dest, mdy_new_text(doc, s + last, i - last));
         Held *h = held_find(e, id);
         if (h && h->tree) {
@@ -275,13 +291,10 @@ void splice_tree(mdy_engine *e, mdy_doc *doc, mdy_node *parent) {
         if (text && only_tokens(text, len)) {
             size_t i = 0;
             int filled = 0;
-            while (i < len) {
-                char id[24];
-                size_t used = token_at(text + i, len - i, id, sizeof id);
-                if (!used) { i++; continue; }
+            char id[TOKEN_ID_CAP];
+            for (size_t used; (used = next_token(text, len, &i, id)) != 0; i += used) {
                 Held *h = held_find(e, id);
                 if (h && h->tree) { block_content(parent, mdy_clone(doc, h->tree)); filled = 1; }
-                i += used;
             }
             if (filled) { child = next; continue; }
         }
@@ -307,7 +320,7 @@ char *fill_tokens(mdy_engine *e, const char *s, size_t len) {
     mdy_sbuf out = { .seed = len + 256 };
     size_t i = 0, last = 0;
     while (i < len) {
-        char id[24];
+        char id[TOKEN_ID_CAP];
         size_t used = token_at(s + i, len - i, id, sizeof id);
         if (!used) { i++; continue; }
 
