@@ -694,15 +694,13 @@ build/obj-af/$(notdir $(1:.c=.o)): $(1) $$(HL_HDR) src/allocfail.h
 endef
 $(foreach s,$(OBJ_SRCS),$(eval $(call ENGINE_OBJ_RULE,$(s))))
 
-build/obj/cli.o: src/cli.c $(HL_HDR)
-	@mkdir -p build/obj
-	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
-build/obj-asan/cli.o: src/cli.c $(HL_HDR)
-	@mkdir -p build/obj-asan
-	$(CC) $(ASAN_CFLAGS) $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include -MMD -MP -c $< -o $@
-build/obj-af/cli.o: src/cli.c $(HL_HDR) src/allocfail.h
-	@mkdir -p build/obj-af
-	$(CC) $(AF_CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
+# The command: the subcommands, the dev server and its bus, built the same
+# three ways as the engine and linked only into the binaries that are `mdy`.
+CLI_SRCS := src/cli.c src/cli_util.c src/devbus.c
+CLI_OBJS      := $(addprefix build/obj/,$(notdir $(CLI_SRCS:.c=.o)))
+CLI_ASAN_OBJS := $(addprefix build/obj-asan/,$(notdir $(CLI_SRCS:.c=.o)))
+CLI_AF_OBJS   := $(addprefix build/obj-af/,$(notdir $(CLI_SRCS:.c=.o)))
+$(foreach s,$(CLI_SRCS),$(eval $(call ENGINE_OBJ_RULE,$(s))))
 # The shim is the one file the -include must not reach: it defines what the
 # macros rename to, and would rename itself into infinite recursion.
 build/obj-af/allocfail.o: src/allocfail.c src/allocfail.h
@@ -718,7 +716,7 @@ AF_LIBS     := $(PARSE_AF_LIB) $(LX_LIB) build/libsukkal.a $(LAM_LIBS)
 ASAN_LIBS   := $(PARSE_ASAN_LIB) $(LX_ASAN_LIB) build/libsukkal-asan.a $(LAM_ASAN_LIBS)
 
 -include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) $(AF_OBJS:.o=.d) \
-         build/obj/cli.d build/obj-asan/cli.d build/obj-af/cli.d \
+         $(CLI_OBJS:.o=.d) $(CLI_ASAN_OBJS:.o=.d) $(CLI_AF_OBJS:.o=.d) \
          build/obj-af/allocfail.d build/obj/engine-test.d build/obj/ingest-test.d build/obj-asan/engine-test.d
 
 # One document, end to end, with no JavaScript engine but lamassu — the three
@@ -732,9 +730,9 @@ build/engine-test$(EXE): build/obj/engine-test.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 # the hostile corpus (check-hostile). A use-after-free in the boundary between
 # the tree, the document store and the VM is invisible without it: a freed key
 # cell is silently reused and a property becomes a different one.
-build/mdy-asan$(EXE): build/obj-asan/cli.o $(ASAN_OBJS) $(ASAN_LIBS)
+build/mdy-asan$(EXE): $(CLI_ASAN_OBJS) $(ASAN_OBJS) $(ASAN_LIBS)
 	@mkdir -p build
-	$(CC) $(ASAN_CFLAGS) build/obj-asan/cli.o $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(ASAN_CFLAGS) $(CLI_ASAN_OBJS) $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
 
 # The engine test the same way (check-engine-asan).
 build/obj-asan/engine-test.o: test/engine.c $(HL_HDR)
@@ -746,13 +744,13 @@ build/engine-test-asan$(EXE): build/obj-asan/engine-test.o $(ASAN_OBJS) $(ASAN_L
 
 # The same driver with a single allocation refused, chosen by
 # MDY_ALLOC_FAIL_NTH. check-alloc sweeps n over a whole build; see check-alloc.
-build/mdy-af$(EXE): build/obj-af/cli.o $(AF_OBJS) build/obj-af/allocfail.o $(AF_LIBS)
+build/mdy-af$(EXE): $(CLI_AF_OBJS) $(AF_OBJS) build/obj-af/allocfail.o $(AF_LIBS)
 	@mkdir -p build
-	$(CC) $(CFLAGS) build/obj-af/cli.o $(AF_OBJS) build/obj-af/allocfail.o $(AF_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) $(CLI_AF_OBJS) $(AF_OBJS) build/obj-af/allocfail.o $(AF_LIBS) -o $@ $(LDLIBS)
 
-build/mdy$(EXE): build/obj/cli.o $(ENGINE_OBJS) $(ENGINE_LIBS)
+build/mdy$(EXE): $(CLI_OBJS) $(ENGINE_OBJS) $(ENGINE_LIBS)
 	@mkdir -p build
-	$(CC) $(CFLAGS) build/obj/cli.o $(ENGINE_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) $(CLI_OBJS) $(ENGINE_OBJS) $(ENGINE_LIBS) -o $@ $(LDLIBS)
 
 # Twice: once normally, once collecting at EVERY safe point.
 #
@@ -1015,10 +1013,10 @@ WASM_HDRS := $(wildcard src/*.h) $(PARSE_HDRS) $(HL_HDR)
 WASM_LINK := -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createMdyNative -sENVIRONMENT=web,worker,node \
              -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8388608 -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
              -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=FS,callMain
-$(WASM_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) $(WASM_HDRS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a
+$(WASM_OUT): $(CLI_SRCS) $(ENGINE_SRCS) $(NIS_SRCS) $(WASM_HDRS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a
 	@mkdir -p build/wasm
 	$(EMCC) -O2 -std=gnu11 -Wall -Wextra $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include \
-	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
+	  $(CLI_SRCS) $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/libmdyparse.a build/wasm/liblexbor.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
 	  $(WASM_LINK) -o $@
 
 # The same module with the failing allocator forced in, for check-alloc-wasm.
@@ -1042,12 +1040,12 @@ build/wasm/allocfail.o: src/allocfail.c src/allocfail.h
 
 # mdy_af_arm and mdy_af_total are exported because emscripten's getenv reads
 # its own ENV and cannot see the host's environment.
-$(WASM_AF_OUT): src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) $(WASM_HDRS) build/wasm/allocfail.o src/allocfail.h \
+$(WASM_AF_OUT): $(CLI_SRCS) $(ENGINE_SRCS) $(NIS_SRCS) $(WASM_HDRS) build/wasm/allocfail.o src/allocfail.h \
                 build/wasm/libmdyparse-af.a build/wasm/liblexbor.a build/wasm/liblamassu.a build/wasm/libsukkal.a
 	@mkdir -p build/wasm
 	$(EMCC) -O2 -std=gnu11 -Wall -Wextra $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include \
 	  -include src/allocfail.h \
-	  src/cli.c $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o \
+	  $(CLI_SRCS) $(ENGINE_SRCS) $(NIS_SRCS) build/wasm/allocfail.o \
 	  build/wasm/libmdyparse-af.a build/wasm/liblexbor.a build/wasm/libsukkal.a build/wasm/liblamassu.a \
 	  $(WASM_LINK) -sEXPORTED_FUNCTIONS=_main,_mdy_af_arm,_mdy_af_total \
 	  -o $@
