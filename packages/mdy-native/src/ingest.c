@@ -189,7 +189,9 @@ void mdy_oid_next(uint8_t out[12]) {
          * within one build, not unguessable. */
         unsigned seed = (unsigned)time(NULL) ^ (unsigned)(uintptr_t)&run;
         for (int i = 0; i < 5; i++) { seed = seed * 1103515245u + 12345u; run[i] = (uint8_t)(seed >> 16); }
-        counter = seed;
+        /* From zero, not from the seed: three bytes of it are written, and a
+         * count that started high would wrap mid-build and stop rising. */
+        counter = 0;
     }
     uint32_t now = (uint32_t)time(NULL);
     out[0] = (uint8_t)(now >> 24); out[1] = (uint8_t)(now >> 16);
