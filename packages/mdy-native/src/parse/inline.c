@@ -625,12 +625,18 @@ void mdy_parse_inline(mdy_doc *doc, mdy_node *parent, const char *text, size_t l
  * paragraph, or a marker's slice with the paragraph's spans rebased. */
 static void parse_inline_spans(mdy_doc *doc, mdy_node *parent, const char *text, size_t len,
                                const Span *urls, size_t url_count) {
+    /* The pending-text scratch is freed when the scan is done: what it held
+     * is in the arena as text nodes by then, and on the arena a scratch four
+     * times the text — per paragraph, and again per nested span — outlived
+     * the parse and was most of what a document cost. */
     size_t cap = len * 4 + 8;   /* see push() */
     Ctx ctx = { .doc = doc, .parent = parent, .len = 0, .cap = cap,
                 .urls = urls, .url_count = url_count, .text = text, .at_boundary = 1,
                 .wiki_skip = text };
-    ctx.buf = mdy_alloc(&doc->arena, cap);
-    if (ctx.buf) scan(&ctx, text, len);
+    ctx.buf = malloc(cap);
+    if (!ctx.buf) mdy_oom_exit();
+    scan(&ctx, text, len);
+    free(ctx.buf);
 }
 
 /*
