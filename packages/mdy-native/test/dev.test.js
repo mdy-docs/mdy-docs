@@ -437,13 +437,18 @@ test('a rebuild re-publishes a value that changed, and only one that changed', a
    * not is given the same budget before the count is read. */
   const settle = async (n, expect) => {
     const before = published.length;
+    const rendered = (log.match(/rendered/g) || []).length;
     write(n);
-    const deadline = Date.now() + 8000;
+    const started = Date.now();
+    const deadline = started + 8000;
     while (Date.now() < deadline) {
       if (expect && published.length > before) break;
       if (child.exitCode !== null) throw new Error(`the server exited\n${log}`);
       await new Promise((r) => setTimeout(r, 100));
-      if (!expect && Date.now() > before + 3000) break;
+      /* Nothing expected: wait for the rebuild the save causes to have
+       * happened, and a while after it, before reading the count. */
+      const rebuilt = (log.match(/rendered/g) || []).length > rendered;
+      if (!expect && rebuilt && Date.now() > started + 1500) break;
     }
     return published.length - before;
   };
