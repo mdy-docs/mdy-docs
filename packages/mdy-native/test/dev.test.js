@@ -707,6 +707,11 @@ test('dev serves the site, injects live-reload, types static files, and 404s the
     assert.match(missing.body, /404/);
     assert.match(missing.body, /EventSource/, 'the 404 still carries the reload client');
 
+    /* A NUL inside a path names nothing, and is refused rather than read as
+     * the path up to it. */
+    const nul = await get(port, '/style.css%00.png');
+    assert.equal(nul.status, 400, 'a %00 in the path is a bad request');
+
     const events = await getHead(port, '/__mdy__/events');
     assert.match(events.headers['content-type'], /text\/event-stream/,
       'the reload endpoint is an event stream');

@@ -224,7 +224,9 @@ static int hex(char c) {
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return -1;
 }
-static void percent_decode(const char *in, size_t n, char *out, size_t cap) {
+/* Returns how many bytes were written, which is more than strlen(out) only
+ * when a %00 put a NUL among them. */
+static size_t percent_decode(const char *in, size_t n, char *out, size_t cap) {
     size_t o = 0;
     for (size_t i = 0; i < n && o + 1 < cap; i++) {
         if (in[i] == '%' && i + 2 < n && hex(in[i + 1]) >= 0 && hex(in[i + 2]) >= 0) {
@@ -234,6 +236,7 @@ static void percent_decode(const char *in, size_t n, char *out, size_t cap) {
         else out[o++] = in[i];
     }
     out[o] = 0;
+    return o;
 }
 
 const char *httpd_header(const HttpdRequest *req, const char *name, char *out, size_t cap) {
@@ -318,7 +321,16 @@ static int dispatch(Httpd *s, int index) {
     sscanf((char *)c->in, "%15s %8191s", req.method, target);
     char *q = strchr(target, '?');
     if (q) { *q = 0; snprintf(req.query, sizeof req.query, "%s", q + 1); }
-    percent_decode(target, strlen(target), req.path, sizeof req.path);
+    /* A NUL in a path names nothing: every reader of the path stops at it,
+     * so the request would be served for a different name than it gave. */
+    size_t decoded = percent_decode(target, strlen(target), req.path, sizeof req.path);
+    if (strlen(req.path) != decoded) {
+        static const char bad[] =
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        send_all(c->fd, bad, sizeof bad - 1);
+        conn_free(c);
+        return 1;
+    }
 
     char cl[32] = "";
     size_t body_len = httpd_header(&req, "Content-Length", cl, sizeof cl) ? (size_t)strtoul(cl, NULL, 10) : 0;
