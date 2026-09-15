@@ -912,20 +912,15 @@ check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
 	$(MAKE) --no-print-directory check-alloc-dev || fail=1; \
 	exit $$fail
 
-# The four generated headers, against their generators.
+# The five generated headers against their generators, and the tables written
+# into the C by hand against the JavaScript they were copied from.
 #
-# src/toolkit.h, emoji_table.h, props_table.h and schema_table.h are generated
-# from mdy-docs' own sources and from `property-information` in node_modules.
-# They are checked in so a build never needs node — and nothing compared them,
-# so an upstream change to how an HTML attribute maps would have arrived as a
-# silent divergence from mdy-docs rather than a failing check (§4).
-#
-# Two of the generators had also never run as their own instructions said:
-# they built `file://` + a RELATIVE path, and a URL reads what follows `//`
-# as the host. Fixed with this.
-#
-# Needs node and the node_modules mdy-docs installs; not in CI for the reason
-# check-sites is not.
+# src/toolkit.h and the four src/parse/*_table.h are generated from mdy-docs'
+# own sources and from packages in node_modules. They are checked in so a
+# build never needs node, and this is what keeps them honest: an upstream
+# change to how an HTML attribute maps arrives as a failing check rather than
+# a silent divergence. Needs node and the node_modules mdy-docs installs,
+# which CI has.
 check-generated:
 	@fail=0; tmp=$$(mktemp -d); \
 	for pair in scripts/generate-props.mjs:src/parse/props_table.h \
@@ -941,7 +936,8 @@ check-generated:
 	  { if diff -q src/toolkit.h "$$tmp/toolkit.h" >/dev/null; then printf '  %-22s in sync\n' src/toolkit.h; \
 	    else printf '  %-22s DIFFERS from scripts/toolkit.mjs\n' src/toolkit.h; fail=1; fi; } || \
 	  { echo "  scripts/toolkit.mjs FAILED to run"; fail=1; }; \
-	rm -rf "$$tmp"; exit $$fail
+	rm -rf "$$tmp"; node scripts/check-tables.mjs "$(MDY_DOCS_ABS)" || fail=1; \
+	exit $$fail
 
 check-sites: build/mdy$(EXE)
 	@fail=0; for s in $(CHECK_SITES); do \
