@@ -2658,7 +2658,15 @@ void mdy_engine_free(mdy_engine *e) {
  * every render of the document — which is the whole reason the script layer
  * produces statements that never mention the request.
  */
-static char *wrap(mdy_engine *e, const char *statements) {
+/*
+ * The document's compiled statements, wrapped in the `$`/`req`/`res` closure.
+ * `stmt_len` is the statements' byte length — NOT strlen — because the body a
+ * document embeds can hold a NUL (a `.mdy` file's own bytes), and taking the
+ * length with strlen truncated the source mid template literal, so the code
+ * "did not compile". `*wrapped_len` receives the wrapped source's byte length,
+ * which the caller hands to to_utf16 for the same reason.
+ */
+static char *wrap(mdy_engine *e, const char *statements, size_t stmt_len, size_t *wrapped_len) {
     /*
      * Every `$` native. There is no longer a refusing stand-in behind any of
      * them: the last one, `$.resize`, was the only native that needed a codec
@@ -2764,7 +2772,7 @@ static char *wrap(mdy_engine *e, const char *statements) {
      * same bug in miniature.
      */
     size_t open_len = strlen(OPEN), tool_len = strlen(MDY_TOOLKIT);
-    size_t stmt_len = strlen(statements), close_len = strlen(CLOSE);
+    size_t close_len = strlen(CLOSE);   /* stmt_len is the caller's, may span a NUL */
     size_t n = open_len + tool_len + scope_len + stmt_len + close_len + 1;
     char *out = malloc(n);
     if (!out) return NULL;
@@ -2780,6 +2788,7 @@ static char *wrap(mdy_engine *e, const char *statements) {
     memcpy(out + o, statements, stmt_len); o += stmt_len;
     memcpy(out + o, CLOSE, close_len); o += close_len;
     out[o] = '\0';
+    *wrapped_len = o;
     return out;
 }
 
@@ -3279,11 +3288,13 @@ static int compile_to_callable(mdy_engine *e, Document *d, mdy_script **script,
     if (!*script) CFAIL("the script layer could not compile this document");
 
     size_t src_len = 0;
-    char *wrapped = wrap(e, mdy_script_source(*script, &src_len));
+    const char *statements = mdy_script_source(*script, &src_len);
+    size_t wrapped_len = 0;
+    char *wrapped = wrap(e, statements, src_len, &wrapped_len);
     if (!wrapped) CFAIL("out of memory");
 
     size_t ulen = 0;
-    uint16_t *u = to_utf16(wrapped, strlen(wrapped), &ulen);
+    uint16_t *u = to_utf16(wrapped, wrapped_len, &ulen);
     const char *err_msg = NULL;
     uint32_t err_pos = 0;
     r->fn = js_compile_module(e->ctx, u, ulen, &err_msg, &err_pos);
