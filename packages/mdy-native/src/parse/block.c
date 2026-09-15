@@ -1341,6 +1341,34 @@ static int add_paragraph(mdy_doc *doc, mdy_node *parent, const char *joined, siz
  *
  * `i` is the line the marker is on. Returns the first line AFTER the list.
  */
+/*
+ * Where the list item that opens at line `i` ends. A continuation line needs NO
+ * indentation — `- one` then an unindented `two` is one item reading "one two"
+ * — so what ends an item is another marker, a line that starts a block of its
+ * own, or a thematic break; indentation only decides whether a blank line is a
+ * gap inside the item or the end of it. Trailing blanks are not the item's.
+ */
+static size_t list_item_end(const mdy_line *lines, size_t count, size_t i, size_t marker_indent) {
+    size_t item_end = i + 1;
+    while (item_end < count) {
+        const mdy_line *k = &lines[item_end];
+        if (k->blank) {
+            size_t peek = item_end;
+            while (peek < count && lines[peek].blank) peek++;
+            if (peek < count && lines[peek].indent > marker_indent) { item_end = peek; continue; }
+            break;
+        }
+        if (k->indent > marker_indent) { item_end++; continue; }
+        int k_ordered = 0;
+        if (list_marker(k, &k_ordered)) break;
+        if (k->text[0] == '<' || k->text[0] == '=') break;
+        if (thematic_break(k)) break;
+        item_end++;
+    }
+    while (item_end > i + 1 && lines[item_end - 1].blank) item_end--;
+    return item_end;
+}
+
 static size_t parse_list(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
                          size_t count, size_t i, int ordered, size_t nesting) {
     const mdy_line *l = &lines[i];
@@ -1406,31 +1434,7 @@ static size_t parse_list(mdy_doc *doc, mdy_node *parent, const mdy_line *lines,
          * a nested list. `- one` then `  two` is one item reading
          * "one two"; `- a` then `  - b` is an item holding a <ul>.
          */
-        /*
-         * A continuation line needs NO indentation — `- one` followed
-         * by an unindented `two` is one item reading "one two". What
-         * ends an item is another marker, or a line that starts a
-         * block of its own; indentation only matters for deciding
-         * whether a blank line is a gap inside the item or the end of
-         * it.
-         */
-        size_t item_end = i + 1;
-        while (item_end < count) {
-            const mdy_line *k = &lines[item_end];
-            if (k->blank) {
-                size_t peek = item_end;
-                while (peek < count && lines[peek].blank) peek++;
-                if (peek < count && lines[peek].indent > l->indent) { item_end = peek; continue; }
-                break;
-            }
-            if (k->indent > l->indent) { item_end++; continue; }
-            int k_ordered = 0;
-            if (list_marker(k, &k_ordered)) break;
-            if (k->text[0] == '<' || k->text[0] == '=') break;
-            if (thematic_break(k)) break;
-            item_end++;
-        }
-        while (item_end > i + 1 && lines[item_end - 1].blank) item_end--;
+        size_t item_end = list_item_end(lines, count, i, l->indent);
 
         const char *body = lines[i].text + width;
         size_t body_len = lines[i].len - width;
