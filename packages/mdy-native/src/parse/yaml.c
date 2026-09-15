@@ -1190,7 +1190,11 @@ static mdy_yaml_node *parse_block(P *p, size_t indent) {
     mdy_yaml_node *result;
     if (is_seq_item(l)) result = parse_sequence(p, indent);
     else if (key_end(l)) result = parse_mapping(p, indent);
-    else result = parse_value_from(p, at, 0, indent == 0 ? 0 : indent - 1);  /* a bare scalar */
+    /* A bare scalar: its continuation lines must sit deeper than the
+     * collection it is in, and parse_sequence has already rewritten an
+     * item's line to sit one column past the marker, so the bound is one
+     * less than that line's own indent. */
+    else result = parse_value_from(p, at, 0, indent == 0 ? 0 : indent - 1);
 
     p->depth--;
     return result;

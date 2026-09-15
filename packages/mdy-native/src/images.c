@@ -158,7 +158,7 @@ static int webp_size(const uint8_t *b, size_t n, int *w, int *h) {
         return 0;
     }
     if (memcmp(c, "VP8 ", 4) == 0) {               /* lossy: after the start code */
-        if (n < 30 || c[11] != 0x9D || c[12] != 0x01 || c[13] != 0x2A) return -1;
+        if (c[11] != 0x9D || c[12] != 0x01 || c[13] != 0x2A) return -1;   /* n >= 30 above */
         *w = le16(c + 14) & 0x3FFF;
         *h = le16(c + 16) & 0x3FFF;
         return 0;

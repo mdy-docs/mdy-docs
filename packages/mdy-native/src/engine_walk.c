@@ -85,7 +85,7 @@ void iso8601_utc(double epoch_ms, char *out, size_t out_len) {
     unsigned long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     unsigned long long mp = (5 * doy + 2) / 153;
     unsigned long long d = doy - (153 * mp + 2) / 5 + 1;
-    unsigned long long m = mp + (mp < 10 ? 3 : -9);
+    unsigned long long m = mp + (mp < 10 ? 3 : -9);   /* -9 wraps and comes back round: mp - 9 */
     y += (m <= 2);
 
     int hour = (int)(rem / 3600000);
@@ -1079,6 +1079,8 @@ static int open_dir_inner(mdy_engine *e, const char *root, ImportCache *cache,
         }
         if (per_file[i]) files[i].data = NULL;      /* the engine owns it now */
     }
+    /* Reached only by the `goto`s above: `if (0)` keeps the path that
+     * succeeds out of it while the label stays beside the cleanup. */
     if (0) {
     ident_oom:
         free(per_file); walked_free(files, file_count); free(source);

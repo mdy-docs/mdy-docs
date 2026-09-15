@@ -33,7 +33,9 @@
 #define TOKEN_OPEN  "\xee\x80\x80"      /* U+E000 as UTF-8 */
 #define TOKEN_CLOSE "\xee\x80\x81"      /* U+E001 */
 
-/* A token's id at `s`, or 0. Writes the id and how many bytes it spanned. */
+/* A token's id at `s`, or 0. Writes the id and how many bytes it spanned.
+ * `id_cap` is a Held's id (24 bytes): an id longer than that is not one this
+ * engine minted, and is refused as such rather than cut. */
 size_t token_at(const char *s, size_t len, char *id, size_t id_cap) {
     if (len < 5 || memcmp(s, TOKEN_OPEN, 3) != 0) return 0;
     size_t i = 3;

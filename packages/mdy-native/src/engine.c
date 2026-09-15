@@ -603,6 +603,8 @@ static int insert_one_document(mdy_engine *e, size_t i, char *error, size_t erro
         ok = bytes && nis_insert(e->set.handle, bytes, (uint32_t)dlen) == 0;
     }
     bj_builder_free(b);
+    /* Reached only by the `goto`s above: `if (0)` keeps the path that
+     * succeeds out of it while the label stays beside the cleanup. */
     if (0) {
         /*
          * Every mdy_yaml_parse in this loop can fail two ways, and only

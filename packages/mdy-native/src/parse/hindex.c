@@ -12,7 +12,9 @@
 
 #include "internal.h"
 
-/* Fibonacci hashing on the pointer, xored with a spread of the tag. */
+/* Fibonacci hashing on the pointer, xored with a spread of the tag. The probe
+ * always ends because put keeps the table under three-quarters full, so an
+ * empty slot is reachable from anywhere. */
 static size_t hindex_slot(const mdy_hentry *slots, size_t cap,
                           const char *key, uint64_t tag) {
     size_t mask = cap - 1;
