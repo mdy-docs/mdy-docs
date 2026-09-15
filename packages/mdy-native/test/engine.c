@@ -2438,7 +2438,14 @@ static void tag_checks(void) {
     if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
 
     write_file(root, "q.mdy", "+++\ntags: ['A\"b', Alpha, ALPHA, 'c\\d', \"e\\tf\"]\n+++\nbody\n");
-    write_file(root, "h.md", "# H\n\n#One and #one and #Two\n");
+    /* The rule is mdy-docs' HASHTAG: at a line start or after whitespace, a
+     * letter, then letters, numbers, `_` and `-`, lowercased as JavaScript
+     * lowercases. So `(#paren`, `x#glued`, a digit-initial tag and `#_u` are
+     * not tags, an em dash and a `/` end one, and `İ` becomes `i` and a dot. */
+    write_file(root, "h.md",
+               "# H\n\n#One and #one and #Two\n"
+               "#\xc3\x9c" "ber #stra\xc3\x9f" "e (#paren) x#glued #\xd9\xa3" "digit #a\xe2\x80\x94" "b "
+               "#\xc4\xb0stanbul #tag_x-y/z #123 #_u\n");
     write_file(root, "e.mdy", "+++\ntags: []\n+++\nnone\n");
     write_file(root, "main.mdy",
         "% $.emit('tags.txt', $.find({}).filter((d) => d.tags)"
@@ -2471,7 +2478,8 @@ static void tag_checks(void) {
         emitted("tags.txt") &&
             strcmp(emitted("tags.txt"),
                    "e.mdy=[]|"
-                   "h.md=[\"one\",\"two\"]|"
+                   "h.md=[\"one\",\"two\",\"\xc3\xbc" "ber\",\"stra\xc3\x9f" "e\",\"a\","
+                   "\"i\xcc\x87stanbul\",\"tag_x-y\"]|"
                    "q.mdy=[\"a\\\"b\",\"alpha\",\"c\\\\d\",\"e\\tf\"]") == 0,
         emitted("tags.txt"));
 

@@ -204,7 +204,7 @@ static void put_scalar(char **buf, size_t *len, size_t *cap, const char *value) 
  * written in two, character for character, and only one of them knew about
  * the empty case. */
 static void put_tag_list(char **buf, size_t *len, size_t *cap,
-                         const char (*tags)[128], size_t count) {
+                         char *const *tags, size_t count) {
     if (count == 0) {
         put_room(buf, len, cap, 16);
         *len += (size_t)snprintf(*buf + *len, *cap - *len, "tags: []\n");
@@ -276,36 +276,48 @@ static void put_block_scalar(char **buf, size_t *len, size_t *cap,
  * those is not a tag, and the whole reason to strip them is that a shell
  * comment in a fenced example otherwise becomes one.
  */
-static int tag_char(unsigned char c) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-           (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '/' || c >= 0x80;
-}
-
-/* Lowercased, deduped, in order of first appearance. Returns how many. */
-static size_t add_tag(char (**tags)[128], size_t *count, size_t *cap,
-                      const char *name, size_t name_len) {
-    if (name_len == 0 || name_len >= 128) return *count;
-    char lowered[128];
-    for (size_t i = 0; i < name_len; i++) {
-        char c = name[i];
-        lowered[i] = mdy_lower_ascii(c);
+/*
+ * A tag, lowercased as `String.prototype.toLowerCase` lowercases it, added
+ * once: the list is the document's own, so a scan of it is short. Each is a
+ * heap string of its own length; mdy-docs puts no limit on one.
+ */
+static void add_tag(char ***tags, size_t *count, size_t *cap,
+                    const char *name, size_t name_len) {
+    if (name_len == 0) return;
+    mdy_sbuf lowered = { 0 };
+    for (size_t i = 0; i < name_len;) {
+        uint32_t cp, low[2];
+        i += mdy_utf8_decode(name + i, name_len - i, &cp);
+        size_t n = mdy_lower_full(cp, low);
+        for (size_t k = 0; k < n; k++) {
+            char bytes[4];
+            mdy_sbuf_put(&lowered, bytes, mdy_utf8_encode(low[k], bytes));
+        }
     }
-    lowered[name_len] = '\0';
+    mdy_sbuf_put(&lowered, "", 0);
     for (size_t i = 0; i < *count; i++)
-        if (strcmp((*tags)[i], lowered) == 0) return *count;
+        if (strcmp((*tags)[i], lowered.s) == 0) { free(lowered.s); return; }
     if (*count == *cap) {
         size_t want = *cap ? *cap * 2 : 8;
-        /* Returning the old count here dropped the tag and said nothing: the
-         * document left every index that tag names. See xalloc.h. */
         *tags = mdy_xrealloc(*tags, want * sizeof **tags);
         *cap = want;
     }
-    memcpy((*tags)[(*count)++], lowered, name_len + 1);
-    return *count;
+    (*tags)[(*count)++] = lowered.s;
 }
 
+static void free_tags(char **tags, size_t count) {
+    for (size_t i = 0; i < count; i++) free(tags[i]);
+    free(tags);
+}
+
+/*
+ * The hashtags in `text` — mdy-docs' HASHTAG, `(?<=^|\s)#([\p{L}][\p{L}\p{N}_-]*)`
+ * with the `m` and `u` flags: a `#` at the start of a line or after
+ * whitespace, a letter, then letters, numbers, `_` and `-`. Character
+ * classes are Unicode's, so `#Über` is a tag and `#٣` is not.
+ */
 static void scan_hashtags(const char *text, size_t tlen,
-                          char (**out)[128], size_t *count, size_t *cap) {
+                          char ***out, size_t *count, size_t *cap) {
     mdy_script *script = mdy_script_compile(text, tlen);
 
     char *prose = mdy_xmalloc(tlen + 1);
@@ -353,26 +365,31 @@ static void scan_hashtags(const char *text, size_t tlen,
         } else i++;
     }
 
-    for (size_t i = 0; i < plen; i++) {
-        if (prose[i] != '#') continue;
-        /* A tag starts at a boundary and its first character is a letter. */
-        if (i > 0) {
-            unsigned char prev = (unsigned char)prose[i - 1];
-            if (tag_char(prev) || prev == '#') continue;
+    uint32_t prev = '\n';      /* the start of the text is the start of a line */
+    for (size_t i = 0; i < plen;) {
+        uint32_t cp;
+        size_t width = mdy_utf8_decode(prose + i, plen - i, &cp);
+        if (cp == '#' && (prev == '\n' || mdy_is_js_space(prev))) {
+            size_t j = i + 1;
+            uint32_t c = 0;
+            size_t cw = j < plen ? mdy_utf8_decode(prose + j, plen - j, &c) : 0;
+            if (cw && mdy_is_letter_cp(c)) {
+                j += cw;
+                while (j < plen) {
+                    cw = mdy_utf8_decode(prose + j, plen - j, &c);
+                    if (!(mdy_is_letter_or_number_cp(c) || c == '_' || c == '-')) break;
+                    j += cw;
+                }
+                add_tag(out, count, cap, prose + i + 1, j - i - 1);
+                /* The scan resumes after the tag, and what precedes the next
+                 * `#` is the tag's last character, never whitespace. */
+                prev = 'a';
+                i = j;
+                continue;
+            }
         }
-        size_t j = i + 1;
-        if (j >= plen) break;
-        unsigned char first = (unsigned char)prose[j];
-        if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first >= 0x80))
-            continue;
-        while (j < plen && tag_char((unsigned char)prose[j])) j++;
-        size_t name_len = j - i - 1;
-        if (name_len == 0 || name_len >= 128) { i = j; continue; }
-
-        const char *name = prose + i + 1;
-
-        add_tag(out, count, cap, name, name_len);
-        i = j - 1;
+        prev = cp;
+        i += width;
     }
     free(prose);
 }
@@ -385,11 +402,11 @@ static void scan_hashtags(const char *text, size_t tlen,
  */
 static void put_tags_from_text(char **buf, size_t *len, size_t *cap,
                                const char *text, size_t tlen) {
-    char (*tags)[128] = NULL;
+    char **tags = NULL;
     size_t count = 0, cap_t = 0;
     scan_hashtags(text, tlen, &tags, &count, &cap_t);
     if (count > 0) put_tag_list(buf, len, cap, tags, count);
-    free(tags);
+    free_tags(tags, count);
 }
 
 
@@ -1158,7 +1175,7 @@ const char *mdy_engine_root_at(mdy_engine *e, size_t i) {
 mdy_yaml *document_tags(const mdy_yaml_node *const *parts, size_t part_count,
                         const char *body, size_t body_len, int *oom) {
     *oom = 0;
-    char (*tags)[128] = NULL;
+    char **tags = NULL;
     size_t count = 0, cap_t = 0;
     int declared_key = 0;
 
@@ -1190,16 +1207,12 @@ mdy_yaml *document_tags(const mdy_yaml_node *const *parts, size_t part_count,
          * an unparseable block did not fail: the document fell back to
          * whatever its front matter said and was silently never lowercased or
          * deduplicated at all. */
-        const char **items = count ? malloc(count * sizeof *items) : NULL;
-        if (count && !items) { free(tags); *oom = 1; return NULL; }
-        for (size_t k = 0; k < count; k++) items[k] = tags[k];
         mdy_yaml_builder *b = mdy_yaml_builder_new();
-        if (b) mdy_yaml_put_strings(b, "tags", items, count);
+        if (b) mdy_yaml_put_strings(b, "tags", (const char *const *)tags, count);
         out = mdy_yaml_builder_done(b);
-        free(items);
         if (!out) *oom = 1;
     }
-    free(tags);
+    free_tags(tags, count);
     return out;
 }
 

@@ -19,8 +19,9 @@ extern "C" {
 #endif
 
 /* A letter or a number, as `\p{L}\p{N}` means it — from the UCD, not a guess
- * at which ranges look alphabetic. */
+ * at which ranges look alphabetic — and a letter alone, `\p{L}`. */
 int mdy_is_letter_or_number_cp(uint32_t cp);
+int mdy_is_letter_cp(uint32_t cp);
 
 /* Unicode's SIMPLE lowercase mapping: one code point to one code point.
  *

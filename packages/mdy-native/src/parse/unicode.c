@@ -51,9 +51,13 @@ static int in_ranges(const UCDRange *ranges, int count, uint32_t cp) {
     return 0;
 }
 
-int mdy_is_letter_or_number_cp(uint32_t cp) {
+int mdy_is_letter_cp(uint32_t cp) {
     return in_ranges(ucd_gc_Letter_ranges,
-                     (int)(sizeof ucd_gc_Letter_ranges / sizeof(UCDRange)), cp) ||
+                     (int)(sizeof ucd_gc_Letter_ranges / sizeof(UCDRange)), cp);
+}
+
+int mdy_is_letter_or_number_cp(uint32_t cp) {
+    return mdy_is_letter_cp(cp) ||
            in_ranges(ucd_gc_Number_ranges,
                      (int)(sizeof ucd_gc_Number_ranges / sizeof(UCDRange)), cp);
 }
