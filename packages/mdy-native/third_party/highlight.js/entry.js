@@ -9,7 +9,18 @@
  * still reads; and a grammar that throws leaves the text as it was. The
  * children it returns are what mdy-docs puts inside the <code> element, so
  * a tree built here and one built there differ in nothing.
+ *
+ * One throw is not the grammar's: the VM running out of memory. That is
+ * rethrown, here and in the core's own catches, so the engine can end the
+ * run rather than write a page with a fence left plain for a reason nobody
+ * was told.
  */
+
+/** lamassu's out-of-memory, whatever wrapped it. */
+function outOfMemory(error) {
+  const text = error && error.message ? error.message : String(error);
+  return text.indexOf('out of memory') !== -1;
+}
 
 const lowlight = __lowlight(__grammars);
 
@@ -26,7 +37,8 @@ function highlightCode(value, language) {
   }
   try {
     return { children: lowlight.highlight(language, value).children, highlighted: true };
-  } catch (_error) {
+  } catch (error) {
+    if (outOfMemory(error)) throw error;
     return { children: [{ type: 'text', value }], highlighted: false };
   }
 }

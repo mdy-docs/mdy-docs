@@ -2567,10 +2567,13 @@ mdy_engine *mdy_engine_new(mdy_session *session) {
  * hast children, which js_to_tree puts into the C tree, and `hljs` goes on
  * the class list after `language-x` — the order mdy-docs writes them in.
  *
- * Loading is lazy and its failure is final: a site with no fences never
- * compiles the 380 KB, and a bundle that will not load says so once and
- * leaves every fence plain — which is also what mdy-docs does for a
- * language it has no grammar for.
+ * Loading is lazy: a site with no fences never compiles the 380 KB. The
+ * bundle is embedded, so the only way it does not load is that the VM ran
+ * out of memory compiling it — and a fence left plain for that reason is a
+ * page written differently from the one asked for, in a build that would
+ * report success. So a load that fails ends the run, as xalloc.h has it. A
+ * language the bundle has no grammar for is a different thing and stays
+ * plain, as it does in mdy-docs.
  */
 
 static void load_highlighter(mdy_engine *e) {
@@ -2578,10 +2581,9 @@ static void load_highlighter(mdy_engine *e) {
 
     size_t slen = 0;
     uint16_t *spec = to_utf16(MDY_HIGHLIGHT_SPEC, strlen(MDY_HIGHLIGHT_SPEC), &slen);
-    if (!spec) return;
     JsValue promise = js_eval_module(e->ctx, spec, slen);
     free(spec);
-    if (js_is_undefined(promise)) return;
+    if (js_is_undefined(promise)) mdy_fatal("the highlighter did not load: out of memory");
     js_gc_protect(e->vm, &promise);
     js_run_jobs(e->ctx);
 
@@ -2590,12 +2592,9 @@ static void load_highlighter(mdy_engine *e) {
         char *text = js_is_object(reason)
             ? js_string_utf8(get_val(e, reason, "message"))
             : js_string_utf8(reason);
-        engine_message(e, e->graph.current, 0, 0, "highlight",
-                       "fenced code will not be highlighted: the highlighter did not load (%s)",
-                       text ? text : "no reason given");
-        free(text);
-        js_gc_unprotect(e->vm, &promise);
-        return;
+        char why[600];
+        snprintf(why, sizeof why, "the highlighter did not load (%s)", text ? text : "no reason given");
+        mdy_fatal(why);
     }
 
     size_t nlen = 0;
@@ -2631,7 +2630,17 @@ static int engine_highlight(void *ud, mdy_doc *doc, mdy_node *code,
     int ok = js_call(e->ctx, e->highlight.fn, js_undefined(), args, 2, &result);
     js_gc_unprotect(e->vm, &args[1]);
     js_gc_unprotect(e->vm, &args[0]);
-    if (!ok || !js_is_object(result)) return 0;
+    if (!ok) {
+        /* The highlighter threw: the VM ran out of memory, since the bundle
+         * answers an unknown language by saying so rather than throwing. A
+         * fence left plain for that reason is a different page in a build
+         * that would report success. */
+        char *text = js_is_object(result) ? js_string_utf8(get_val(e, result, "message")) : js_string_utf8(result);
+        char why[600];
+        snprintf(why, sizeof why, "highlighting a fence failed (%s)", text ? text : "no reason given");
+        mdy_fatal(why);
+    }
+    if (!js_is_object(result)) return 0;
 
     js_gc_protect(e->vm, &result);
     int highlighted = js_get_bool(get_val(e, result, "highlighted"));

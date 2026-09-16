@@ -1613,6 +1613,8 @@ const HLJS = function (hljs) {
         _top: top
       };
     } catch (err) {
+      // the host's failure, not the grammar's: see entry.js
+      if (String(err && err.message ? err.message : err).includes('out of memory')) throw err;
       if (err.message && err.message.includes('Illegal')) {
         return {
           language: languageName,
@@ -1734,6 +1736,7 @@ const HLJS = function (hljs) {
     try {
       lang = languageDefinition(hljs);
     } catch (error$1) {
+      if (String(error$1 && error$1.message ? error$1.message : error$1).includes('out of memory')) throw error$1;
       error("Language definition for '{}' could not be registered.".replace("{}", languageName));
       // hard or soft error
       if (!SAFE_MODE) { throw error$1; } else { error(error$1); }
