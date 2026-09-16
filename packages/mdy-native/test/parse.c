@@ -260,6 +260,30 @@ static void markdown_raw_checks(void) {
         free(json); free(html); mdy_free(d);
     }
     {
+        /* remark-gfm's task box is one only when content follows it in
+         * the same paragraph; otherwise the three characters are text. */
+        struct { const char *what, *source, *has, *lacks; } cases[] = {
+            { "a box with nothing after it is text", "- [ ]\n", "<li>[ ]</li>", "checkbox" },
+            { "...whatever its mark", "- [x]\n", "<li>[x]</li>", "checkbox" },
+            { "...and inside a paragraph when the item is loose", "- [ ]\n\n  para\n", "<p>[ ]</p>", "checkbox" },
+            { "...and before a nested block", "- [ ]\n  - sub\n", "<li>[ ]\n<ul>", "checkbox" },
+            { "content on the next line makes it a box, and the break between is dropped",
+              "- [ ]\n  text\n", "<input type=\"checkbox\" disabled> text</li>", "\ntext" },
+            { "a span counts as content", "- [ ] **a**\n", "<input type=\"checkbox\" disabled> <strong>a</strong>", NULL },
+            { "one item a box and the next not", "- [x] done\n- [ ]\n",
+              "<li class=\"task-list-item\"><input type=\"checkbox\" checked disabled> done</li>\n<li>[ ]</li>", NULL },
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+            const char *why = NULL;
+            mdy_doc *d = mdy_markdown_parse(cases[i].source, 0, &why);
+            char *html = d ? mdy_to_html(mdy_root(d), NULL) : NULL;
+            ok_(cases[i].what,
+                html && strstr(html, cases[i].has) && (!cases[i].lacks || !strstr(html, cases[i].lacks)),
+                html ? html : why);
+            free(html); mdy_free(d);
+        }
+    }
+    {
         const char *why = NULL;
         mdy_doc *d = mdy_markdown_parse("![a  \nb](x)\n", 0, &why);
         char *html = d ? mdy_to_html(mdy_root(d), NULL) : NULL;

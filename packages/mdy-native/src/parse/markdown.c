@@ -98,6 +98,16 @@ typedef struct {
     const char *note_slug_now;
     mdy_node *note_item;
     unsigned note_index, note_refs;
+    /*
+     * A task box waiting to find out whether it is one. remark-gfm makes
+     * `[ ]` a checkbox only when content follows it in the same paragraph;
+     * md4c decides at the marker, before the content is known. So the box
+     * is held here with its mark until the first inline content arrives
+     * (a checkbox, and the whitespace between is dropped) or a block or the
+     * item's end comes first (the three characters, as text).
+     */
+    char task_mark;
+    mdy_node *task_item, *task_list;
     int failed;
     int too_deep;     /* failed specifically because nesting hit STACK_MAX */
 } Build;
@@ -646,9 +656,41 @@ static int enter_admonition(Build *b, const MD_BLOCK_ADMONITION_DETAIL *d) {
     return 0;
 }
 
+/* The held box, now that content has followed it: a checkbox in the item,
+ * the item and its list classed, and the space between box and text — which
+ * md4c consumed with the marker and the reference keeps. */
+static void task_checkbox(Build *b) {
+    if (!b->task_mark) return;
+    mdy_add_class(b->doc, b->task_item, "task-list-item");
+    if (b->task_list) {
+        int marked = 0;
+        for (mdy_prop *p = b->task_list->props; p; p = p->next)
+            if (strcmp(p->name, "className") == 0) marked = 1;
+        if (!marked) mdy_add_class(b->doc, b->task_list, "contains-task-list");
+    }
+    mdy_node *box = mdy_new_element(b->doc, "input", 5);
+    mdy_set_string(b->doc, box, "type", "checkbox", 8);
+    if (b->task_mark != ' ') mdy_set_bool(b->doc, box, "checked", 1);
+    mdy_set_bool(b->doc, box, "disabled", 1);
+    append(b, box);
+    text_out(b, " ", 1);
+    b->task_mark = 0;
+}
+
+/* The held box with nothing after it: the three characters, as text. */
+static void task_text(Build *b) {
+    if (!b->task_mark) return;
+    char literal[3] = { '[', b->task_mark, ']' };
+    text_out(b, literal, 3);
+    b->task_mark = 0;
+}
+
 static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
     Build *b = ud;
     if (b->failed) return -1;
+    /* A paragraph opening on a held box holds the literal; anything else
+     * leaves it in the item first. */
+    if (b->task_mark && type != MD_BLOCK_P) task_text(b);
 
     switch (type) {
         case MD_BLOCK_DOC:
@@ -732,6 +774,7 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             mdy_node *p = mdy_new_element(b->doc, "p", 1);
             append(b, p);
             push(b, p, 0);
+            task_text(b);
             return 0;
         }
 
@@ -780,15 +823,9 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             before_block(b);
             mdy_node *li = mdy_new_element(b->doc, "li", 2);
             if (d->is_task) {
-                mdy_add_class(b->doc, li, "task-list-item");
-                /* The list itself is marked once its first task item is seen. */
-                mdy_node *list = top(b);
-                if (list) {
-                    int marked = 0;
-                    for (mdy_prop *p = list->props; p; p = p->next)
-                        if (strcmp(p->name, "className") == 0) marked = 1;
-                    if (!marked) mdy_add_class(b->doc, list, "contains-task-list");
-                }
+                b->task_mark = d->task_mark ? d->task_mark : ' ';
+                b->task_item = li;
+                b->task_list = top(b);
             }
             append(b, li);
             /*
@@ -807,17 +844,6 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *ud) {
              * nested list, a fence and a heading.
              */
             push(b, li, 1);
-            if (d->is_task) {
-                mdy_node *box = mdy_new_element(b->doc, "input", 5);
-                mdy_set_string(b->doc, box, "type", "checkbox", 8);
-                if (d->task_mark != ' ') mdy_set_bool(b->doc, box, "checked", 1);
-                mdy_set_bool(b->doc, box, "disabled", 1);
-                append(b, box);
-                /* The space between the box and the text is content: md4c
-                 * consumes it with the marker, and the reference keeps it.
-                 * It joins the run that follows rather than standing alone. */
-                text_out(b, " ", 1);
-            }
             return 0;
         }
 
@@ -1043,12 +1069,16 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
             close_block(b);
             return 0;
 
+        case MD_BLOCK_LI:
+            task_text(b);
+            close_block(b);
+            return 0;
+
         case MD_BLOCK_P:
         case MD_BLOCK_H:
         case MD_BLOCK_THEAD:
         case MD_BLOCK_TBODY:
         case MD_BLOCK_TR:
-        case MD_BLOCK_LI:
         case MD_BLOCK_TH:
         case MD_BLOCK_TD:
             close_block(b);
@@ -1072,6 +1102,7 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *ud) {
 static int enter_span(MD_SPANTYPE type, void *detail, void *ud) {
     Build *b = ud;
     if (b->failed) return -1;
+    task_checkbox(b);
 
     /* Inside an <img>'s alt or a code span, every span is text. See Frame. */
     if (b->gathering) { push_inert(b); return 0; }
@@ -1193,6 +1224,17 @@ static int leave_span(MD_SPANTYPE type, void *detail, void *ud) {
 static int text_cb(MD_TEXTTYPE type, const MD_CHAR *s, MD_SIZE size, void *ud) {
     Build *b = ud;
     if (b->failed) return -1;
+    if (b->task_mark) {
+        /* Whitespace after the box is not content and does not reach the
+         * text; the first thing that is not whitespace decides. */
+        if (type == MD_TEXT_SOFTBR) return 0;
+        if (type == MD_TEXT_NORMAL) {
+            MD_SIZE k = 0;
+            while (k < size && (s[k] == ' ' || s[k] == '\t')) k++;
+            if (k == size) return 0;
+        }
+        task_checkbox(b);
+    }
 
     switch (type) {
         case MD_TEXT_NULLCHAR:
