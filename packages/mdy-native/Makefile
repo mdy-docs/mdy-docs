@@ -115,6 +115,15 @@ LAM_ASAN_LIBS := $(LAMASSU)/build/liblamassu_runtime_asan.a $(LAMASSU)/build/lib
 $(LAM_ASAN_LIBS):
 	$(MAKE) -C $(LAMASSU) build/liblamassu_runtime_asan.a build/liblamassu_frontend_asan.a
 
+# ...and with the failing allocator forced in, for build/mdy-af. lamassu
+# reports an allocation it could not make as an error the guest can see, and
+# the sweep holds the engine to turning that into a build that says so.
+# See scripts/lamassu-af.sh for why it is built from here.
+LAM_AF_LIB := build/liblamassu-af.a
+$(LAM_AF_LIB): src/allocfail.h scripts/lamassu-af.sh $(LAM_LIBS)
+	@mkdir -p build
+	CC="$(CC)" AR="$(AR)" scripts/lamassu-af.sh $(LAMASSU) $@ $(abspath src/allocfail.h)
+
 # ---- nisaba ---------------------------------------------------------------
 #
 # All of nisaba's C compiles with cc and no changes — including the files named
@@ -207,6 +216,16 @@ build/libsukkal.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	  $(CC) -std=gnu11 -O2 $(DEBUG) -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal/`basename $$f .c`.o || exit 1; \
 	done
 	$(AR) rcs $@ $(addprefix build/sukkal/,$(notdir $(SUKKAL_SRCS:.c=.o)))
+
+# The same archive with the failing allocator forced in, for build/mdy-af:
+# what sukkal does with a refused allocation is part of what the sweep
+# asks, since the dev server and `--publish` run it in this process.
+build/libsukkal-af.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h src/allocfail.h
+	@mkdir -p build/sukkal-af
+	@for f in $(SUKKAL_SRCS); do \
+	  $(CC) -std=gnu11 -O2 $(DEBUG) -include src/allocfail.h -Isrc $(SUKKAL_INC) $(SUKKAL_FLAGS) -c $$f -o build/sukkal-af/`basename $$f .c`.o || exit 1; \
+	done
+	$(AR) rcs $@ $(addprefix build/sukkal-af/,$(notdir $(SUKKAL_SRCS:.c=.o)))
 
 build/libsukkal-asan.a: $(SUKKAL_SRCS) src/sukkal_rename.h src/memns.h
 	@mkdir -p build/sukkal-asan
@@ -712,7 +731,9 @@ build/obj/engine-test.o: test/engine.c $(HL_HDR)
 	$(CC) $(CFLAGS) $(ENGINE_CPPFLAGS) -MMD -MP -c $< -o $@
 
 ENGINE_LIBS := $(PARSE_LIB) $(LX_LIB) build/libsukkal.a $(LAM_LIBS)
-AF_LIBS     := $(PARSE_AF_LIB) $(LX_LIB) build/libsukkal.a $(LAM_LIBS)
+# lexbor is not instrumented because it does not need to be: every allocation
+# it makes goes through the four functions raw.c hands it, which do not fail.
+AF_LIBS     := $(PARSE_AF_LIB) $(LX_LIB) build/libsukkal-af.a $(LAM_AF_LIB)
 ASAN_LIBS   := $(PARSE_ASAN_LIB) $(LX_ASAN_LIB) build/libsukkal-asan.a $(LAM_ASAN_LIBS)
 
 -include $(ENGINE_OBJS:.o=.d) $(ASAN_OBJS:.o=.d) $(AF_OBJS:.o=.d) \
