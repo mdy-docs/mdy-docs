@@ -100,7 +100,9 @@ test('a delivery arriving before the first good build is held, not fatal', async
     const [, port] = await dev.until(/http:\/\/localhost:(\d+)/);
 
     assert.equal(await deliver(port), 500, 'the messages go back to the broker');
-    assert.match(dev.log(), /\[hold\][^\n]*a\.b/, 'and the reason is said out loud');
+    /* The response can arrive before node has delivered the line the server
+     * printed just before it, so wait for the line rather than assert on it. */
+    await dev.until(/\[hold\][^\n]*a\.b/);
     assert.equal(dev.child.exitCode, null, 'the server is still running');
 
     /* The half that proves holding was the right answer: fix the site and the
@@ -291,7 +293,7 @@ test('a broker that accepts and never answers does not hang the command', async 
       child.stderr.on('data', (b) => { err += b; });
       child.stdout.on('data', () => {});
       child.on('error', reject);
-      child.on('exit', (code) => resolve({ code, err }));
+      child.on('close', (code) => resolve({ code, err }));
       setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`it hung:\n${err}`)); }, 30000);
     });
     const waited = Date.now() - started;
@@ -550,7 +552,9 @@ function runCli(args) {
     let out = '';
     child.stdout.on('data', (b) => { out += b; });
     child.stderr.on('data', (b) => { out += b; });
-    child.on('exit', (code) => resolve({ code, out }));
+    /* `close`, not `exit`: the process can be gone before its last output
+     * has been read, and `exit` fires then, with `out` still empty. */
+    child.on('close', (code) => resolve({ code, out }));
   });
 }
 
