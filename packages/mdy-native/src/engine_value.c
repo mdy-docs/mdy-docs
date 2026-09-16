@@ -53,11 +53,31 @@ char *from_utf16(const uint16_t *u, size_t len) {
     return out;
 }
 
+/*
+ * The VM answers a constructor it could not allocate for with `undefined`,
+ * and there is no JsValue that means "there was no memory": a string, an
+ * object or an array that came back undefined would be written into a
+ * record or a tree as a value. So the four makers end the run instead, as
+ * xalloc.h has it for every failure with no channel back.
+ */
 JsValue str(JsVm *vm, const char *s, size_t len) {
     size_t n = 0;
     uint16_t *u = to_utf16(s, len, &n);
     JsValue v = js_string_new(vm, u, n);
     free(u);
+    if (js_is_undefined(v)) mdy_fatal("the VM could not make a string");
+    return v;
+}
+
+JsValue new_object(JsContext *ctx) {
+    JsValue v = js_object_new(ctx);
+    if (!js_is_object(v)) mdy_fatal("the VM could not make an object");
+    return v;
+}
+
+JsValue new_array(JsContext *ctx, uint32_t count) {
+    JsValue v = js_array_new(ctx, count);
+    if (!js_is_array(v)) mdy_fatal("the VM could not make an array");
     return v;
 }
 
@@ -83,6 +103,7 @@ JsValue key(JsVm *vm, const char *s) {
     uint16_t *u = to_utf16(s, strlen(s), &n);
     JsValue v = js_atom(vm, u, n);
     free(u);
+    if (js_is_undefined(v)) mdy_fatal("the VM could not intern a name");
     return v;
 }
 
@@ -182,7 +203,7 @@ void push_item(mdy_engine *e, JsValue array, JsValue v) {
 JsValue tree_to_js(mdy_engine *e, const mdy_node *n);
 
 static JsValue children_to_js(mdy_engine *e, const mdy_node *n) {
-    JsValue array = js_array_new(e->ctx, 0);
+    JsValue array = new_array(e->ctx, 0);
     js_gc_protect(e->vm, &array);
     for (const mdy_node *c = n->first; c; c = c->next) {
         JsValue child = tree_to_js(e, c);
@@ -195,7 +216,7 @@ static JsValue children_to_js(mdy_engine *e, const mdy_node *n) {
 }
 
 JsValue tree_to_js(mdy_engine *e, const mdy_node *n) {
-    JsValue o = js_object_new(e->ctx);
+    JsValue o = new_object(e->ctx);
     js_gc_protect(e->vm, &o);
 
     switch (n->type) {
@@ -219,7 +240,7 @@ JsValue tree_to_js(mdy_engine *e, const mdy_node *n) {
         case MDY_ELEMENT: {
             set_val(e, o, "type", str(e->vm, "element", 7));
             set_val(e, o, "tagName", str(e->vm, n->tag, strlen(n->tag)));
-            JsValue props = js_object_new(e->ctx);
+            JsValue props = new_object(e->ctx);
             js_gc_protect(e->vm, &props);
             for (const mdy_prop *p = n->props; p; p = p->next) {
                 JsValue v;
@@ -228,7 +249,7 @@ JsValue tree_to_js(mdy_engine *e, const mdy_node *n) {
                     case MDY_PROP_NUMBER: v = js_number(p->as.number); break;
                     case MDY_PROP_BOOL:   v = js_bool(p->as.boolean != 0); break;
                     case MDY_PROP_LIST: {
-                        v = js_array_new(e->ctx, (uint32_t)p->list_len);
+                        v = new_array(e->ctx, (uint32_t)p->list_len);
                         js_gc_protect(e->vm, &v);
                         for (size_t i = 0; i < p->list_len; i++)
                             push_item(e, v, str(e->vm, p->list[i], strlen(p->list[i])));
@@ -557,7 +578,7 @@ static void d_array_begin(void *ctx, uint32_t count) {
     Decode *d = ctx;
     if (d->failed) return;
     if (d->depth >= BJ_STACK_MAX) { d->failed = 1; return; }
-    d->stack[d->depth] = js_array_new(d->e->ctx, count);
+    d->stack[d->depth] = new_array(d->e->ctx, count);
     js_gc_protect(d->e->vm, &d->stack[d->depth]);
     d->keys[d->depth] = NULL;
     d->depth++;
@@ -567,7 +588,7 @@ static void d_object_begin(void *ctx, uint32_t count) {
     (void)count;
     if (d->failed) return;
     if (d->depth >= BJ_STACK_MAX) { d->failed = 1; return; }
-    d->stack[d->depth] = js_object_new(d->e->ctx);
+    d->stack[d->depth] = new_object(d->e->ctx);
     js_gc_protect(d->e->vm, &d->stack[d->depth]);
     d->keys[d->depth] = NULL;
     d->depth++;

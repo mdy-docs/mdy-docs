@@ -57,7 +57,7 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
     char *text = argc > 0 ? js_string_utf8(args[0]) : NULL;
-    if (!text) { *result = js_array_new(ctx, 0); return true; }
+    if (!text) { *result = new_array(ctx, 0); return true; }
 
     size_t len = strlen(text);
     /* The result is what a site INDEXES, so a truncated word list is a
@@ -153,7 +153,7 @@ static bool tokenize_native(JsContext *ctx, JsValue this_val, const JsValue *arg
     free(slots);
 
     /* In order of first appearance, which is what `new Set` preserves. */
-    JsValue out = js_array_new(ctx, (uint32_t)count);
+    JsValue out = new_array(ctx, (uint32_t)count);
     js_gc_protect(e->vm, &out);
     for (size_t k = 0; k < count; k++) {
         push_item(e, out, str(e->vm, words[k], strlen(words[k])));
@@ -972,7 +972,7 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query,
      */
     if (rc != 0 || !out) {
         if (failed) *failed = 1;
-        return one ? js_null() : js_array_new(e->ctx, 0);
+        return one ? js_null() : new_array(e->ctx, 0);
     }
 
     /* The result is a binjson ARRAY of documents. */
@@ -980,13 +980,13 @@ static JsValue run_query_in(mdy_engine *vals, mdy_engine *store, JsValue query,
     free(out);
     if (!js_is_array(hits)) {
         if (failed) *failed = 1;
-        return one ? js_null() : js_array_new(e->ctx, 0);
+        return one ? js_null() : new_array(e->ctx, 0);
     }
     js_gc_protect(e->vm, &hits);
 
     /* Back into document order. */
     uint32_t n = js_array_length(hits);
-    JsValue ordered = js_array_new(e->ctx, n);
+    JsValue ordered = new_array(e->ctx, n);
     js_gc_protect(e->vm, &ordered);
     /*
      * Each hit's `_id` read ONCE, and the atom for it made once as well: both
@@ -1094,7 +1094,7 @@ static JsValue record_by_index(mdy_engine *e, size_t idx) {
 }
 
 JsValue document_record(mdy_engine *e, size_t at) {
-    if (at >= e->set.count) return js_object_new(e->ctx);
+    if (at >= e->set.count) return new_object(e->ctx);
     JsValue r = record_by_index(e, at);
     if (js_is_undefined(r)) mdy_fatal("the document store could not return a document");
     return r;
@@ -1119,7 +1119,7 @@ static JsValue record_without_id(mdy_engine *e, JsValue rec) {
      * none without.
      */
     js_gc_protect(e->vm, &rec);
-    JsValue out = js_object_new(e->ctx);
+    JsValue out = new_object(e->ctx);
     js_gc_protect(e->vm, &out);
     size_t n = js_object_size(rec);
     for (size_t i = 0; i < n; i++) {
@@ -1236,16 +1236,16 @@ static mdy_engine *lookup_import(mdy_engine *e, const char *spec, char *why, siz
  * as mdy-docs' separate VMs make it cross as JSON.
  */
 static JsValue cross_vm(mdy_engine *from, mdy_engine *to, JsValue v) {
-    if (!js_is_object(v)) return js_object_new(to->ctx);
+    if (!js_is_object(v)) return new_object(to->ctx);
     bj_builder *b = bj_builder_new();
-    if (!b) return js_object_new(to->ctx);
+    if (!b) return new_object(to->ctx);
     if (js_to_binjson(from, b, v) != 0 || bj_builder_error(b)) {
         bj_builder_free(b);
-        return js_object_new(to->ctx);
+        return new_object(to->ctx);
     }
     size_t len = 0;
     const uint8_t *bytes = bj_builder_data(b, &len);
-    JsValue out = bytes ? binjson_to_js(to, bytes, len, NULL) : js_object_new(to->ctx);
+    JsValue out = bytes ? binjson_to_js(to, bytes, len, NULL) : new_object(to->ctx);
     bj_builder_free(b);
     return out;
 }
@@ -1309,7 +1309,7 @@ static bool import_query_native(JsContext *ctx, JsValue this_val, const JsValue 
                                 int argc, JsValue *result, int one) {
     (void)this_val;
     mdy_engine *e = js_context_userdata(ctx);
-    *result = one ? js_null() : js_array_new(ctx, 0);
+    *result = one ? js_null() : new_array(ctx, 0);
     char *spec = argc > 0 ? js_string_utf8(args[0]) : NULL;
     if (!spec) return true;
     mdy_engine *set = lookup_import(e, spec, NULL, 0);
@@ -1400,7 +1400,7 @@ static void note_references(mdy_engine *e, const mdy_doc *tree) {
     for (int k = 0; k < 3; k++) {
         JsValue have = get_val(e, data, lists[k]);
         if (js_is_undefined(have)) {
-            have = js_array_new(e->ctx, 0);
+            have = new_array(e->ctx, 0);
             js_gc_protect(e->vm, &have);
             set_val(e, data, lists[k], have);
             js_gc_unprotect(e->vm, &have);
@@ -1894,10 +1894,10 @@ static bool toc_native(JsContext *ctx, JsValue this_val, const JsValue *args,
     size_t count = 0, cap = 0;
     collect_headings(tree, &entries, &count, &cap);
 
-    JsValue out = js_array_new(ctx, (uint32_t)count);
+    JsValue out = new_array(ctx, (uint32_t)count);
     js_gc_protect(e->vm, &out);
     for (size_t i = 0; i < count; i++) {
-        JsValue entry = js_object_new(e->ctx);
+        JsValue entry = new_object(e->ctx);
         js_gc_protect(e->vm, &entry);
         set_val(e, entry, "depth", js_number(entries[i].depth));
         set_val(e, entry, "text", str(e->vm, entries[i].text, strlen(entries[i].text)));
@@ -2171,7 +2171,7 @@ static int resize_dimension(JsValue v, double *out) {
 /* The `{ path, url, width, height }` object $.resize answers with — built the
  * same way whether the result was just made or found already done. */
 static JsValue resize_result(mdy_engine *e, const char *out_path, int width, int height) {
-    JsValue r = js_object_new(e->ctx);
+    JsValue r = new_object(e->ctx);
     js_gc_protect(e->vm, &r);
     set_val(e, r, "path", str(e->vm, out_path, strlen(out_path)));
     char url[1100];
@@ -3082,9 +3082,9 @@ static int compile_to_callable(mdy_engine *e, Document *d, mdy_script **script,
  * the response, and `$`. All three are roots from here to `done`.
  */
 static void make_call_arguments(mdy_engine *e, size_t index, JsValue request, RenderRoots *r) {
-    r->req = js_is_object(request) ? request : js_object_new(e->ctx);
+    r->req = js_is_object(request) ? request : new_object(e->ctx);
     js_gc_protect(e->vm, &r->req);
-    r->res = js_object_new(e->ctx);
+    r->res = new_object(e->ctx);
     js_gc_protect(e->vm, &r->res);
     /*
      * `res.data` is the document's OWN data — its front matter, its data
@@ -3093,11 +3093,11 @@ static void make_call_arguments(mdy_engine *e, size_t index, JsValue request, Re
      * able to reach its own declared value.
      */
     set_val(e, r->res, "data", record_without_id(e, document_record(e, index)));
-    r->dollar = js_object_new(e->ctx);
+    r->dollar = new_object(e->ctx);
     js_gc_protect(e->vm, &r->dollar);
     /* the host's scope values, for the `const`s the wrapper declared */
     if (e->knobs.scope_count) {
-        JsValue scope = js_object_new(e->ctx);
+        JsValue scope = new_object(e->ctx);
         set_val(e, r->dollar, "__scope", scope);
         for (size_t i = 0; i < e->knobs.scope_count; i++) {
             JsValue v = context_value(e, e->knobs.scope_json[i], 1);
@@ -3448,7 +3448,7 @@ static char *render_public(mdy_engine *e, size_t index, int want_text, char *err
      * site that hides future posts renders differently tomorrow, and a test
      * that could not pin this would rot on its own.
      */
-    JsValue context = js_object_new(e->ctx);
+    JsValue context = new_object(e->ctx);
     js_gc_protect(e->vm, &context);
     const char *forced = getenv("MDY_TODAY");
     char today[40];

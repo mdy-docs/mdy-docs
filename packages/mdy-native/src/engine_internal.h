@@ -324,7 +324,11 @@ struct mdy_engine {
 uint16_t *to_utf16(const char *in, size_t len, size_t *out_len);
 char *from_utf16(const uint16_t *u, size_t len);
 
+/* The VM's constructors, ending the run when it cannot allocate: there is
+ * no JsValue that means "no memory", and undefined would be written as one. */
 JsValue str(JsVm *vm, const char *s, size_t len);       /* UTF-8 bytes as a JS string */
+JsValue new_object(JsContext *ctx);
+JsValue new_array(JsContext *ctx, uint32_t count);
 JsValue key(JsVm *vm, const char *s);                   /* ...interned, for a property name */
 char *js_string_utf8(JsValue v);                        /* back again; caller frees, NULL if not a string */
 char *js_string_utf8_n(JsValue v, size_t *len);         /* ...with its byte length, which may span a NUL */

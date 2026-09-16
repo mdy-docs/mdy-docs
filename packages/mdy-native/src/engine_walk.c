@@ -1221,7 +1221,7 @@ int mdy_engine_open_dir(mdy_engine *e, const char *root, char *error, size_t err
  * `path`, built for exactly this.
  */
 int mdy_engine_entry(mdy_engine *e, const char *entry) {
-    JsValue query = js_object_new(e->ctx);
+    JsValue query = new_object(e->ctx);
     js_gc_protect(e->vm, &query);
     set_val(e, query, "path", str(e->vm, entry, strlen(entry)));
     /* NULL: this returns an index, and -1 is already reported as "entry
