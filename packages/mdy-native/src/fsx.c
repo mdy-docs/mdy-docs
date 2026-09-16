@@ -334,18 +334,25 @@ int fsx_stat(const char *root, const char *rel, double *size, double *mtime_ms) 
     if (!path) return -1;
 
 #ifdef _WIN32
-    /* Second-resolution mtime, which is all _wstat64 offers and all the
-     * provider contract promises — mdy-docs compares mtimes for equality
-     * against a remembered one, never for sub-second ordering. */
+    /* The file's own write time, at the 100ns the filesystem keeps it to,
+     * rather than _wstat64's whole seconds: the watcher tells an edit from
+     * the file it replaced by size and mtime, and a same-length save inside
+     * one second must not look like no save at all. This is also what
+     * node's fs.stat reports, so a record's `mtime` agrees across engines. */
     wchar_t *w = win_widen(path);
     free(path);
     if (!w) return -1;
-    struct _stat64 st;
-    int rc = _wstat64(w, &st);
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    BOOL ok = GetFileAttributesExW(w, GetFileExInfoStandard, &a);
     free(w);
-    if (rc != 0) return -1;
-    *size = (double)st.st_size;
-    *mtime_ms = (double)st.st_mtime * 1000.0;
+    if (!ok) return -1;
+    ULARGE_INTEGER bytes, when;
+    bytes.LowPart = a.nFileSizeLow;  bytes.HighPart = a.nFileSizeHigh;
+    when.LowPart = a.ftLastWriteTime.dwLowDateTime;  when.HighPart = a.ftLastWriteTime.dwHighDateTime;
+    *size = (double)bytes.QuadPart;
+    /* FILETIME counts 100ns intervals from 1601; the Unix epoch is
+     * 116444736000000000 of them later. */
+    *mtime_ms = ((double)when.QuadPart - 116444736000000000.0) / 10000.0;
 #else
     struct stat st;
     int rc = stat(path, &st);
