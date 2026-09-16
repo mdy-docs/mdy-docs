@@ -886,3 +886,83 @@ test('a burst of writes coalesces into far fewer rebuilds than writes', async ()
     dev.child.kill();
   }
 });
+
+test("a change under an imported package's root rebuilds the site that imports it", async () => {
+  const base = mkTemp();
+  const site = join(base, 'site'), theme = join(base, 'theme');
+  mkdirSync(site); mkdirSync(join(theme, 'layouts'), { recursive: true });
+  writeFileSync(join(site, 'main.mdy'),
+    '% import theme from "../theme"\n' +
+    '% $.emit("index.html", theme.render({ path: "layouts/page.mdy" }, {}))\n= x\n');
+  writeFileSync(join(theme, 'layouts', 'page.mdy'), '<html><body>first</body></html>\n');
+
+  const dev = startDev(site);
+  try {
+    const [, port] = await dev.until(/http:\/\/localhost:(\d+)/);
+    assert.match((await get(port, '/')).body, /first/);
+
+    /* The package is not under the site's root, so the watcher has to be
+     * following the import's root as well. */
+    writeFileSync(join(theme, 'layouts', 'page.mdy'), '<html><body>second</body></html>\n');
+    await untilRebuilds(dev, 1);
+    assert.match(dev.log(), /\[change\][^\n]*page\.mdy/, 'the change names the package file');
+    assert.match((await get(port, '/')).body, /second/, 'and the served page is rebuilt from it');
+  } finally {
+    dev.child.kill();
+  }
+});
+
+/*
+ * `mdy dead` end to end, against a broker that answers as sukkal does: a
+ * binjson array of dead letters, and a binjson object for a requeue. What
+ * is pinned is the request each subcommand makes and the line it prints,
+ * which is the JavaScript's.
+ */
+test('`mdy dead` lists what died, and `--requeue` puts one back', async () => {
+  const seen = [];
+  const broker = createServer((req, res) => {
+    req.resume();
+    seen.push(`${req.method} ${req.url}`);
+    res.setHeader('Content-Type', 'application/binjson');
+    if (req.method === 'GET' && req.url === '/dead/orders.place') {
+      res.writeHead(200);
+      return res.end(Buffer.from(encode([
+        { index: 3, attempts: 5, error: 'the page threw' },
+        { index: 4, reason: 'no page of that name' },
+      ])));
+    }
+    if (req.method === 'POST' && req.url === '/requeue/orders.place?index=3') {
+      res.writeHead(200);
+      return res.end(Buffer.from(encode({ index: 7 })));
+    }
+    if (req.method === 'GET' && req.url === '/dead/quiet') {
+      res.writeHead(200);
+      return res.end(Buffer.from(encode([])));
+    }
+    res.writeHead(404); res.end('no');
+  });
+  await new Promise((r) => broker.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${broker.address().port}/`;   /* a trailing slash is trimmed */
+
+  try {
+    const listed = await runCli(['dead', 'orders.place', '--broker', url]);
+    assert.equal(listed.code, 0, listed.out);
+    assert.match(listed.out, /\[dead\] #3 orders\.place after 5 attempt\(s\) — the page threw/);
+    assert.match(listed.out, /\[dead\] #4 orders\.place — no page of that name/);
+    assert.match(listed.out, /2 dead — `mdy dead orders\.place --requeue <index>` puts one back/);
+
+    const requeued = await runCli(['dead', 'orders.place', '--broker', url, '--requeue', '3']);
+    assert.equal(requeued.code, 0, requeued.out);
+    assert.match(requeued.out, /✓ requeued orders\.place \(dead #3 → #7\)/,
+                 'the line carries where it was and where it went');
+
+    const quiet = await runCli(['dead', 'quiet', '--broker', url]);
+    assert.equal(quiet.code, 0, quiet.out);
+    assert.match(quiet.out, /nothing has died on quiet/);
+
+    assert.deepEqual(seen, ['GET /dead/orders.place', 'POST /requeue/orders.place?index=3', 'GET /dead/quiet'],
+                     'one request each, at the routes sukkal serves');
+  } finally {
+    broker.close();
+  }
+});
