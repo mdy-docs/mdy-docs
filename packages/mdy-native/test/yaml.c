@@ -129,6 +129,13 @@ int main(void) {
      * printed as itself, not as 26.184999999999999. */
     check("a float is written with the fewest digits that read back", "a: 26.185\nb: 0.1\nc: 1e21",
           "{\"a\":26.185,\"b\":0.1,\"c\":1e+21}");
+    /* Number::toString's boundaries: a plain decimal up to 1e21 and down to
+     * 1e-6, an exponent beyond, written with no padding in it. */
+    check("...laid out as String(n) lays it out",
+          "a: 1e20\nb: 0.000001\nc: 1e-7\nd: 1.5e300\ne: 123456789012345680000\nf: -2.5e-8\ng: 0.00001234",
+          "{\"a\":100000000000000000000,\"b\":0.000001,\"c\":1e-7,\"d\":1.5e+300,"
+          "\"e\":123456789012345680000,\"f\":-2.5e-8,\"g\":0.00001234}");
+
     {
         char err[256];
         mdy_yaml *doc = mdy_yaml_parse("a: 1\nb:\n  c: 2", 0, err, sizeof err);

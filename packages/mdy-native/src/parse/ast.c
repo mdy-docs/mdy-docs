@@ -379,17 +379,53 @@ static int out_number(Out *o, double v) {
     return out_str(o, buf);
 }
 
+/*
+ * Number::toString, as ECMAScript specifies it: the fewest significant
+ * digits that read back as the same double, laid out as a plain decimal
+ * when the exponent is between -7 and 21 and as `d.ddde+X` outside — so
+ * 0.000001 and 1e-7, 1e20 written out and 1e+21 not. `%g` gets both
+ * boundaries wrong and, on MSVCRT, pads the exponent to three digits.
+ */
 void mdy_format_number(char *out, size_t cap, double v) {
-    /* Range test BEFORE the cast: `(long long)v` is undefined outside the
-     * type's range. */
-    if (v > -9.2e18 && v < 9.2e18 && v == (double)(long long)v) {
-        snprintf(out, cap, "%lld", (long long)v);
-        return;
+    if (v == 0) { snprintf(out, cap, "0"); return; }   /* -0 is "0" too */
+    char neg = v < 0 ? '-' : 0;
+    double a = v < 0 ? -v : v;
+
+    /* The digits: `%.*e` with the fewest that round-trip, 1 to 17. */
+    char sci[40];
+    int exp10 = 0;
+    for (int digits = 1; digits <= 17; digits++) {
+        snprintf(sci, sizeof sci, "%.*e", digits - 1, a);
+        if (strtod(sci, NULL) == a || digits == 17) break;
     }
-    for (int digits = 15; digits <= 17; digits++) {
-        snprintf(out, cap, "%.*g", digits, v);
-        if (strtod(out, NULL) == v) return;
+    char digs[24]; int k = 0;
+    const char *p = sci;
+    for (; *p && *p != 'e' && *p != 'E'; p++) if (*p >= '0' && *p <= '9') digs[k++] = *p;
+    if (*p) exp10 = atoi(p + 1);
+    while (k > 1 && digs[k - 1] == '0') k--;
+    digs[k] = '\0';
+    int n = exp10 + 1;   /* the decimal point sits after the nth digit */
+
+    char buf[48]; size_t o = 0;
+    if (neg) buf[o++] = '-';
+    if (k <= n && n <= 21) {
+        memcpy(buf + o, digs, (size_t)k); o += (size_t)k;
+        for (int i = k; i < n; i++) buf[o++] = '0';
+    } else if (0 < n && n <= 21) {
+        memcpy(buf + o, digs, (size_t)n); o += (size_t)n;
+        buf[o++] = '.';
+        memcpy(buf + o, digs + n, (size_t)(k - n)); o += (size_t)(k - n);
+    } else if (-6 < n && n <= 0) {
+        buf[o++] = '0'; buf[o++] = '.';
+        for (int i = n; i < 0; i++) buf[o++] = '0';
+        memcpy(buf + o, digs, (size_t)k); o += (size_t)k;
+    } else {
+        buf[o++] = digs[0];
+        if (k > 1) { buf[o++] = '.'; memcpy(buf + o, digs + 1, (size_t)(k - 1)); o += (size_t)(k - 1); }
+        o += (size_t)snprintf(buf + o, sizeof buf - o, "e%c%d", n - 1 < 0 ? '-' : '+', n - 1 < 0 ? 1 - n : n - 1);
     }
+    buf[o] = '\0';
+    snprintf(out, cap, "%s", buf);
 }
 
 double mdy_js_number(const char *s, size_t len) {

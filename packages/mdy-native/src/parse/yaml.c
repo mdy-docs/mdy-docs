@@ -694,7 +694,7 @@ static mdy_yaml_node *parse_flow_at(Cur *c, size_t depth) {
                      * JSON does with an object key too. */
                     char tmp[64];
                     int n = 0;
-                    if (k->type == MDY_YAML_NUMBER) n = snprintf(tmp, sizeof tmp, "%g", k->as.number);
+                    if (k->type == MDY_YAML_NUMBER) { mdy_format_number(tmp, sizeof tmp, k->as.number); n = (int)strlen(tmp); }
                     else if (k->type == MDY_YAML_BOOL) n = snprintf(tmp, sizeof tmp, "%s", k->as.boolean ? "true" : "false");
                     else n = snprintf(tmp, sizeof tmp, "null");
                     mdy_yaml_node *s = new_string(c->p, tmp, (size_t)n);
@@ -1383,31 +1383,12 @@ static void json_string(mdy_buf *b, const char *s, size_t len) {
     mdy_buf_putc(b, '"');
 }
 
-/*
- * `JSON.stringify` writes an integral double without a fraction, has no way to
- * write an infinity or a NaN — both become `null` — and otherwise writes the
- * SHORTEST decimal that reads back as the same double.
- *
- * That last one is not a detail: `%.17g` turns 26.185 into 26.184999999999999,
- * which is the same number and a different file. The shortest form is found by
- * asking for fewer digits and checking the answer still round-trips, which is
- * what a full Grisu implementation computes directly and what this arrives at
- * in at most three tries.
- */
+/* `JSON.stringify`'s number: String(n), except that an infinity or a NaN,
+ * which JSON cannot write, is `null`. */
 static void json_number(mdy_buf *b, double v) {
     if (isnan(v) || isinf(v)) { mdy_buf_put(b, "null", 4); return; }
-    char tmp[40];
-    /* Range test BEFORE the cast: `(long long)v` is undefined for a v outside
-     * long long's range, so the `< 9.2e18` guards must short-circuit ahead of
-     * it (ast.c and html.c order it this way too). */
-    if (v > -9.2e18 && v < 9.2e18 && v == (double)(long long)v) {
-        snprintf(tmp, sizeof tmp, "%lld", (long long)v);
-    } else {
-        for (int digits = 15; digits <= 17; digits++) {
-            snprintf(tmp, sizeof tmp, "%.*g", digits, v);
-            if (strtod(tmp, NULL) == v) break;
-        }
-    }
+    char tmp[48];
+    mdy_format_number(tmp, sizeof tmp, v);
     mdy_buf_put(b, tmp, strlen(tmp));
 }
 
