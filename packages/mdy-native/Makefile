@@ -636,7 +636,7 @@ check-golden: build/mdy$(EXE)
 	exit $$fail
 
 .PHONY: check-ingest check-engine check-engine-asan check-site check-sites check-dev check-alloc check-generated \
-        check-alloc-all check-alloc-doc check-alloc-dev clean
+        check-alloc-all check-alloc-ci check-alloc-doc check-alloc-dev clean
 
 # A document from text into a nisaba collection, with no JavaScript in it:
 # data fences, YAML, binjson, dc_insert_one, and a query back out. This is the
@@ -919,10 +919,34 @@ check-alloc-dev: build/mdy$(EXE) build/mdy-af$(EXE)
 	@node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
 	  --mode dev --site "$(ALLOC_SITE)" $(if $(JOBS),--jobs $(JOBS),)
 
+# What CI runs: the awkward fixture and the dev server in full, and a sample
+# of at most a thousand refusals from each of the other builds and documents
+# -- they are tens to hundreds of thousands each now that sukkal's and
+# lamassu's allocations are refused too, and a two-core runner has minutes,
+# not hours. check-alloc-all is the whole of it, for a nightly or a pre-push.
+ALLOC_SAMPLE ?= 1000
+check-alloc-ci: build/mdy$(EXE) build/mdy-af$(EXE)
+	@fail=0; \
+	node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	  --site test/fixture-awkward $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
+	for s in test/fixture ../../examples/blog ../../examples/docs-site; do \
+	  node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	    --site "$$s" --max $(ALLOC_SAMPLE) $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
+	done; \
+	for s in ../../examples/elements.mdy ../../examples/hashtags.mdy \
+	         ../../examples/invoice.mdy ../../examples/roster.mdy; do \
+	  node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	    --mode document --site "$$s" --max $(ALLOC_SAMPLE) $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
+	done; \
+	node test/alloc-sweep.mjs --bin build/mdy-af$(EXE) --ref build/mdy$(EXE) \
+	  --mode dev --site test/fixture-awkward $(if $(JOBS),--jobs $(JOBS),) || fail=1; \
+	exit $$fail
+
 # Everything a native sweep can reach, which is what a pre-push or a nightly
-# wants: four sites in build mode, four documents, and the dev server. About
-# nine minutes. fixture-awkward is FIRST because it is the fastest and the one
-# most likely to fail -- the .md front end is the newest thing under the shim.
+# wants: four sites in build mode, four documents, and the dev server, every
+# refusal of each. fixture-awkward is FIRST because it is the fastest and the
+# one most likely to fail -- the .md front end is the newest thing under the
+# shim.
 check-alloc-all: build/mdy$(EXE) build/mdy-af$(EXE)
 	@fail=0; for s in test/fixture-awkward test/fixture ../../examples/blog \
 	          ../../examples/docs-site; do \

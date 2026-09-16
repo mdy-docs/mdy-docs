@@ -26,10 +26,11 @@
 #   9. `make check-markdown`       — the markdown front end against remark,
 #                                    tree for tree, over 904 vendored spec
 #                                    examples, gated on a baseline (Linux)
-#  10. `make check-alloc-all`      — every allocation refused in turn, across
-#                                    three whole builds, document mode and the
-#                                    dev server: each run either the same
-#                                    output or a reported failure (Linux)
+#  10. `make check-alloc-ci`       — allocations refused in turn, across whole
+#                                    builds, document mode and the dev server:
+#                                    each run either the same output or a
+#                                    reported failure; the big sites and the
+#                                    big document sampled (Linux)
 #
 # The last is the one that catches a path bug. A build that produces DIFFERENT
 # pages rather than an error would pass every other check here, and on Windows
@@ -257,7 +258,7 @@ jobs:
       - name: Check every allocation failure
         if: matrix.os == 'ubuntu-latest'
         working-directory: packages/mdy-native
-        run: make check-alloc-all
+        run: make check-alloc-ci
 
       # The binary, downloadable from the run. Only after every check has
       # passed, so what is there is what was proved; a release is a later

@@ -116,6 +116,10 @@ const argsFor = (out) =>
  * of the two.
  */
 const DEV_TIMEOUT_MS = 20000;
+/* A build or a document run that is still going after this long is a run
+ * that neither finished nor said it could not, and the sweep must say so
+ * rather than wait on it: the reference takes seconds. */
+const RUN_TIMEOUT_MS = 60000;
 
 /* Start a server, wait for its banner, ask it for every page the reference
  * build produced, stop it. `env` is what differs between the measuring run
@@ -241,7 +245,15 @@ if (!Number.isFinite(total) || total < 1) {
 
 const from = Number(flag('from', 1));
 const to = Number(flag('to', total));
-console.log(`${site} (${mode}): ${total} allocations, sweeping ${from}..${to} on ${jobs} job(s)`);
+/* Every stride-th ordinal, for a machine that cannot afford them all: a
+ * sample, and said to be one. `--max N` picks the stride that keeps the
+ * sample at N or fewer, whatever the site has grown to. */
+let stride = Math.max(1, Number(flag('stride', 1)));
+const max = Number(flag('max', 0));
+if (max > 0) stride = Math.max(stride, Math.ceil((to - from + 1) / max));
+const swept = Math.floor((to - from) / stride) + 1;
+console.log(`${site} (${mode}): ${total} allocations, sweeping ${from}..${to}` +
+            `${stride > 1 ? ` every ${stride}th (${swept})` : ''} on ${jobs} job(s)`);
 
 const crashed = [];
 const wrong = [];
@@ -261,12 +273,15 @@ const runBuild = (n, slot) =>
     execFile(
       bin,
       argsFor(out),
-      { env: { ...process.env, MDY_ALLOC_FAIL_NTH: String(n) }, encoding: 'buffer' },
+      { env: { ...process.env, MDY_ALLOC_FAIL_NTH: String(n) }, encoding: 'buffer',
+        timeout: RUN_TIMEOUT_MS, killSignal: 'SIGKILL' },
       (err, _stdout, stderr) => {
-        // A signal is a crash; a non-zero code is the run reporting it could
-        // not finish, which is what the invariant allows — provided it SAID
-        // so, since the invariant is that a run that could not says why.
-        if (err?.signal) crashed.push(`${n}:${err.signal}`);
+        // A run that had to be killed neither finished nor stopped; a signal
+        // is a crash; a non-zero code is the run reporting it could not
+        // finish, which is what the invariant allows — provided it SAID so,
+        // since the invariant is that a run that could not says why.
+        if (err?.killed) stalled.push(n);
+        else if (err?.signal) crashed.push(`${n}:${err.signal}`);
         else if (err?.code) { if (stderr && stderr.length) reported++; else silent.push(n); }
         else if (same(reference, treeOf(out))) ok++;
         else wrong.push(n);
@@ -319,7 +334,8 @@ const runOne = (n, slot) => (mode === 'dev' ? runDev(n) : runBuild(n, slot));
 
 const worker = async (slot) => {
   for (;;) {
-    const n = next++;
+    const n = next;
+    next += stride;
     if (n > to) return;
     await runOne(n, slot);
   }
@@ -349,7 +365,7 @@ if (wrong.length) {
 }
 if (silent.length) console.log(`  stopped without a word at: ${silent.sort((a, b) => a - b).join(' ')}`);
 if (crashed.length || wrong.length || stalled.length || silent.length) {
-  console.log(`  ${crashed.length + wrong.length + stalled.length + silent.length} of ${to - from + 1}`);
+  console.log(`  ${crashed.length + wrong.length + stalled.length + silent.length} of ${swept}`);
   process.exit(1);
 }
-console.log(`  ${to - from + 1} refusals: every one was either survived exactly or reported`);
+console.log(`  ${swept} refusals: every one was either survived exactly or reported`);
