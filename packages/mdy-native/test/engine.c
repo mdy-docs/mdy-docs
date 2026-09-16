@@ -2051,7 +2051,12 @@ static void url_checks(void) {
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         memset(&r, 0, sizeof r);
         int rc = http_request("GET", cases[i].url, NULL, NULL, 0, &r);
-        ok_(cases[i].what, rc == -1 && strstr(r.error, cases[i].want) != NULL, r.error);
+        /* A machine with something listening on 80 answers the two default
+         * cases instead of refusing them, which is the same evidence: the
+         * request reached port 80. */
+        int answered_on_80 = rc == 0 && strstr(cases[i].want, ":80") != NULL;
+        ok_(cases[i].what, (rc == -1 && strstr(r.error, cases[i].want) != NULL) || answered_on_80,
+            rc == 0 ? "(port 80 answered)" : r.error);
         http_response_free(&r);
     }
 
@@ -3435,8 +3440,13 @@ static void api_checks(void) {
         const char *r0 = roots ? mdy_engine_root_at(e, 0) : NULL;
         ok_("root_count is 1 for a site that imports nothing",
             roots == 1, roots == 1 ? "(1)" : "(not 1)");
+        /* By the directory's own name: Windows' temp names do not carry the
+         * prefix they were asked for, and the root is resolved to an absolute
+         * path that need not be spelled as `root` was. */
+        const char *leaf = root;
+        for (const char *q = root; *q; q++) if (*q == '/' || *q == '\\') leaf = q + 1;
         ok_("...and root_at(0) is the site itself",
-            r0 && strstr(r0, "mdy-api") != NULL, r0 ? r0 : "(NULL)");
+            r0 && strstr(r0, leaf) != NULL, r0 ? r0 : "(NULL)");
         ok_("...and an index past the end is NULL, not a crash",
             mdy_engine_root_at(e, roots + 5) == NULL, "(NULL)");
 
