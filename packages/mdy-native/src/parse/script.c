@@ -91,15 +91,18 @@ int mdy_script_is_line(const char *line, size_t len) {
  */
 typedef enum { M_SINGLE, M_DOUBLE, M_TEMPLATE, M_BLOCK, M_EXPRESSION } Mode;
 
-enum { SCAN_MAX = 64 };
-
+/* The modes and brace counts are STACKS that grow: a template inside an
+ * expression inside a template nests as deep as somebody writes it, and a
+ * level that could not be pushed would pop the wrong thing later. */
 typedef struct {
     int depth;
-    Mode modes[SCAN_MAX];
-    int mode_count;
-    int braces[SCAN_MAX];
-    int brace_count;
+    Mode *modes;
+    size_t mode_count, mode_cap;
+    int *braces;
+    size_t brace_count, brace_cap;
 } State;
+
+static void scan_free(State *st) { free(st->modes); free(st->braces); }
 
 static Mode quote_mode(char c) {
     return c == '\'' ? M_SINGLE : c == '"' ? M_DOUBLE : M_TEMPLATE;
@@ -110,7 +113,23 @@ static char quote_end(Mode m) {
 }
 
 static void push_mode(State *st, Mode m) {
-    if (st->mode_count < SCAN_MAX) st->modes[st->mode_count++] = m;
+    if (st->mode_count == st->mode_cap) {
+        st->mode_cap = st->mode_cap ? st->mode_cap * 2 : 16;
+        Mode *grown = realloc(st->modes, st->mode_cap * sizeof *grown);
+        if (!grown) mdy_oom_exit();
+        st->modes = grown;
+    }
+    st->modes[st->mode_count++] = m;
+}
+
+static void push_brace(State *st) {
+    if (st->brace_count == st->brace_cap) {
+        st->brace_cap = st->brace_cap ? st->brace_cap * 2 : 16;
+        int *grown = realloc(st->braces, st->brace_cap * sizeof *grown);
+        if (!grown) mdy_oom_exit();
+        st->braces = grown;
+    }
+    st->braces[st->brace_count++] = 0;
 }
 
 static void scan(const char *text, size_t len, State *st) {
@@ -132,7 +151,7 @@ static void scan(const char *text, size_t len, State *st) {
             if (c == quote_end(mode)) st->mode_count--;
             else if (mode == M_TEMPLATE && c == '$' && next == '{') {
                 push_mode(st, M_EXPRESSION);
-                if (st->brace_count < SCAN_MAX) st->braces[st->brace_count++] = 0;
+                push_brace(st);
                 i++;
             }
             i++;
@@ -193,15 +212,16 @@ static void mark_code(const Line *lines, size_t count, unsigned char *code) {
 
         State st = {0};
         scan(rest, rest_len, &st);
-        if (!still_open(&st)) continue;
-
         size_t last = i;
-        for (size_t ahead = i + 1; ahead < count; ahead++) {
-            /* Another code line starts its own; this one never closed. */
-            if (match_script(&lines[ahead], 1, NULL, NULL)) break;
-            scan(lines[ahead].s, lines[ahead].len, &st);
-            if (!still_open(&st)) { last = ahead; break; }
+        if (still_open(&st)) {
+            for (size_t ahead = i + 1; ahead < count; ahead++) {
+                /* Another code line starts its own; this one never closed. */
+                if (match_script(&lines[ahead], 1, NULL, NULL)) break;
+                scan(lines[ahead].s, lines[ahead].len, &st);
+                if (!still_open(&st)) { last = ahead; break; }
+            }
         }
+        scan_free(&st);
         if (last == i) continue;
 
         for (size_t line = i + 1; line <= last; line++) code[line] = 1;

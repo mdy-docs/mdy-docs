@@ -124,6 +124,25 @@ int main(void) {
         }
     }
 
+    printf("--- mdyscript: how deep a %%%% line nests ---\n");
+    {
+        /* Seventy templates inside seventy expressions, opened on the code
+         * line and closed on the next: the closes must pop what was pushed,
+         * so the second line is code and the third is content. */
+        char source[1024];
+        size_t n = (size_t)snprintf(source, sizeof source, "%%%% f(`");
+        for (int i = 0; i < 70; i++) n += (size_t)snprintf(source + n, sizeof source - n, "${`");
+        n += (size_t)snprintf(source + n, sizeof source - n, "\na");
+        for (int i = 0; i < 70; i++) n += (size_t)snprintf(source + n, sizeof source - n, "`}");
+        snprintf(source + n, sizeof source - n, "`)\ncontent\n");
+        mdy_script *s = mdy_script_compile(source, strlen(source));
+        int ok = s && mdy_script_line_count(s) >= 3 &&
+                 mdy_script_is_code(s, 0) && mdy_script_is_code(s, 1) && !mdy_script_is_code(s, 2);
+        printf("  %s  a %%%% line nesting seventy deep closes on the line that closes it\n", ok ? "ok  " : "FAIL");
+        if (!ok) failures++;
+        mdy_script_free(s);
+    }
+
     if (failures) {
         printf("\n%d check%s failed\n", failures, failures == 1 ? "" : "s");
         return 1;
