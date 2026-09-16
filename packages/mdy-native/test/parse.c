@@ -315,6 +315,15 @@ static void definition_checks(const mdy_options *o) {
         { "a definition closes the paragraph above it",
           "para\n[[^x]]: note\nsee [[^x]]\n",
           "<p>para</p>", "para [[" },
+        { "a note referenced only from another note is listed after it, numbered by that place",
+          "a[[^a]]\n\n[[^a]]: first [[^b]]\n\n[[^b]]: second\n",
+          "<li id=\"user-content-fn-a\">\n<p>first <sup><a href=\"#user-content-fn-b\" id=\"user-content-fnref-b\" data-footnote-ref aria-describedby=\"footnote-label\">2</a></sup>", NULL },
+        { "...and a reference inside a note counts towards the back-references",
+          "a[[^a]] b[[^b]]\n\n[[^a]]: first [[^b]]\n\n[[^b]]: second\n",
+          "href=\"#user-content-fnref-b-2\" data-footnote-backref", NULL },
+        { "a note reached only from a note nobody references stays out",
+          "a[[^a]]\n\n[[^a]]: plain\n\n[[^z]]: points [[^b]]\n\n[[^b]]: unreached\n",
+          "<p>plain <a", "unreached" },
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         mdy_doc *d = mdy_parse(cases[i].source, 0, o);

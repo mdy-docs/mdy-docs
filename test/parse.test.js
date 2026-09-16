@@ -1699,6 +1699,32 @@ describe('footnotes', () => {
     )
   })
 
+  test('lists a note referenced only from another note, after it', () => {
+    const html = mdyToHtml('a[[ ^a ]]\n\n[[ ^a ]]: first [[ ^b ]]\n\n[[ ^b ]]: second')
+
+    expect(html).toContain('<li id="user-content-fn-b">')
+    expect(html).toContain('href="#user-content-fn-b" id="user-content-fnref-b"')
+    expect(html).toContain('>2</a></sup>')
+    expect(html.indexOf('user-content-fn-a"')).toBeLessThan(
+      html.indexOf('user-content-fn-b"')
+    )
+  })
+
+  test('counts a reference inside a note towards its back-references', () => {
+    const html = mdyToHtml('a[[ ^a ]] b[[ ^b ]]\n\n[[ ^a ]]: first [[ ^b ]]\n\n[[ ^b ]]: second')
+
+    expect(html).toContain('id="user-content-fnref-b-2"')
+    expect(html).toContain('href="#user-content-fnref-b-2" data-footnote-backref')
+    expect(html).toContain('↩<sup>2</sup>')
+  })
+
+  test('leaves out a note reached only from a note nobody references', () => {
+    const html = mdyToHtml('a[[ ^a ]]\n\n[[ ^a ]]: plain\n\n[[ ^z ]]: points [[ ^b ]]\n\n[[ ^b ]]: unreached')
+
+    expect(html).not.toContain('user-content-fn-b"')
+    expect(html).not.toContain('unreached')
+  })
+
   test('references work in headings, lists and table cells', () => {
     const source = '\n\n[[ ^1 ]]: note'
 

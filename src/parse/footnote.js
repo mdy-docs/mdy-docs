@@ -146,6 +146,14 @@ export function createFootnotes(settings, known) {
    * repeated references to the same note. `order` is rebuilt to match, which
    * is what puts the section's items in reading order too.
    *
+   * Then the notes themselves, in that order: a note may reference another,
+   * and a reader meets that reference when they read the section — so a note
+   * pointed at only from a note is listed after the one that points at it,
+   * numbered by that place, and the reference inside a note counts towards
+   * the back-references like any other. This is GitHub's rule
+   * (mdast-util-gfm-footnote walks the definitions the same way), and a note
+   * that is never reached from the body or from a listed note stays out.
+   *
    * @param {Array<import('hast').ElementContent>} children
    */
   function renumber(children) {
@@ -154,6 +162,12 @@ export function createFootnotes(settings, known) {
     order.length = 0
 
     walk(children)
+
+    // `order` grows while it is walked: a note met here adds its own notes.
+    for (let index = 0; index < order.length; index++) {
+      const content = defined.get(order[index])
+      if (content) walk(content)
+    }
 
     for (const [id, count] of seen) {
       const counter = counters.get(id)
