@@ -261,7 +261,7 @@ MD4C_OBJS  := build/parse/md4c.o build/parse/md4c-entity.o
 UCD_INC    := -I$(LAMASSU)/third_party/baru-re/include
 # lexbor's headers reach src/parse because raw.c is the rehype-raw stage and
 # lives there: it is the `.md` front end's last pass, not the engine's first.
-PARSE_INC  := -Isrc/parse -Ithird_party/md4c/src -Ithird_party/lexbor/source
+PARSE_INC  := -Isrc/parse -Ithird_party/md4c/src -Ithird_party/lexbor/source -DLEXBOR_STATIC
 PARSE_CFLAGS := -std=c11 -Wall -Wextra -Wshadow -O2 $(DEBUG) $(PARSE_INC) $(UCD_INC)
 PARSE_LIB  := build/libmdyparse.a
 
@@ -338,7 +338,10 @@ STB_INC   := -Ithird_party/stb
 # (document.c, element.c, node.c, serialize.c and four more), so flattening
 # would silently drop half of each pair.
 LX_DIR    := third_party/lexbor/source
-LX_INC    := -I$(LX_DIR)
+# LEXBOR_STATIC on every side of the archive: without it lexbor's headers
+# mark its API dllimport on Windows, which is an error in its own sources and
+# an unresolved `__imp_` symbol in anything that includes them.
+LX_INC    := -I$(LX_DIR) -DLEXBOR_STATIC
 LX_SRCS   := $(wildcard $(LX_DIR)/lexbor/core/*.c $(LX_DIR)/lexbor/ns/*.c \
                         $(LX_DIR)/lexbor/tag/*.c \
                         $(LX_DIR)/lexbor/dom/*.c $(LX_DIR)/lexbor/dom/*/*.c \
@@ -1086,7 +1089,7 @@ $(WASM_AF_OUT): $(CLI_SRCS) $(ENGINE_SRCS) $(NIS_SRCS) $(WASM_HDRS) build/wasm/a
 # because the memo and MEMFS both persist inside an instance and sharing one
 # would serve the next build the last one's renders.
 check-alloc-wasm: $(WASM_AF_OUT)
-	@node wasm/check-alloc.mjs --site "$(if $(ALLOC_WASM_SITE),$(ALLOC_WASM_SITE),$(ALLOC_SITE))"
+	@node wasm/check-alloc.mjs --site "$(if $(ALLOC_WASM_SITE),$(ALLOC_WASM_SITE),$(notdir $(ALLOC_SITE)))"
 
 .PHONY: wasm check-wasm check-alloc-wasm serve-wasm
 wasm: $(WASM_OUT)
