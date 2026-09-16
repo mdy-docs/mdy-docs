@@ -138,6 +138,38 @@ static const char *emitted(const char *path) {
     return NULL;
 }
 
+/*
+ * A throwaway site directory under the system temp directory, named for the
+ * check. fsx_mkdtemp takes a PATH template, so the temp directory has to be
+ * part of it — a bare prefix makes the directory in the working one, and a
+ * crashing test then leaves it in the source tree. NULL after a FAIL line.
+ */
+static char *temp_site(const char *name) {
+    char *tmp = fsx_tmpdir();
+    char prefix[1024];
+    snprintf(prefix, sizeof prefix, "%s/%s", tmp ? tmp : ".", name);
+    free(tmp);
+    char *root = fsx_mkdtemp(prefix);
+    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; }
+    return root;
+}
+
+/* An engine over `root` with every emit collected, or NULL after a FAIL line
+ * naming `what` could not be opened. `err` is the caller's, for the checks
+ * that go on using it. */
+static mdy_engine *open_site(const char *root, const char *what, char *err, size_t err_len) {
+    mdy_engine *e = mdy_engine_new(S);
+    emit_count = 0;
+    mdy_engine_on_emit(e, collect_all, NULL);
+    if (mdy_engine_open_dir(e, root, err, err_len) != 0) {
+        printf("  FAIL  %s\n      %s\n", what, err);
+        failures++;
+        mdy_engine_free(e);
+        return NULL;
+    }
+    return e;
+}
+
 static void write_file(const char *root, const char *rel, const char *text) {
     char path[1024];
     snprintf(path, sizeof path, "%s/%s", root, rel);
@@ -171,12 +203,8 @@ static void site_checks(void) {
     /* fsx_mkdtemp takes a PATH template, so the system temp directory has to
      * be part of it — a bare prefix makes the directory in the working one,
      * and a crashing test then leaves it in the source tree. */
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-site", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-site");
+    if (!root) return;
 
     /*
      * A site with one of each kind of file, so the dispatch is exercised by
@@ -219,18 +247,9 @@ static void site_checks(void) {
     write_file(root, "dist/stale.mdy", "= Should not be here\n");
     write_file(root, ".hidden/secret.mdy", "= Nor this\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory", err, sizeof err);
+    if (!e) { free(root); return; }
     ok_("a directory opens as a document set", mdy_engine_count(e) == 6, NULL);
 
     int entry = mdy_engine_entry(e, "main.mdy");
@@ -308,12 +327,8 @@ static void site_checks(void) {
 static void data_file_checks(void) {
     printf("\n--- engine: a data file's own YAML ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-data", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-data");
+    if (!root) return;
 
     write_file(root, "main.mdy",
         "% const roll = $.find({}).map((d) => [d.path, d.title ?? '-',\n"
@@ -417,12 +432,8 @@ static void data_file_checks(void) {
 static void blank_file_checks(void) {
     printf("\n--- engine: a file that holds no document ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-blank", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-blank");
+    if (!root) return;
 
     write_file(root, "a.mdy", "");
     write_file(root, "bare.mdy", "---\n");
@@ -436,18 +447,9 @@ static void blank_file_checks(void) {
         "% $.emit('zed.txt', JSON.stringify($.text({ path: 'zed.mdy' })))\n"
         "% $.emit('multi.txt', $.text(4) + '/' + $.text(5))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory with empty files in it\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory with empty files in it", err, sizeof err);
+    if (!e) { free(root); return; }
     ok_("an empty file is one empty document, not none", mdy_engine_count(e) == 7, NULL);
 
     int entry = mdy_engine_entry(e, "main.mdy");
@@ -503,12 +505,8 @@ static void blank_file_checks(void) {
 static void markdown_render_checks(void) {
     printf("\n--- engine: a .md document through $.render ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-md", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-md");
+    if (!root) return;
 
     write_file(root, "a.md", "# Alpha\n\nfirst body\n");
     write_file(root, "b.md", "# Beta\n\nsecond body\n");
@@ -520,18 +518,9 @@ static void markdown_render_checks(void) {
         "% $.emit('twice.html', $.html($.render({ path: 'a.md' })) + '|' + $.html($.render({ path: 'a.md' })))\n"
         "% $.emit('text.txt', JSON.stringify($.text({ path: 'a.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of markdown\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of markdown", err, sizeof err);
+    if (!e) { free(root); return; }
 
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
@@ -591,12 +580,8 @@ static void markdown_render_checks(void) {
 static void footnote_checks(void) {
     printf("\n--- engine: GFM footnotes in a .md ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-fn", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-fn");
+    if (!root) return;
 
     write_file(root, "one.md",   "a[^1]\n\n[^1]: n\n");
     write_file(root, "twice.md", "a[^1] b[^1]\n\n[^1]: n\n");
@@ -610,18 +595,9 @@ static void footnote_checks(void) {
         "% $.emit('table.html', $.html($.render({ path: 'table.md' })))\n"
         "% $.emit('empty.html', $.html($.render({ path: 'empty.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of markdown\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of markdown", err, sizeof err);
+    if (!e) { free(root); return; }
 
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
@@ -753,12 +729,8 @@ static void footnote_checks(void) {
 static void caret_bracket_checks(void) {
     printf("\n--- engine: a bracket that is not a footnote after all ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-caret", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-caret");
+    if (!root) return;
 
     write_file(root, "space.md", "a[^a b]\n\n[^a b]: n\n");
     write_file(root, "empty.md", "a[^]\n\n[^]: n\n");
@@ -774,18 +746,9 @@ static void caret_bracket_checks(void) {
         "% $.emit('cross.html', $.html($.render({ path: 'cross.md' })))\n"
         "% $.emit('inner.html', $.html($.render({ path: 'inner.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of markdown\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of markdown", err, sizeof err);
+    if (!e) { free(root); return; }
 
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
@@ -857,12 +820,8 @@ static void caret_bracket_checks(void) {
 static void alert_checks(void) {
     printf("\n--- engine: a GitHub alert ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-alert", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-alert");
+    if (!root) return;
 
     write_file(root, "a.md", "> [!WARNING]\n> Careful.\n");
     write_file(root, "q.md", "> Just a quote.\n");
@@ -925,12 +884,8 @@ static void alert_checks(void) {
 static void heading_id_checks(void) {
     printf("\n--- engine: a heading id that is already taken ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-hid", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-hid");
+    if (!root) return;
 
     write_file(root, "dup.md",  "# foo\n## foo\n### Foo\n");
     write_file(root, "dup.mdy", "= foo\n== foo\n=== Foo\n");
@@ -938,18 +893,9 @@ static void heading_id_checks(void) {
         "% $.emit('md.html',  $.html($.render({ path: 'dup.md' })))\n"
         "% $.emit('mdy.html', $.html($.render({ path: 'dup.mdy' })))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of headings\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of headings", err, sizeof err);
+    if (!e) { free(root); return; }
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
     if (!html) {
@@ -997,12 +943,8 @@ static void heading_id_checks(void) {
 static void raw_html_checks(void) {
     printf("\n--- engine: raw HTML inside a .md paragraph ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-raw", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-raw");
+    if (!root) return;
 
     write_file(root, "inline.md", "a <b>x</b> b\n");
     write_file(root, "code.md",   "a `code <b>x</b> here` b\n");
@@ -1027,18 +969,9 @@ static void raw_html_checks(void) {
         "% $.emit('foster.html',   $.html($.render({ path: 'foster.md' })))\n"
         "% $.emit('two.html', $.html($.render({ path: 'one.md' })) + $.html($.render({ path: 'two.md' })))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of markdown\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of markdown", err, sizeof err);
+    if (!e) { free(root); return; }
 
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
@@ -1815,12 +1748,8 @@ static void record_key_checks(void) {
 
     /* A directory, where the identity gives the order its meaning. */
     {
-        char *tmp = fsx_tmpdir();
-        char prefix[1024];
-        snprintf(prefix, sizeof prefix, "%s/mdy-keys", tmp ? tmp : ".");
-        free(tmp);
-        char *root = fsx_mkdtemp(prefix);
-        if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+        char *root = temp_site("mdy-keys");
+        if (!root) return;
 
         write_file(root, "main.mdy",
             "% $.emit('k.txt', JSON.stringify(Object.keys($.find({ path: 'main.mdy' })[0]))\n"
@@ -2161,12 +2090,8 @@ static void unreadable_dir_checks(void) {
         return;
     }
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-perm", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-perm");
+    if (!root) return;
 
     write_file(root, "main.mdy", "= main\n");
     write_file(root, "sub/page.mdy", "= hidden\n");
@@ -2218,12 +2143,8 @@ static void unreadable_dir_checks(void) {
 static void import_checks(void) {
     printf("\n--- engine: a package, imported ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-imp", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-imp");
+    if (!root) return;
 
     char site[1100], pkg[1100];
     snprintf(site, sizeof site, "%s/site", root);
@@ -2324,12 +2245,8 @@ static void import_checks(void) {
 static void import_spec_checks(void) {
     printf("\n--- engine: an import specifier with a backslash in it ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-spec", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-spec");
+    if (!root) return;
 
     char site[1100], pkg[1100];
     snprintf(site, sizeof site, "%s/site", root);
@@ -2425,12 +2342,8 @@ static void deep_value_checks(void) {
 static void odd_name_checks(void) {
     printf("\n--- engine: a file name identity has to carry ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-name", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-name");
+    if (!root) return;
 
     write_file(root, "it\"s.mdy", "+++\nk: quote\n+++\nbody\n");
     write_file(root, "a\\b.mdy", "+++\nk: slash\n+++\nbody\n");
@@ -2440,18 +2353,9 @@ static void odd_name_checks(void) {
         "% $.emit('roll.txt', $.find({ k: { $exists: true } })"
         ".map((x) => x.k + '=' + x.name + '|' + x.path).join(','))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of oddly named files\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of oddly named files", err, sizeof err);
+    if (!e) { free(root); return; }
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
     if (!html) {
@@ -2498,12 +2402,8 @@ static void write_png(const char *root, const char *rel, int w, int h);
 static void bad_image_checks(void) {
     printf("\n--- engine: a picture the header reader cannot trust ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-image", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-image");
+    if (!root) return;
 
     /* The offset that wraps, little- and big-endian; one just past the end;
      * one directory count that would walk entries off it; and a header cut
@@ -2579,18 +2479,9 @@ static void bad_image_checks(void) {
         "%   .filter((x) => ['.tif', '.png', '.svg', '.avif', '.jpg', '.gif', '.webp', '.bmp', '.ico'].includes(x.ext))\n"
         "%   .map((x) => x.name + '=' + (x.width ?? '-') + 'x' + (x.height ?? '-')).join(','))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of broken pictures\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of broken pictures", err, sizeof err);
+    if (!e) { free(root); return; }
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
     if (!html) {
@@ -2634,12 +2525,8 @@ static void bad_image_checks(void) {
 static void tag_checks(void) {
     printf("\n--- engine: a tag the writer has to carry ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-tags", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-tags");
+    if (!root) return;
 
     write_file(root, "q.mdy", "+++\ntags: ['A\"b', Alpha, ALPHA, 'c\\d', \"e\\tf\"]\n+++\nbody\n");
     /* The rule is mdy-docs' HASHTAG: at a line start or after whitespace, a
@@ -2655,18 +2542,9 @@ static void tag_checks(void) {
         "% $.emit('tags.txt', $.find({}).filter((d) => d.tags)"
         ".map((d) => d.path + '=' + JSON.stringify(d.tags)).join('|'))\n");
 
-    mdy_engine *e = mdy_engine_new(S);
     char err[512];
-    emit_count = 0;
-    mdy_engine_on_emit(e, collect_all, NULL);
-
-    if (mdy_engine_open_dir(e, root, err, sizeof err) != 0) {
-        printf("  FAIL  open a directory of tagged documents\n      %s\n", err);
-        failures++;
-        mdy_engine_free(e);
-        free(root);
-        return;
-    }
+    mdy_engine *e = open_site(root, "open a directory of tagged documents", err, sizeof err);
+    if (!e) { free(root); return; }
     int entry = mdy_engine_entry(e, "main.mdy");
     char *html = entry >= 0 ? mdy_engine_render(e, (size_t)entry, err, sizeof err) : NULL;
     if (!html) {
@@ -2702,12 +2580,8 @@ static void tag_checks(void) {
 static void symlink_checks(void) {
     printf("\n--- engine: symbolic links in a site ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-links", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-links");
+    if (!root) return;
 
     write_file(root, "sub/real.md", "# real\n");
     write_file(root, "main.mdy",
@@ -3109,12 +2983,8 @@ static void write_png(const char *root, const char *rel, int w, int h) {
 static void resize_checks(void) {
     printf("\n--- engine: $.resize ---\n");
 
-    char *tmp = fsx_tmpdir();
-    char prefix[1024];
-    snprintf(prefix, sizeof prefix, "%s/mdy-resize", tmp ? tmp : ".");
-    free(tmp);
-    char *root = fsx_mkdtemp(prefix);
-    if (!root) { printf("  FAIL  cannot make a temp directory\n"); failures++; return; }
+    char *root = temp_site("mdy-resize");
+    if (!root) return;
 
     write_png(root, "static/logo.png", 64, 40);
     write_file(root, "notes.md", "not an image\n");
@@ -3528,12 +3398,8 @@ static void api_checks(void) {
 
     /* --- page_index and document_path -------------------------------------- */
     {
-        char *tmp = fsx_tmpdir();
-        char prefix[1024];
-        snprintf(prefix, sizeof prefix, "%s/mdy-api", tmp ? tmp : ".");
-        free(tmp);
-        char *root = fsx_mkdtemp(prefix);
-        if (!root) { ok_("a temp directory for the directory checks", 0, "(none)"); return; }
+        char *root = temp_site("mdy-api");
+        if (!root) return;
 
         write_file(root, "main.mdy", "= main\n");
         write_file(root, "handlers/one.mdy", "+++\nmessageName: handlers.one\n+++\n= one\n");
