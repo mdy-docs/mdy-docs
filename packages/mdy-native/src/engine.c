@@ -1420,10 +1420,7 @@ static void note_references(mdy_engine *e, const mdy_doc *tree) {
             free(s);
         }
         if (!seen) {
-            JsValue name = str(e->vm, r->name, r->name_len);
-            js_gc_protect(e->vm, &name);
-            js_array_push(e->vm, arrays[k], name);
-            js_gc_unprotect(e->vm, &name);
+            push_item(e, arrays[k], str(e->vm, r->name, r->name_len));
         }
     }
     js_gc_unprotect(e->vm, &data);

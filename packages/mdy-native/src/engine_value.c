@@ -111,7 +111,10 @@ void set_val(mdy_engine *e, JsValue obj, const char *name, JsValue v) {
     js_gc_protect(e->vm, &v);
     JsValue k = key(e->vm, name);
     js_gc_protect(e->vm, &k);
-    js_object_set(e->vm, obj, k, v);
+    /* A set the VM could not make is a property missing from a record or a
+     * tree, and a page written without it. There is no channel back from a
+     * void setter, so it ends the run. See xalloc.h. */
+    if (!js_object_set(e->vm, obj, k, v)) mdy_fatal("the VM could not set a property");
     js_gc_unprotect(e->vm, &k);
     js_gc_unprotect(e->vm, &v);
     js_gc_unprotect(e->vm, &obj);
@@ -158,7 +161,7 @@ JsValue get_val(mdy_engine *e, JsValue obj, const char *name) {
 void push_item(mdy_engine *e, JsValue array, JsValue v) {
     js_gc_protect(e->vm, &array);
     js_gc_protect(e->vm, &v);
-    js_array_push(e->vm, array, v);
+    if (!js_array_push(e->vm, array, v)) mdy_fatal("the VM could not append to an array");
     js_gc_unprotect(e->vm, &v);
     js_gc_unprotect(e->vm, &array);
 }
