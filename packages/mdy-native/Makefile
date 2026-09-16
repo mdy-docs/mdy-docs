@@ -692,6 +692,9 @@ endif
 
 ENGINE_CPPFLAGS := -Isrc -Ibuild $(NIS_INC) $(SUKKAL_INC) $(PARSE_INC) $(STB_INC) $(NIS_RENAME)
 ASAN_CFLAGS     := -std=gnu11 -Wall -g -O1 -fsanitize=address -fno-omit-frame-pointer
+# The link asks for UBSan's runtime as well, because lamassu's ASan archives
+# are built with -fsanitize=address,undefined and carry its handlers.
+ASAN_LDFLAGS    := $(ASAN_CFLAGS) -fsanitize=undefined
 
 # build/mdy-af is build/mdy with one allocation refused. The header is forced
 # in rather than included by hand so that the engine sources stay ignorant of
@@ -756,7 +759,7 @@ build/engine-test$(EXE): build/obj/engine-test.o $(ENGINE_OBJS) $(ENGINE_LIBS)
 # cell is silently reused and a property becomes a different one.
 build/mdy-asan$(EXE): $(CLI_ASAN_OBJS) $(ASAN_OBJS) $(ASAN_LIBS)
 	@mkdir -p build
-	$(CC) $(ASAN_CFLAGS) $(CLI_ASAN_OBJS) $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(ASAN_LDFLAGS) $(CLI_ASAN_OBJS) $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
 
 # The engine test the same way (check-engine-asan).
 build/obj-asan/engine-test.o: test/engine.c $(HL_HDR)
@@ -764,7 +767,7 @@ build/obj-asan/engine-test.o: test/engine.c $(HL_HDR)
 	$(CC) $(ASAN_CFLAGS) $(ENGINE_CPPFLAGS) -I$(LAMASSU)/include -MMD -MP -c $< -o $@
 build/engine-test-asan$(EXE): build/obj-asan/engine-test.o $(ASAN_OBJS) $(ASAN_LIBS)
 	@mkdir -p build
-	$(CC) $(ASAN_CFLAGS) build/obj-asan/engine-test.o $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
+	$(CC) $(ASAN_LDFLAGS) build/obj-asan/engine-test.o $(ASAN_OBJS) $(ASAN_LIBS) -o $@ $(LDLIBS)
 
 # The same driver with a single allocation refused, chosen by
 # MDY_ALLOC_FAIL_NTH. check-alloc sweeps n over a whole build; see check-alloc.
